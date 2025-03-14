@@ -1,6 +1,6 @@
 import requests
 import os
-from douyin_download import *
+from .douyin_download import *
 def get_douyin_data(url, minimal=False):
     api_url = "http://123.56.185.74:1478/api/hybrid/video_data"
     params = {
