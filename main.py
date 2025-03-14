@@ -6,7 +6,7 @@ from .file_send_server import send_file
 from .bili_get import process_bili_video
 from .douyin_get import process_douyin
 
-@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.0.1")
+@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.0.1","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -97,9 +97,6 @@ class hybird_videos_analysis(Star):
                 print("解析失败，请检查链接是否正确。")  # 添加日志记录
                 yield event.plain_result("检测到抖音链接，但解析失败，请检查链接是否正确。")
 
-    async def terminate(self):
-        '''可选择实现 terminate 函数，当插件被卸载/停用时会调用。'''
-        yield event.plain_result("抖音解析插件已停用。")
 
     @filter.event_message_type(EventMessageType.ALL)
     async def auto_parse_bili(self, event: AstrMessageEvent):
