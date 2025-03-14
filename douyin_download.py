@@ -1,11 +1,14 @@
-import requests
+import asyncio
+import aiohttp
 import re
 import os
+import aiofiles
+
 def clean_cookie(cookie):
     # 使用正则表达式移除无法编码的字符
     return re.sub(r'[^\x00-\x7F]+', '', cookie)
 
-def get_location_from_url(url):
+async def get_location_from_url(url):
     """
     处理单个 URL，获取响应头中的 location，并模拟指定的请求头。
 
@@ -33,18 +36,19 @@ def get_location_from_url(url):
     }
 
     try:
-        response = requests.get(url, headers=headers, allow_redirects=False)
-        if response.status_code == 302 or response.status_code == 301:
-            location = response.headers.get('location')
-            return {'url': url, 'location': location}
-        else:
-            return {'url': url, 'location': None, 'status_code': response.status_code}
-    except requests.exceptions.RequestException as e:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, allow_redirects=False) as response:
+                if response.status == 302 or response.status == 301:
+                    location = response.headers.get('location')
+                    return {'url': url, 'location': location}
+                else:
+                    return {'url': url, 'location': None, 'status_code': response.status}
+    except aiohttp.ClientError as e:
         return {'url': url, 'error': str(e)}
 
-def download_video(url, filename="video.mp4"):
+async def download_video(url, filename="video.mp4"):
     """
-    Downloads a video from the given URL.
+    Downloads a video from the given URL asynchronously.
 
     Args:
         url (str): The URL of the video.
@@ -55,61 +59,46 @@ def download_video(url, filename="video.mp4"):
     }
 
     try:
-        response = requests.get(url, headers=headers, stream=True)
-        response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                response.raise_for_status()
 
-        # Check if the server responded with 304 Not Modified
-        if response.status_code == 304:
-            print("Video not modified. No download needed.")
-            return
+                if response.status == 304:
+                    print("Video not modified. No download needed.")
+                    return
 
-        # Ensure the directory exists
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
+                os.makedirs(os.path.dirname(filename), exist_ok=True)
 
-        total_size = int(response.headers.get('content-length', 0))
-        block_size = 1024  # 1 Kilobyte
+                total_size = int(response.headers.get('content-length', 0))
+                block_size = 1024
 
-        with open(filename, 'wb') as file:
-            downloaded = 0
-            for data in response.iter_content(block_size):
-                file.write(data)
-                downloaded += len(data)
-                if total_size:  # only show progress if total_size is known.
-                    print(f"\rDownloaded: {downloaded / total_size * 100:.2f}%", end="")
-        if total_size:
-            print("\nDownload complete!")
-        else:
-            print("Download complete. Content-Length header missing, progress not shown.")
+                async with aiofiles.open(filename, 'wb') as file:
+                    downloaded = 0
+                    async for data in response.content.iter_chunked(block_size):
+                        await file.write(data)
+                        downloaded += len(data)
+                        if total_size:
+                            print(f"\rDownloaded: {downloaded / total_size * 100:.2f}%", end="")
+                if total_size:
+                    print("\nDownload complete!")
+                else:
+                    print("Download complete. Content-Length header missing, progress not shown.")
 
-    except requests.exceptions.RequestException as e:
+    except aiohttp.ClientError as e:
         print(f"Error downloading video: {e}")
     except IOError as e:
         print(f"Error writing file: {e}")
 
-    except requests.exceptions.RequestException as e:
-        print(f"Error downloading video: {e}")
-    except IOError as e:
-        print(f"Error writing file: {e}")
-
-def download(url, filename="video.mp4"):
+async def download(url, filename="video.mp4"):
     """
-    Downloads videos from the given list of URLs.
+    Downloads videos from the given list of URLs asynchronously.
 
     Args:
         urls (list): A list of URLs of the videos.
         filename (str): The base filename to save the videos as.
     """
-    download_url = get_location_from_url(url)['location']
-    download_video(download_url, filename) 
+    location_data = await get_location_from_url(url)
+    if location_data and location_data['location']:
+        download_url = location_data['location']
+        await download_video(download_url, filename)
 
-# # Example usage:
-# # 示例 URL 列表
-# urls = [
-#     "https://www.douyin.com/aweme/v1/play/?video_id=v0d00fg10000c9hmfhjc77ue0hf19et0&line=0&file_id=b3d3fe9b8b484225932abe8960294724&sign=affd1a80b827dc66324dcc7a0fa24924&is_play_url=1&source=PackSourceEnum_AWEME_DETAIL",
-#     "https://www.douyin.com/aweme/v1/play/?video_id=v0300fg10000cv64i0vog65u35u8r91g&line=0&file_id=2f45b2fcad8f4aaa83e54a470864c35e&sign=85220d7da12fc91b8779b88189f4a62b&is_play_url=1&source=PackSourceEnum_AWEME_DETAIL"
-# ]
-# # 获取 location
-# locations = get_location_from_urls(urls)
-# video_url = locations[1]['location']
-# # video_url = "https://v26-daily-e.douyinvod.com/6555ae20c855f1758d7cd3dc45958242/67d3b1c6/video/tos/cn/tos-cn-ve-15c001-alinc2/dea619737fbc437196d9bb7fc414330c/?a=1128&ch=0&ch=0&cr=0&cr=0&dr=0&dr=0&er=0&er=0&cd=0|0|0|0&cd=0|0|0|0&cv=1&cv=1&br=1174&br=1174&bt=1174&bt=1174&cs=0&cs=0&ds=3&ds=3&ft=XV-6aF3UUmf.cdP_02D1YmAo6kItG..vuP9eF1IfdvV12nzXT&ft=XV-6aF3UUmf.cdP_02D1YmAo6kItG..vuP9eF1IfdvV12nzXT&mime_type=video_mp4&mime_type=video_mp4&qs=0&qs=0&rc=Nzo8MzxoZDY4NTtlZWg2NkBpM2g0a2g6ZmtwPDMzNGkzM0AvMS8zNV8vNi8xMTU2Y2FfYSNxNmMtcjRnY2VgLS1kLWFzcw==&rc=Nzo8MzxoZDY4NTtlZWg2NkBpM2g0a2g6ZmtwPDMzNGkzM0AvMS8zNV8vNi8xMTU2Y2FfYSNxNmMtcjRnY2VgLS1kLWFzcw==&btag=80000e000a8000&btag=80000e000a8000&cquery=100y&cquery=100y&dy_q=1741923183&dy_q=1741923183&l=20250314113303B3F7E9F0AD4C2C46FAF7https://v26-daily-e.douyinvod.com/6555ae20c855f1758d7cd3dc45958242/67d3b1c6/video/tos/cn/tos-cn-ve-15c001-alinc2/dea619737fbc437196d9bb7fc414330c/?a=1128&l=20250314113303B3F7E9F0AD4C2C46FAF7"
-# download_video(video_url)

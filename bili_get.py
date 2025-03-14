@@ -1,6 +1,9 @@
+import asyncio
+import aiohttp
 import re
-import requests
 import os
+import aiofiles
+
 # 配置参数
 CONFIG = {
     "VIDEO": {
@@ -37,55 +40,60 @@ def av2bv(av):
     av_num = re.search(r'\d+', av)
     if not av_num:
         return None
-    
+
     try:
         x = (int(av_num.group()) ^ AV2BV_XOR) + AV2BV_ADD
     except:
         return None
-    
-    r = list('BV1  4 1 7  ')
+
+    r = list('BV1 0 4 1 7  ')
     for i in range(6):
         idx = (x // (58**i)) % 58
         r[AV2BV_S[i]] = AV2BV_TABLE[idx]
-    
+
     return ''.join(r).replace(' ', '0')
 
-def bili_request(url, return_json=True):
+async def bili_request(url, return_json=True):
     """发送B站API请求"""
     headers = {
         "referer": "https://www.bilibili.com/",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
     }
-    
+
     try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        return response.json() if return_json else response.content
-    except Exception as e:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                response.raise_for_status()
+                if return_json:
+                    return await response.json()
+                else:
+                    return await response.read()
+    except aiohttp.ClientError as e:
         return {"code": -400, "message": str(e)}
 
-def parse_b23(short_url):
+async def parse_b23(short_url):
     """解析b23短链接"""
     try:
-        response = requests.head(f"https://{short_url}", allow_redirects=True)
-        real_url = response.url
-        
-        if REG_BV.search(real_url):
-            return parse_video(REG_BV.search(real_url).group())
-        elif REG_AV.search(real_url):
-            return parse_video(av2bv(REG_AV.search(real_url).group()))
-        return None
-    except:
+        async with aiohttp.ClientSession() as session:
+            async with session.head(f"https://{short_url}", allow_redirects=True) as response:
+                real_url = str(response.url)
+
+                if REG_BV.search(real_url):
+                    return await parse_video(REG_BV.search(real_url).group())
+                elif REG_AV.search(real_url):
+                    return await parse_video(av2bv(REG_AV.search(real_url).group()))
+                return None
+    except aiohttp.ClientError:
         return None
 
-def parse_video(bvid):
+async def parse_video(bvid):
     """解析视频信息"""
     api_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
-    data = bili_request(api_url)
-    
+    data = await bili_request(api_url)
+
     if data.get("code") != 0:
         return None
-    
+
     info = data["data"]
     return {
         "aid": info["aid"],
@@ -103,38 +111,38 @@ def parse_video(bvid):
         }
     }
 
-def download_video(aid, cid, bvid, quality=16):
+async def download_video(aid, cid, bvid, quality=16):
     """下载视频"""
-    
+
     api_url = f"https://api.bilibili.com/x/player/playurl?avid={aid}&cid={cid}&qn={quality}&type=mp4&platform=html5"
-    data = bili_request(api_url)
-    
+    data = await bili_request(api_url)
+
     if data.get("code") != 0:
         return None
-    
+
     video_url = data["data"]["durl"][0]["url"]
-    video_data = bili_request(video_url, return_json=False)
-    
+    video_data = await bili_request(video_url, return_json=False)
+
     if isinstance(video_data, dict):
         return None
-    
+
     filename = f"data/plugin/astrbot_plugin_videos_analysis/download_videos/bili/{bvid}.mp4"
     os.makedirs(os.path.dirname(filename), exist_ok=True)
-    with open(filename, "wb") as f:
-        f.write(video_data)
-    
+    async with aiofiles.open(filename, "wb") as f:
+        await f.write(video_data)
+
     return filename
 
-def process_bili_video(url):
+async def process_bili_video(url):
     """主处理函数"""
     # 判断链接类型
     if REG_B23.search(url):
-        video_info = parse_b23(REG_B23.search(url).group())
+        video_info = await parse_b23(REG_B23.search(url).group())
     elif REG_BV.search(url):
-        video_info = parse_video(REG_BV.search(url).group())
+        video_info = await parse_video(REG_BV.search(url).group())
     elif REG_AV.search(url):
         bvid = av2bv(REG_AV.search(url).group())
-        video_info = parse_video(bvid) if bvid else None
+        video_info = await parse_video(bvid) if bvid else None
     else:
         print("不支持的链接格式")
         return
@@ -143,23 +151,16 @@ def process_bili_video(url):
         print("解析视频信息失败")
         return
 
-    # 打印视频信息
-    # print(f"标题：{video_info['title']}")
-    # print(f"封面：{video_info['cover']}")
-    # print(f"时长：{video_info['duration']}秒")
-    # print("统计信息：")
-    # for k, v in video_info["stats"].items():
-    #     print(f"  {k}: {v}")
     stats = video_info["stats"]
     # 下载视频
     if CONFIG["VIDEO"]["send_video"]:
         print("\n开始下载视频...")
-        filename = download_video(
+        filename = await download_video(
             video_info["aid"],
             video_info["cid"],
             video_info["bvid"]
         )
-        
+
         if filename:
             print(f"视频已保存为：{filename}")
         else:
@@ -178,6 +179,10 @@ def process_bili_video(url):
 
     }
 
-if __name__ == "__main__":
-    url = input("请输入B站视频链接：")
-    print(process_bili_video(url))
+# async def main():
+#     url = input("请输入B站视频链接：")
+#     result = await process_bili_video(url)
+#     print(result)
+
+# if __name__ == "__main__":
+#     asyncio.run(main())
