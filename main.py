@@ -12,7 +12,7 @@ class MyPlugin(Star):
         self.nap_server_address = config.get("nap_server_address")
         self.nap_server_port = config.get("nap_server_port")
     
-    @filter.event_message_type(EventMessageType.ALL)
+    @event_message_type(EventMessageType.ALL)
     async def auto_parse_dy(self, event: AstrMessageEvent):
         """
         自动检测消息中是否包含抖音分享链接，并解析。
