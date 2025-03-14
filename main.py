@@ -6,11 +6,6 @@ from .file_send_server import send_file
 from .bili_get import process_bili_video
 from .douyin_get import process_douyin
 
-
-BILI_VIDEO_PATTERN = r"(https?:\/\/)?www\.bilibili\.com\/video\/(BV\w+|av\d+)\/?"
-BILI_SHORT_LINK_PATTERN = r"(https?://(?:b23\.tv|bili2233\.cn)/[A-Za-z\d._?%&+\-=\/#]+)"
-DOUYIN_PATTERN = r"(https?://v\.douyin\.com/[a-zA-Z0-9]+)"
-
 @register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.0.1")
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context,config: dict):
@@ -18,7 +13,7 @@ class hybird_videos_analysis(Star):
         self.nap_server_address = config.get("nap_server_address")
         self.nap_server_port = config.get("nap_server_port")
     
-    @filter.regex(DOUYIN_PATTERN)
+    @filter.event_message_type(EventMessageType.ALL)
     async def auto_parse_dy(self, event: AstrMessageEvent):
         """
         自动检测消息中是否包含抖音分享链接，并解析。
@@ -128,7 +123,7 @@ class hybird_videos_analysis(Star):
         '''可选择实现 terminate 函数，当插件被卸载/停用时会调用。'''
         yield event.plain_result("抖音解析插件已停用。")
 
-    @filter.regex(BILI_VIDEO_PATTERN)
+    @filter.event_message_type(EventMessageType.ALL)
     async def auto_parse_bili(self, event: AstrMessageEvent):
         """
         自动检测消息中是否包含bili分享链接，并解析。
