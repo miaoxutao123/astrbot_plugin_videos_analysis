@@ -14,7 +14,7 @@ class hybird_videos_analysis(Star):
         self.nap_server_port = config.get("nap_server_port")
     
     @filter.event_message_type(EventMessageType.ALL)
-    async def auto_parse_dy(self, event: AstrMessageEvent, ctx: Context, *args, **kwargs):
+    async def auto_parse_dy(self, event: AstrMessageEvent):
         """
         自动检测消息中是否包含抖音分享链接，并解析。
         """
@@ -102,7 +102,7 @@ class hybird_videos_analysis(Star):
         yield event.plain_result("抖音解析插件已停用。")
 
     @filter.event_message_type(EventMessageType.ALL)
-    async def auto_parse_bili(self, event: AstrMessageEvent, ctx: Context, *args, **kwargs):
+    async def auto_parse_bili(self, event: AstrMessageEvent):
         """
         自动检测消息中是否包含bili分享链接，并解析。
         """
