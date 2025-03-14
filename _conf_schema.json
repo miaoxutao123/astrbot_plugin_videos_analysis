@@ -1,0 +1,12 @@
+{
+    "nap_server_address": {
+        "description": "NAP cat 服务地址,若与服务器在同一服务器上请填写localhost",
+        "type": "string",
+        "default": "localhost"
+    },
+    "nap_server_port": {
+        "description": "NAP cat 所处服务器接收文件端口，在同一服务器上可以不填",
+        "type": "int",
+        "default": 3658
+    }
+}

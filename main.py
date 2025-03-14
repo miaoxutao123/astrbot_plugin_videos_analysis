@@ -1,21 +1,149 @@
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
-from astrbot.api.star import Context, Star, register
-from astrbot.api import logger
+from astrbot.api.all import *
+from astrbot.api.message_components import Node, Plain, Image, Video
+import re
+from .file_send_server import send_file
+from .bili_get import process_bili_video
+from .douyin_get import process_douyin
 
-@register("helloworld", "YourName", "一个简单的 Hello World 插件", "1.0.0")
+@register("聚合视频解析", "喵喵", "可以解析抖音和bili视频", "0.0.1")
 class MyPlugin(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context,config: dict):
         super().__init__(context)
+        self.nap_server_address = config.get("nap_server_address")
+        self.nap_server_port = config.get("nap_server_port")
     
-    # 注册指令的装饰器。指令名为 helloworld。注册成功后，发送 `/helloworld` 就会触发这个指令，并回复 `你好, {user_name}!`
-    @filter.command("helloworld")
-    async def helloworld(self, event: AstrMessageEvent):
-        '''这是一个 hello world 指令''' # 这是 handler 的描述，将会被解析方便用户了解插件内容。建议填写。
-        user_name = event.get_sender_name()
-        message_str = event.message_str # 用户发的纯文本消息字符串
-        message_chain = event.get_messages() # 用户所发的消息的消息链 # from astrbot.api.message_components import *
-        logger.info(message_chain)
-        yield event.plain_result(f"Hello, {user_name}, 你发了 {message_str}!") # 发送一条纯文本消息
+    @filter.event_message_type(EventMessageType.ALL)
+    async def auto_parse_dy(self, event: AstrMessageEvent):
+        """
+        自动检测消息中是否包含抖音分享链接，并解析。
+        """
+        # result = {
+        # "type": None,  # 图片或视频
+        # "is_multi_part": False,  # 是否为分段内容
+        # "count": 0,  # 图片或视频数量"
+        # "save_path": [] , # 无水印保存路径
+        # "title": None,  # 标题
+        # }
+        message_str = event.message_str
+        match = re.search(r'(https?://v\.douyin\.com/[a-zA-Z0-9]+)', message_str)
+        if match:
+            url = match.group(1)
+            print(f"检测到抖音链接: {url}")  # 添加日志记录
+            result = process_douyin(url)
+            if result:
+                if result['type'] == "video":
+                    if result['is_multi_part']:
+                        if self.nap_server_address !="localhost":
+                            ns = Nodes([])
+                            for i in range(result['count']-1):
+                                file_path = result['save_path'][i]
+                                nap_file_path = send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                                node = Node(
+                                    uin = event.get_self_id(),
+                                    name = "喵喵",
+                                    content = [Video(file=nap_file_path)]
+                                )
+                                ns.nodes.append(node)
+                        else :
+                            ns = Nodes([])
+                            for i in range(result['count']-1):
+                                file_path = result['save_path'][i]
+                                node = Node(
+                                    uin = event.get_self_id(),
+                                    name = "喵喵",
+                                    content = [Video(file=file_path)]
+                                )
+                                ns.nodes.append(node)
+                        yield event.chain_result(ns)
+                    else:
+                        file_path = result['save_path'][0]
+                        if self.nap_server_address !="localhost":
+                            nap_file_path = send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                            # print(nap_file_path)
+                        else :
+                            nap_file_path = file_path
+                        yield event.chain_result([
+                           Video(file=nap_file_path)
+                        ])
+                elif result['type'] == "image":
+                    if result['is_multi_part']:
+                        if self.nap_server_address !="localhost":
+                            ns = Nodes([])
+                            for i in range(result['count']-1):
+                                file_path = result['save_path'][i]
+                                nap_file_path = send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                                node = Node(
+                                    uin = event.get_self_id(),
+                                    name = "喵喵",
+                                    content = [Image(file=nap_file_path)]
+                                )
+                                ns.nodes.append(node)
+                        else :  
+                            ns = Nodes([])
+                            for i in range(result['count']-1):
+                                file_path = result['save_path'][i]
+                                node = Node(
+                                    uin = event.get_self_id(),
+                                    name = "喵喵",
+                                    content = [Image(file=file_path)]
+                                )
+                                ns.nodes.append(node)
+                        yield event.chain_result(ns)
+                    else:
+                        file_path = result['save_path'][0]
+                        if self.nap_server_address !="localhost":
+                            nap_file_path = send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                            # print(nap_file_path)
+                        else :
+                            nap_file_path = file_path
+                        yield event.chain_result([
+                            Image(file=nap_file_path)
+                        ])
+                else:
+                    print("解析失败，请检查链接是否正确。")
+                # file_path = result['video_path']
+
+
+                # if self.nap_server_address !="localhost":
+
+                #     nap_file_path = send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                #     print(nap_file_path)
+                # else :
+                #     nap_file_path = file_path
+                # yield event.chain_result([
+                #     Plain(f"作者昵称：{result['author_name']}\n视频简介：{result['video_description']}"),
+                #     Video(file=nap_file_path)
+                # ])
+            else:
+                print("解析失败，请检查链接是否正确。")  # 添加日志记录
+                yield event.plain_result("检测到抖音链接，但解析失败，请检查链接是否正确。")
 
     async def terminate(self):
         '''可选择实现 terminate 函数，当插件被卸载/停用时会调用。'''
+        yield event.plain_result("抖音解析插件已停用。")
+
+    @filter.event_message_type(EventMessageType.ALL)
+    async def auto_parse_bili(self, event: AstrMessageEvent):
+        """
+        自动检测消息中是否包含bili分享链接，并解析。
+        """
+        message_str = event.message_str
+        match = re.search(r'(b23\.tv|bili2233\.cn\/[\w]+|BV1\w{9}|av\d+)', message_str)
+        if match:
+            url = match.group(1)
+            result = process_bili_video(url)
+            if result:
+                file_path = result['video_path']
+                if self.nap_server_address !="localhost":
+                    nap_file_path = send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                    print(nap_file_path)
+                else :
+                    nap_file_path = file_path
+            yield event.chain_result([
+                    Plain(f"视频标题：{result['title']}\n观看次数：{result['view_count']}\n点赞次数：{result['like_count']}\n投币次数：{result['coin_count']}"),
+                    Image(file=result['cover']),
+                    Video(file=nap_file_path)
+             ])
+    # async def terminate(self):
+    #     '''可选择实现 terminate 函数，当插件被卸载/停用时会调用。'''
+    #     yield self.event.plain_result("bilibili解析插件已停用。")
