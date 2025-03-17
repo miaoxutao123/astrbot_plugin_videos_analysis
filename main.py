@@ -31,7 +31,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                         ns = Nodes([])
                         for i in range(result['count']):
                             file_path = result['save_path'][i]
-                            nap_file_path = send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                            nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
                             node = Node(
                                 uin=event.get_self_id(),
                                 name="喵喵",
