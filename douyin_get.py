@@ -78,6 +78,7 @@ async def process_douyin(url):
         data = parse_douyin_data(video_data)
         if data["type"] == "video":
             result["type"] = "video"
+            result["count"] = data["count"]
             if data["is_multi_part"]:  # 分段视频
                 # print(data["download_links"])
                 result["is_multi_part"] = True
@@ -93,6 +94,7 @@ async def process_douyin(url):
                 result['save_path'].append(output_path)
         if data["type"] == "image":
             result["type"] = "image"
+            result["count"] = data["count"]
             if data["is_multi_part"]:
                 # print(data["download_links"])
                 result["is_multi_part"] = True
