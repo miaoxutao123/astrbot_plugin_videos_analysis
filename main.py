@@ -12,8 +12,6 @@ class hybird_videos_analysis(Star):
         super().__init__(context)
         self.nap_server_address = config.get("nap_server_address")
         self.nap_server_port = config.get("nap_server_port")
-    
-# ...existing code...
 
 @filter.event_message_type(EventMessageType.ALL)
 async def auto_parse_dy(self, event: AstrMessageEvent, context: Context):
@@ -25,13 +23,13 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context):
     if match:
         url = match.group(1)
         print(f"检测到抖音链接: {url}")  # 添加日志记录
-        result = process_douyin(url)
+        result = await process_douyin(url)  # 使用 await 调用异步函数
         if result:
             if result['type'] == "video":
                 if result['is_multi_part']:
                     if self.nap_server_address != "localhost":
                         ns = Nodes([])
-                        for i in range(result['count']): 
+                        for i in range(result['count']):
                             file_path = result['save_path'][i]
                             nap_file_path = send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
                             node = Node(
@@ -58,7 +56,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context):
                     else:
                         nap_file_path = file_path
                     yield event.chain_result([
-                       Video.fromFileSystem(file=nap_file_path)
+                        Video.fromFileSystem(file=nap_file_path)
                     ])
             elif result['type'] == "image":
                 if result['is_multi_part']:
