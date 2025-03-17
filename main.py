@@ -21,7 +21,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context):
     自动检测消息中是否包含抖音分享链接，并解析。
     """
     message_str = event.message_str
-    match = re.search(r'(https?://v\.douyin\.com/[a-zA-Z0-9]+)', message_str)
+    match = re.search(r'(https?://v\.douyin\.com/[a-zA-Z0-9]+/)', message_str)
     if match:
         url = match.group(1)
         print(f"检测到抖音链接: {url}")  # 添加日志记录
@@ -47,7 +47,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context):
                             node = Node(
                                 uin=event.get_self_id(),
                                 name="喵喵",
-                                content=[Video(file=file_path)]
+                                content=[Video.fromFileSystem(file_path)]
                             )
                             ns.nodes.append(node)
                     yield event.chain_result([ns])
@@ -58,7 +58,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context):
                     else:
                         nap_file_path = file_path
                     yield event.chain_result([
-                       Video(file=nap_file_path)
+                       Video.fromFileSystem(file=nap_file_path)
                     ])
             elif result['type'] == "image":
                 if result['is_multi_part']:
@@ -118,6 +118,6 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context):
                 nap_file_path = file_path
             yield event.chain_result([
                 Plain(f"视频标题：{result['title']}\n观看次数：{result['view_count']}\n点赞次数：{result['like_count']}\n投币次数：{result['coin_count']}"),
-                Image(file=result['cover']),
-                Video(file=nap_file_path)
+                Image.fromURL(file=result['cover']),
+                Video.fromFileSystem(nap_file_path)
             ])

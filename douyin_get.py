@@ -1,7 +1,7 @@
 import asyncio
 import aiohttp
 import os
-from douyin_download import download  # 假设 download 函数也支持异步，或者你需要将其改为异步
+from .douyin_download import download  # 假设 download 函数也支持异步，或者你需要将其改为异步
 
 async def get_douyin_data(url, minimal=False):
     api_url = "http://123.56.185.74:1478/api/hybrid/video_data"
