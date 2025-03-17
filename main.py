@@ -25,6 +25,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
         print(f"检测到抖音链接: {url}")  # 添加日志记录
         result = await process_douyin(url)  # 使用 await 调用异步函数
         if result:
+            print(f"解析结果: {result}")  # 添加日志记录
             if result['type'] == "video":
                 if result['is_multi_part']:
                     if self.nap_server_address != "localhost":
@@ -38,7 +39,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                                 content=[Video(nap_file_path)]
                             )
                             ns.nodes.append(node)
-                        print(ns)
+                        print(f"发送多段视频: {ns}")  # 添加日志记录
                     else:
                         ns = Nodes([])
                         for i in range(result['count']):
@@ -49,7 +50,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                                 content=[Video.fromFileSystem(file_path)]
                             )
                             ns.nodes.append(node)
-                        print(ns)
+                        print(f"发送多段视频: {ns}")  # 添加日志记录
                     yield event.chain_result([ns])
                 else:
                     file_path = result['save_path'][0]
@@ -57,6 +58,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                         nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
                     else:
                         nap_file_path = file_path
+                    print(f"发送单段视频: {nap_file_path}")  # 添加日志记录
                     yield event.chain_result([
                         Video.fromFileSystem(nap_file_path)
                     ])
@@ -66,7 +68,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                         ns = Nodes([])
                         for i in range(result['count']):
                             file_path = result['save_path'][i]
-                            nap_file_path = send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                            nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
                             node = Node(
                                 uin=event.get_self_id(),
                                 name="喵喵",
@@ -83,13 +85,15 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                                 content=[Image(file_path)]
                             )
                             ns.nodes.append(node)
+                    print(f"发送多段图片: {ns}")  # 添加日志记录
                     yield event.chain_result([ns])
                 else:
                     file_path = result['save_path'][0]
                     if self.nap_server_address != "localhost":
-                        nap_file_path = send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                        nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
                     else:
                         nap_file_path = file_path
+                    print(f"发送单段图片: {nap_file_path}")  # 添加日志记录
                     yield event.chain_result([
                         Image(nap_file_path)
                     ])
