@@ -53,7 +53,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                 else:
                     file_path = result['save_path'][0]
                     if self.nap_server_address != "localhost":
-                        nap_file_path = send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                        nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
                     else:
                         nap_file_path = file_path
                     yield event.chain_result([
