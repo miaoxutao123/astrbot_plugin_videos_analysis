@@ -106,7 +106,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context):
     match = re.search(r'(b23\.tv|bili2233\.cn\/[\w]+|BV1\w{9}|av\d+)', message_str)
     if match:
         url = match.group(1)
-        result = process_bili_video(url)
+        result = await process_bili_video(url)
         if result:
             file_path = result['video_path']
             if self.nap_server_address != "localhost":
