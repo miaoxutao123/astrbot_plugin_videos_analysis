@@ -111,7 +111,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
         if result:
             file_path = result['video_path']
             if self.nap_server_address != "localhost":
-                await nap_file_path = send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
                 print(nap_file_path)
             else:
                 nap_file_path = file_path
