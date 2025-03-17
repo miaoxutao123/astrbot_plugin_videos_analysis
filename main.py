@@ -38,7 +38,6 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                                 content=[Video(file=nap_file_path)]
                             )
                             ns.nodes.append(node)
-
                     else:
                         ns = Nodes([])
                         for i in range(result['count']):
@@ -49,6 +48,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                                 content=[Video.fromFileSystem(file_path)]
                             )
                             ns.nodes.append(node)
+                            print(ns)
                     yield event.chain_result([ns])
                 else:
                     file_path = result['save_path'][0]
@@ -116,7 +116,9 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
             else:
                 nap_file_path = file_path
             yield event.chain_result([
-                Plain(f"视频标题：{result['title']}\n观看次数：{result['view_count']}\n点赞次数：{result['like_count']}\n投币次数：{result['coin_count']}"),
+                Plain(f"视频标题：{result['title']}\n观看次数：{result['view_count']}\n点赞次数：{result['like_count']}\n投币次数：{result['coin_count']}")
+            ])
+            yield event.chain_result([
                 Image(file=result['cover']),
                 Video.fromFileSystem(nap_file_path)
             ])
