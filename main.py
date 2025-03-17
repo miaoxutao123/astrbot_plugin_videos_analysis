@@ -6,13 +6,13 @@ from .file_send_server import send_file
 from .bili_get import process_bili_video
 from .douyin_get import process_douyin
 
-@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.0.1","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
+@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.1","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.nap_server_address = config.get("nap_server_address")
         self.nap_server_port = config.get("nap_server_port")
-
+        self.doyin_api_url = config.get("doyin_api_url")
 @filter.event_message_type(EventMessageType.ALL)
 async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, **kwargs):
     """
@@ -21,9 +21,10 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
     message_str = event.message_str
     match = re.search(r'(https?://v\.douyin\.com/[a-zA-Z0-9]+/)', message_str)
     if match:
+        api_url = self.doyin_api_url
         url = match.group(1)
         print(f"检测到抖音链接: {url}")  # 添加日志记录
-        result = await process_douyin(url)  # 使用 await 调用异步函数
+        result = await process_douyin(url,api_url)  # 使用 await 调用异步函数
         if result:
             print(f"解析结果: {result}")  # 添加日志记录
             if result['type'] == "video":

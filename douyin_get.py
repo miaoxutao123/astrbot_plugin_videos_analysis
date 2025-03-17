@@ -3,8 +3,7 @@ import aiohttp
 import os
 from .douyin_download import download  # 假设 download 函数也支持异步，或者你需要将其改为异步
 
-async def get_douyin_data(url, minimal=False):
-    api_url = "http://123.56.185.74:1478/api/hybrid/video_data"
+async def get_douyin_data(url,api_url,minimal=False):
     params = {
         "url": url,
         "minimal": str(minimal)  # 将布尔值转换为字符串
@@ -63,7 +62,7 @@ def parse_douyin_data(data):
 
     return result
 
-async def process_douyin(url):
+async def process_douyin(url,api_url):
     result = {
         "type": None,  # 图片或视频
         "is_multi_part": False,  # 是否为分段内容
@@ -72,7 +71,7 @@ async def process_douyin(url):
         "title": None,  # 标题
     }
 
-    video_data = await get_douyin_data(url, minimal=False)
+    video_data = await get_douyin_data(url,api_url,minimal=False)
     opt_path = "/data/plugins/astrbot_plugin_videos_analysis/download_videos/dy"
     if video_data:
         data = parse_douyin_data(video_data)

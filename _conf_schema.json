@@ -8,5 +8,11 @@
         "description": "NAP cat 所处服务器接收文件端口，在同一服务器上可以不填",
         "type": "int",
         "default": 3658
+    },
+    "douyin_api_url":{
+        "description": "抖音API地址",
+        "type": "string",
+        "default": "http://localhost:1478/api/hybrid/video_data",
+        "hint": "使用抖音相关功能必填，https://github.com/Evil0ctal/Douyin_TikTok_Download_API，本插件使用了该开源项目的api获取了大部分数据用以解析下载地址"
     }
 }
