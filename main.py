@@ -1,5 +1,5 @@
 from astrbot.api.all import *
-from astrbot.api.message_components import Node, Plain, Image, Video
+from astrbot.api.message_components import Node, Plain, Image, Video, Nodes
 from astrbot.api.event import filter, AstrMessageEvent
 import re
 from .file_send_server import send_file
@@ -48,7 +48,7 @@ class hybird_videos_analysis(Star):
                                     content=[Video(file=file_path)]
                                 )
                                 ns.nodes.append(node)
-                        yield event.chain_result(ns)
+                        yield event.chain_result([ns])
                     else:
                         file_path = result['save_path'][0]
                         if self.nap_server_address != "localhost":
@@ -81,7 +81,7 @@ class hybird_videos_analysis(Star):
                                     content=[Image(file=file_path)]
                                 )
                                 ns.nodes.append(node)
-                        yield event.chain_result(ns)
+                        yield event.chain_result([ns])
                     else:
                         file_path = result['save_path'][0]
                         if self.nap_server_address != "localhost":
