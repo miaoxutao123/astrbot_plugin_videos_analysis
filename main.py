@@ -38,6 +38,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                                 content=[Video(nap_file_path)]
                             )
                             ns.nodes.append(node)
+                            print(ns)
                     else:
                         ns = Nodes([])
                         for i in range(result['count']):
