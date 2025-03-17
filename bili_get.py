@@ -126,7 +126,7 @@ async def download_video(aid, cid, bvid, quality=16):
     if isinstance(video_data, dict):
         return None
 
-    filename = f"data/plugin/astrbot_plugin_videos_analysis/download_videos/bili/{bvid}.mp4"
+    filename = f"data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/{bvid}.mp4"
     os.makedirs(os.path.dirname(filename), exist_ok=True)
     async with aiofiles.open(filename, "wb") as f:
         await f.write(video_data)
