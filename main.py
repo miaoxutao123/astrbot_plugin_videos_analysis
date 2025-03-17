@@ -38,7 +38,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                                 content=[Video(file=nap_file_path)]
                             )
                             ns.nodes.append(node)
-                            
+
                     else:
                         ns = Nodes([])
                         for i in range(result['count']):
@@ -111,12 +111,12 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
         if result:
             file_path = result['video_path']
             if self.nap_server_address != "localhost":
-                nap_file_path = send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                await nap_file_path = send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
                 print(nap_file_path)
             else:
                 nap_file_path = file_path
             yield event.chain_result([
                 Plain(f"视频标题：{result['title']}\n观看次数：{result['view_count']}\n点赞次数：{result['like_count']}\n投币次数：{result['coin_count']}"),
-                Image.fromURL(file=result['cover']),
+                Image(file=result['cover']),
                 Video.fromFileSystem(nap_file_path)
             ])
