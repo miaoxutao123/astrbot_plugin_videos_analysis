@@ -35,7 +35,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                             node = Node(
                                 uin=event.get_self_id(),
                                 name="喵喵",
-                                content=[Video(file=nap_file_path)]
+                                content=[Video(nap_file_path)]
                             )
                             ns.nodes.append(node)
                     else:
@@ -57,7 +57,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                     else:
                         nap_file_path = file_path
                     yield event.chain_result([
-                        Video.fromFileSystem(file=nap_file_path)
+                        Video.fromFileSystem(nap_file_path)
                     ])
             elif result['type'] == "image":
                 if result['is_multi_part']:
@@ -69,7 +69,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                             node = Node(
                                 uin=event.get_self_id(),
                                 name="喵喵",
-                                content=[Image(file=nap_file_path)]
+                                content=[Image(nap_file_path)]
                             )
                             ns.nodes.append(node)
                     else:
@@ -79,7 +79,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                             node = Node(
                                 uin=event.get_self_id(),
                                 name="喵喵",
-                                content=[Image(file=file_path)]
+                                content=[Image(file_path)]
                             )
                             ns.nodes.append(node)
                     yield event.chain_result([ns])
@@ -90,7 +90,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                     else:
                         nap_file_path = file_path
                     yield event.chain_result([
-                        Image(file=nap_file_path)
+                        Image(nap_file_path)
                     ])
             else:
                 print("解析失败，请检查链接是否正确。")
