@@ -72,7 +72,7 @@ async def process_douyin(url,api_url):
     }
 
     video_data = await get_douyin_data(url,api_url,minimal=False)
-    opt_path = "/data/plugins/astrbot_plugin_videos_analysis/download_videos/dy"
+    opt_path = "data/plugins/astrbot_plugin_videos_analysis/download_videos/dy"
     if video_data:
         data = parse_douyin_data(video_data)
         if data["type"] == "video":
