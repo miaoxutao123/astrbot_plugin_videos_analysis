@@ -19,7 +19,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
     自动检测消息中是否包含抖音分享链接，并解析。
     """
     api_url = self.douyin_api_url
-    print(f"解析链接：{api_url}")
+    # print(f"解析链接：{api_url}")
     message_str = event.message_str
     match = re.search(r'(https?://v\.douyin\.com/[a-zA-Z0-9]+/)', message_str)
     if match:
@@ -111,7 +111,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
     自动检测消息中是否包含bili分享链接，并解析。
     """
     message_str = event.message_str
-    match = re.search(r'(b23\.tv|bili2233\.cn\/[\w]+|BV1\w{9}|av\d+)', message_str)
+    match = re.search(r'(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|BV1\w{9}|av\d+)', message_str)
     if match:
         url = match.group(1)
         result = await process_bili_video(url)
