@@ -6,19 +6,19 @@ from .file_send_server import send_file
 from .bili_get import process_bili_video
 from .douyin_get import process_douyin
 
-@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.1.1","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
+@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.1.2","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.nap_server_address = config.get("nap_server_address")
         self.nap_server_port = config.get("nap_server_port")
-        self.doyin_api_url = config.get("doyin_api_url")
+        self.douyin_api_url = config.get("douyin_api_url")
 @filter.event_message_type(EventMessageType.ALL)
 async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, **kwargs):
     """
     自动检测消息中是否包含抖音分享链接，并解析。
     """
-    api_url = self.doyin_api_url
+    api_url = self.douyin_api_url
     print(f"解析链接：{api_url}")
     message_str = event.message_str
     match = re.search(r'(https?://v\.douyin\.com/[a-zA-Z0-9]+/)', message_str)
