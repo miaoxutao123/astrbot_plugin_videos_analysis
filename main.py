@@ -6,7 +6,7 @@ from .file_send_server import send_file
 from .bili_get import process_bili_video
 from .douyin_get import process_douyin
 
-@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.1.2","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
+@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.1.3","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)

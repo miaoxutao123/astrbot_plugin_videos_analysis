@@ -12,7 +12,7 @@
     "douyin_api_url":{
         "description": "抖音API地址",
         "type": "string",
-        "default": "http://localhost:1478/api/hybrid/video_data",
-        "hint": "使用抖音相关功能必填，https://github.com/Evil0ctal/Douyin_TikTok_Download_API，本插件使用了该开源项目的api获取了大部分数据用以解析下载地址"
+        "default": "https://douyin.wtf/api/hybrid/video_data",
+        "hint": "如需部署私有解析服务以提高解析速度请访问此库：https://github.com/Evil0ctal/Douyin_TikTok_Download_API"
     }
 }
