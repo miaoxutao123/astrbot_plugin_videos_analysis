@@ -18,10 +18,11 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
     """
     自动检测消息中是否包含抖音分享链接，并解析。
     """
+    api_url = self.doyin_api_url
+    print(f"解析链接：{api_url}")
     message_str = event.message_str
     match = re.search(r'(https?://v\.douyin\.com/[a-zA-Z0-9]+/)', message_str)
     if match:
-        api_url = self.doyin_api_url
         url = match.group(1)
         print(f"检测到抖音链接: {url}")  # 添加日志记录
         result = await process_douyin(url,api_url)  # 使用 await 调用异步函数
