@@ -14,5 +14,14 @@
         "type": "string",
         "default": "https://douyin.wtf/api/hybrid/video_data",
         "hint": "如需部署私有解析服务以提高解析速度请访问此库：https://github.com/Evil0ctal/Douyin_TikTok_Download_API"
+    },"delate_time":{
+        "description": "删除文件时间（单位分钟）",
+        "type": "int",
+        "default": 60
+    },
+    "max_video_size":{
+        "description": "最大视频大小（单位MB）",
+        "type": "int",
+        "default": 100
     }
 }
