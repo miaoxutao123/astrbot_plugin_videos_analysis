@@ -98,8 +98,9 @@ async def download(url, filename="video.mp4"):
         filename (str): The base filename to save the videos as.
     """
     location_data = await get_location_from_url(url)
-    if location_data and location_data['location']:
-        download_url = location_data['location']
+
+    if location_data and location_data.get('location'):
+        download_url = location_data.get('location')
         await download_video(download_url, filename)
     else:
         await download_video(url, filename)
