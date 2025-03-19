@@ -43,7 +43,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                             node = Node(
                                 uin=event.get_self_id(),
                                 name="喵喵",
-                                content=[Video(nap_file_path)]
+                                content=[Video.fromFileSystem(nap_file_path)]
                             )
                             ns.nodes.append(node)
                         # print(f"发送多段视频: {ns}")  # 添加日志记录
@@ -79,7 +79,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                             node = Node(
                                 uin=event.get_self_id(),
                                 name="喵喵",
-                                content=[Image(nap_file_path)]
+                                content=[Image.fromFileSystem(nap_file_path)]
                             )
                             ns.nodes.append(node)
                     else:
@@ -89,7 +89,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                             node = Node(
                                 uin=event.get_self_id(),
                                 name="喵喵",
-                                content=[Image(file_path)]
+                                content=[Image.fromFileSystem(file_path)]
                             )
                             ns.nodes.append(node)
                     # print(f"发送多段图片: {ns}")  # 添加日志记录
@@ -102,7 +102,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                         nap_file_path = file_path
                     print(f"发送单段图片: {nap_file_path}")  # 添加日志记录
                     yield event.chain_result([
-                        Image(nap_file_path)
+                        Image.fromFileSystem(nap_file_path)
                     ])
             else:
                 print("解析失败，请检查链接是否正确。")
