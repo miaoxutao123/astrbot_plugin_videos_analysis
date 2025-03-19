@@ -44,6 +44,8 @@ AstrBot 插件，用于解析和下载抖音和 Bilibili 视频。（测试版�
 
 增加视频详情信息
 
+已知bug：无法解析抖音的视频图片混合作品链接，无法解析类似于"https://v.douyin.com/Xap7_ju9FgM"这样的奇怪链接（正在修复）
+
 ## 许可证
 
 此项目基于 [GNU Affero General Public License](LICENSE) 许可证。
