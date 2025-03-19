@@ -101,5 +101,11 @@ async def download(url, filename="video.mp4"):
     if location_data and location_data['location']:
         download_url = location_data['location']
         await download_video(download_url, filename)
+    else:
+        await download_video(url, filename)
+        # print(f"Error getting location for {url}")
 
 
+# if __name__ == "__main__":
+#     url = "https://p3-pc-sign.douyinpic.com/tos-cn-i-0813c000-ce/oMAnCVBQBAEwiiwI8Td2SMAIJPQY0hADhiAPZ~tplv-dy-aweme-images:q75.jpeg?lk3s=138a59ce&x-expires=1744963200&x-signature=Cgf9pS1Fne0tvRujCHt6htkHP%2BI%3D&from=327834062&s=PackSourceEnum_AWEME_DETAIL&se=false&sc=image&biz_tag=aweme_images&l=202503191654145A604C96898653070E42"
+#     asyncio.run(download(url))

@@ -51,7 +51,10 @@ def parse_douyin_data(data):
         video_count = len(videos)
         result["count"] = video_count
         for video in videos:
-            download_url = video["video"]["play_addr_h264"]["url_list"][2]
+            if video["video"]["play_addr_h264"]["url_list"][2]:
+                download_url = video["video"]["play_addr_h264"]["url_list"][2]
+            else:
+                download_url = video["url_list"][2]
             result["download_links"].append(download_url)
 
     elif media_type == 4:  # 视频

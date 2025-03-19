@@ -5,6 +5,7 @@ import re
 from .file_send_server import send_file
 from .bili_get import process_bili_video
 from .douyin_get import process_douyin
+from .auto_delate import delete_old_files
 
 @register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.1.3","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
@@ -13,6 +14,8 @@ class hybird_videos_analysis(Star):
         self.nap_server_address = config.get("nap_server_address")
         self.nap_server_port = config.get("nap_server_port")
         self.douyin_api_url = config.get("douyin_api_url")
+        self.delate_time = config.get("delate_time")
+        self.max_video_size = config.get("max_video_size")
 @filter.event_message_type(EventMessageType.ALL)
 async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, **kwargs):
     """
@@ -21,13 +24,15 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
     api_url = self.douyin_api_url
     # print(f"解析链接：{api_url}")
     message_str = event.message_str
-    match = re.search(r'(https?://v\.douyin\.com/[a-zA-Z0-9]+/)', message_str)
+    match = re.search(r'(https?://v\.douyin\.com/[a-zA-Z0-9_]+)', message_str)
+    if self.delate_time != 0:
+        delete_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/dy", self.delate_time)
     if match:
         url = match.group(1)
-        print(f"检测到抖音链接: {url}")  # 添加日志记录
+        # print(f"检测到抖音链接: {url}")  # 添加日志记录
         result = await process_douyin(url,api_url)  # 使用 await 调用异步函数
         if result:
-            print(f"解析结果: {result}")  # 添加日志记录
+            # print(f"解析结果: {result}")  # 添加日志记录
             if result['type'] == "video":
                 if result['is_multi_part']:
                     if self.nap_server_address != "localhost":
@@ -41,7 +46,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                                 content=[Video(nap_file_path)]
                             )
                             ns.nodes.append(node)
-                        print(f"发送多段视频: {ns}")  # 添加日志记录
+                        # print(f"发送多段视频: {ns}")  # 添加日志记录
                     else:
                         ns = Nodes([])
                         for i in range(result['count']):
@@ -52,7 +57,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                                 content=[Video.fromFileSystem(file_path)]
                             )
                             ns.nodes.append(node)
-                        print(f"发送多段视频: {ns}")  # 添加日志记录
+                        # print(f"发送多段视频: {ns}")  # 添加日志记录
                     yield event.chain_result([ns])
                 else:
                     file_path = result['save_path'][0]
@@ -60,7 +65,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                         nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
                     else:
                         nap_file_path = file_path
-                    print(f"发送单段视频: {nap_file_path}")  # 添加日志记录
+                    # print(f"发送单段视频: {nap_file_path}")  # 添加日志记录
                     yield event.chain_result([
                         Video.fromFileSystem(nap_file_path)
                     ])
@@ -87,7 +92,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                                 content=[Image(file_path)]
                             )
                             ns.nodes.append(node)
-                    print(f"发送多段图片: {ns}")  # 添加日志记录
+                    # print(f"发送多段图片: {ns}")  # 添加日志记录
                     yield event.chain_result([ns])
                 else:
                     file_path = result['save_path'][0]
@@ -112,6 +117,8 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
     """
     message_str = event.message_str
     match = re.search(r'(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|BV1\w{9}|av\d+)', message_str)
+    if self.delate_time != 0:
+        delete_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/", self.delate_time)
     if match:
         url = match.group(1)
         result = await process_bili_video(url)
