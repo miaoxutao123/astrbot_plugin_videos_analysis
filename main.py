@@ -140,23 +140,32 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
     自动检测消息中是否包含bili分享链接，并解析。
     """
     message_str = event.message_str
-    # try:
-    #     message_data = json.loads(event.message_str)
-    # except json.JSONDecodeError:
-    #     print("消息解析失败，message_str 不是有效的 JSON 格式")
-        
 
-    # 提取 qqdocurl
-    try:
-        qqdocurl = message_str["message"][0]["data"]["meta"]["detail_1"]["qqdocurl"]
-        print("qqdocurl:", qqdocurl)
-    except (KeyError, IndexError):
-        print("qqdocurl 字段不存在")
-        return
-    
+    # 提取并整理链接
+    match_json = re.search(r'https:\\\\/\\\\/b23\.tv\\\\/[a-zA-Z0-9]+', message_str)
     match = re.search(r'(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|BV1\w{9}|av\d+)', message_str)
+    
     if self.delate_time != 0:
         delete_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/", self.delate_time)
+    
+    if match_json:
+        json_url = match.group(0).replace('\\\\', '\\')
+        result = await process_bili_video(json_url)
+        if result:
+            file_path = result['video_path']
+            if self.nap_server_address != "localhost":
+                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                print(nap_file_path)
+            else:
+                nap_file_path = file_path
+            yield event.chain_result([
+                Plain(f"视频标题：{result['title']}\n观看次数：{result['view_count']}\n点赞次数：{result['like_count']}\n投币次数：{result['coin_count']}")
+            ])
+            yield event.chain_result([
+                Image(file=result['cover']),
+                Video.fromFileSystem(nap_file_path)
+            ])
+    
     if match:
         url = match.group(1)
         result = await process_bili_video(url)
