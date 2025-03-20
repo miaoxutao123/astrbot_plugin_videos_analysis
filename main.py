@@ -140,52 +140,25 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
     自动检测消息中是否包含bili分享链接，并解析。
     """
     message_str = event.message_str
-    message_obj = event.message_obj
-    # print(f"完整消息结果：{message_obj}")
-    
-    # 检查是否为bilibili小程序
-    bili_url = None
-    if 'message' in message_obj and isinstance(message_obj['message'], list):
-        for item in message_obj['message']:
-            if isinstance(item, dict) and item.get('type') == 'json':
-                try:
-                    json_data = json.loads(item.get('data', {}).get('data', '{}'))
-                    if 'meta' in json_data and 'detail_1' in json_data.get('meta', {}):
-                        detail = json_data['meta']['detail_1']
-                        if detail.get('title') == '哔哩哔哩' and 'qqdocurl' in detail:
-                            bili_url = detail['qqdocurl']
-                            print(f"从小程序中提取到B站链接: {bili_url}")
-                except Exception as e:
-                    print(f"解析JSON时出错: {e}")
-    
-    # 原有的链接匹配逻辑
+    # message_obj = event.message_obj
+    print(f"完整消息结果：{message_str}")
     match = re.search(r'(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|BV1\w{9}|av\d+)', message_str)
-    
-    # 如果从小程序中找到了链接，优先使用小程序链接
-    if bili_url:
-        url = bili_url
-    elif match:
-        url = match.group(1)
-    else:
-        # 如果没有找到链接，直接返回
-        return
-    
     if self.delate_time != 0:
         delete_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/", self.delate_time)
-    
-    # 以下是原有的处理逻辑
-    result = await process_bili_video(url)
-    if result:
-        file_path = result['video_path']
-        if self.nap_server_address != "localhost":
-            nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-            print(nap_file_path)
-        else:
-            nap_file_path = file_path
-        yield event.chain_result([
-            Plain(f"视频标题：{result['title']}\n观看次数：{result['view_count']}\n点赞次数：{result['like_count']}\n投币次数：{result['coin_count']}")
-        ])
-        yield event.chain_result([
-            Image(file=result['cover']),
-            Video.fromFileSystem(nap_file_path)
-        ])
+    if match:
+        url = match.group(1)
+        result = await process_bili_video(url)
+        if result:
+            file_path = result['video_path']
+            if self.nap_server_address != "localhost":
+                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                print(nap_file_path)
+            else:
+                nap_file_path = file_path
+            yield event.chain_result([
+                Plain(f"视频标题：{result['title']}\n观看次数：{result['view_count']}\n点赞次数：{result['like_count']}\n投币次数：{result['coin_count']}")
+            ])
+            yield event.chain_result([
+                Image(file=result['cover']),
+                Video.fromFileSystem(nap_file_path)
+            ])
