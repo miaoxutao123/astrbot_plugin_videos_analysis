@@ -39,23 +39,46 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
                         ns = Nodes([])
                         for i in range(result['count']):
                             file_path = result['save_path'][i]
-                            nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                            node = Node(
-                                uin=event.get_self_id(),
-                                name="喵喵",
-                                content=[Video.fromFileSystem(nap_file_path)]
-                            )
+                            if file_path.endswith('.jpg'):
+                                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                                node = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Image.fromFileSystem(nap_file_path)]
+                                )
+                            else:
+                                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                                node = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Video.fromFileSystem(nap_file_path)]
+                                )
+                            # file_path = result['save_path'][i]
+                            # nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                            # node = Node(
+                            #     uin=event.get_self_id(),
+                            #     name="喵喵",
+                            #     content=[Video.fromFileSystem(nap_file_path)]
+                            # )
                             ns.nodes.append(node)
                         # print(f"发送多段视频: {ns}")  # 添加日志记录
                     else:
                         ns = Nodes([])
                         for i in range(result['count']):
-                            file_path = result['save_path'][i]
-                            node = Node(
-                                uin=event.get_self_id(),
-                                name="喵喵",
-                                content=[Video.fromFileSystem(file_path)]
-                            )
+                            if file_path.endswith('.jpg'):
+                                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                                node = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Image.fromFileSystem(nap_file_path)]
+                                )
+                            else:
+                                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                                node = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Video.fromFileSystem(nap_file_path)]
+                                )
                             ns.nodes.append(node)
                         # print(f"发送多段视频: {ns}")  # 添加日志记录
                     yield event.chain_result([ns])
@@ -116,6 +139,8 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
     自动检测消息中是否包含bili分享链接，并解析。
     """
     message_str = event.message_str
+    message_obj = event.message_obj
+    print(f"完整消息结果：{message_obj}")
     match = re.search(r'(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|BV1\w{9}|av\d+)', message_str)
     if self.delate_time != 0:
         delete_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/", self.delate_time)
