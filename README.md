@@ -1,5 +1,17 @@
 # AstrBot Plugin Videos Analysis
 
+访问次数
+
+</div>
+<div align="center">
+
+
+
+
+![:name](https://count.getloli.com/@astrbot_plugin_videos_analysis?name=astrbot_plugin_videos_analysis&theme=3d-num&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto)
+
+</div>
+
 AstrBot 插件，用于解析和下载抖音和 Bilibili 视频。（测试版已上线，有问题请提issue）
 
 **注意，本插件只测试了napcat下的qq，其他协议无法保证可用性**
