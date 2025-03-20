@@ -144,9 +144,9 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
     # 提取并整理链接
     match_json = re.search(r'https:\\\\/\\\\/b23\.tv\\\\/[a-zA-Z0-9]+', message_str)
     match = re.search(r'(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|BV1\w{9}|av\d+)', message_str)
-    
+
     if self.delate_time != 0:
-        delete_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/", self.delate_time)
+        delete_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/", self.delate_time)#删除过期文件
     
     if match_json:
         json_url = match.group(0).replace('\\\\', '\\')
