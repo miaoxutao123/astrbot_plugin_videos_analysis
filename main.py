@@ -155,6 +155,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
 
     if match_json:
         json_url = match_json.group(0).replace('\\\\', '\\')
+        json_url = json_url.replace('\\\\', '\\').replace('\\/', '/')
         print(f"检测到bili链接: {json_url}")
         result = await process_bili_video(json_url)
         if result:
