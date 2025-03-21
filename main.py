@@ -141,9 +141,6 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
     自动检测消息中是否包含bili分享链接，并解析。
     """
     message_str = event.message_str
-    print(f"检测到bili链接: {message_str}")
-    # 提取并整理链接
-    print(f"message_str的类型: {type(message_str)}")
     message_obj = event.message_obj 
     message_obj = str(message_obj)
     # 修复：使用 message_str 而不是 message_obj
