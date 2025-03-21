@@ -141,18 +141,19 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
     自动检测消息中是否包含bili分享链接，并解析。
     """
     message_str = event.message_str
-    message_obj = event.message_obj
-    print(f"检测到bili链接: {message_obj}")
+    print(f"检测到bili链接: {message_str}")
     # 提取并整理链接
     print(f"message_str的类型: {type(message_str)}")
-    match_json = re.search(r'https:\\\\/\\\\/b23\.tv\\\\/[a-zA-Z0-9]+', message_obj)
+    
+    # 修复：使用 message_str 而不是 message_obj
+    match_json = re.search(r'https:\\\\/\\\\/b23\.tv\\\\/[a-zA-Z0-9]+', message_str)
     match = re.search(r'(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|BV1\w{9}|av\d+)', message_str)
 
     if self.delate_time != 0:
-        delete_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/", self.delate_time)#删除过期文件
-    
+        delete_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/", self.delate_time)  # 删除过期文件
+
     if match_json:
-        json_url = match.group(0).replace('\\\\', '\\')
+        json_url = match_json.group(0).replace('\\\\', '\\')
         result = await process_bili_video(json_url)
         if result:
             file_path = result['video_path']
@@ -168,7 +169,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
                 Image(file=result['cover']),
                 Video.fromFileSystem(nap_file_path)
             ])
-    
+
     if match:
         url = match.group(1)
         result = await process_bili_video(url)
