@@ -144,9 +144,10 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
     print(f"检测到bili链接: {message_str}")
     # 提取并整理链接
     print(f"message_str的类型: {type(message_str)}")
-    
+    message_obj = event.message_obj 
+    message_obj = str(message_obj)
     # 修复：使用 message_str 而不是 message_obj
-    match_json = re.search(r'https:\\\\/\\\\/b23\.tv\\\\/[a-zA-Z0-9]+', message_str)
+    match_json = re.search(r'https:\\\\/\\\\/b23\.tv\\\\/[a-zA-Z0-9]+', message_obj)
     match = re.search(r'(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|BV1\w{9}|av\d+)', message_str)
 
     if self.delate_time != 0:
