@@ -8,7 +8,7 @@ from .bili_get import process_bili_video
 from .douyin_get import process_douyin
 from .auto_delate import delete_old_files
 
-@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.1.7","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
+@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.1.8","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -144,6 +144,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
     message_obj = event.message_obj 
     message_obj = str(message_obj)
     # 修复：使用 message_str 而不是 message_obj
+    contains_reply = re.search(r'reply', message_obj)
     match_json = re.search(r'https:\\\\/\\\\/b23\.tv\\\\/[a-zA-Z0-9]+', message_obj)
     match = re.search(r'(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|BV1\w{9}|av\d+)', message_str)
 
@@ -151,39 +152,41 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
         delete_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/", self.delate_time)  # 删除过期文件
 
     if match_json:
-        json_url = match_json.group(0).replace('\\\\', '\\')
-        json_url = json_url.replace('\\\\', '\\').replace('\\/', '/')
-        print(f"检测到bili链接: {json_url}")
-        result = await process_bili_video(json_url)
-        if result:
-            file_path = result['video_path']
-            if self.nap_server_address != "localhost":
-                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                print(nap_file_path)
-            else:
-                nap_file_path = file_path
-            yield event.chain_result([
-                Plain(f"视频标题：{result['title']}\n观看次数：{result['view_count']}\n点赞次数：{result['like_count']}\n投币次数：{result['coin_count']}")
-            ])
-            yield event.chain_result([
-                Image(file=result['cover']),
-                Video.fromFileSystem(nap_file_path)
-            ])
+        if not contains_reply:
+            json_url = match_json.group(0).replace('\\\\', '\\')
+            json_url = json_url.replace('\\\\', '\\').replace('\\/', '/')
+            print(f"检测到bili链接: {json_url}")
+            result = await process_bili_video(json_url)
+            if result:
+                file_path = result['video_path']
+                if self.nap_server_address != "localhost":
+                    nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                    print(nap_file_path)
+                else:
+                    nap_file_path = file_path
+                yield event.chain_result([
+                    Plain(f"视频标题：{result['title']}\n观看次数：{result['view_count']}\n点赞次数：{result['like_count']}\n投币次数：{result['coin_count']}")
+                ])
+                yield event.chain_result([
+                    Image(file=result['cover']),
+                    Video.fromFileSystem(nap_file_path)
+                ])
 
     if match:
-        url = match.group(1)
-        result = await process_bili_video(url)
-        if result:
-            file_path = result['video_path']
-            if self.nap_server_address != "localhost":
-                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                print(nap_file_path)
-            else:
-                nap_file_path = file_path
-            yield event.chain_result([
-                Plain(f"视频标题：{result['title']}\n观看次数：{result['view_count']}\n点赞次数：{result['like_count']}\n投币次数：{result['coin_count']}")
-            ])
-            yield event.chain_result([
-                Image(file=result['cover']),
-                Video.fromFileSystem(nap_file_path)
-            ])
+        if not contains_reply:
+            url = match.group(1)
+            result = await process_bili_video(url)
+            if result:
+                file_path = result['video_path']
+                if self.nap_server_address != "localhost":
+                    nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                    print(nap_file_path)
+                else:
+                    nap_file_path = file_path
+                yield event.chain_result([
+                    Plain(f"视频标题：{result['title']}\n观看次数：{result['view_count']}\n点赞次数：{result['like_count']}\n投币次数：{result['coin_count']}")
+                ])
+                yield event.chain_result([
+                    Image(file=result['cover']),
+                    Video.fromFileSystem(nap_file_path)
+                ])
