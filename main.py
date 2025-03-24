@@ -25,115 +25,118 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
     api_url = self.douyin_api_url
     # print(f"解析链接：{api_url}")
     message_str = event.message_str
+    message_obj = event.message_obj
     match = re.search(r'(https?://v\.douyin\.com/[a-zA-Z0-9_]+)', message_str)
-    
+    contains_reply = re.search(r'reply', message_obj)
+
     if self.delate_time != 0:
         delete_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/dy", self.delate_time)
     if match:
-        url = match.group(1)
-        # print(f"检测到抖音链接: {url}")  # 添加日志记录
-        result = await process_douyin(url,api_url)  # 使用 await 调用异步函数
-        if result:
-            # print(f"解析结果: {result}")  # 添加日志记录
-            if result['type'] == "video":
-                if result['is_multi_part']:
-                    if self.nap_server_address != "localhost":
-                        ns = Nodes([])
-                        for i in range(result['count']):
-                            file_path = result['save_path'][i]
-                            if file_path.endswith('.jpg'):
-                                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                                node = Node(
-                                    uin=event.get_self_id(),
-                                    name="喵喵",
-                                    content=[Image.fromFileSystem(nap_file_path)]
-                                )
-                            else:
-                                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                                node = Node(
-                                    uin=event.get_self_id(),
-                                    name="喵喵",
-                                    content=[Video.fromFileSystem(nap_file_path)]
-                                )
-                            # file_path = result['save_path'][i]
-                            # nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                            # node = Node(
-                            #     uin=event.get_self_id(),
-                            #     name="喵喵",
-                            #     content=[Video.fromFileSystem(nap_file_path)]
-                            # )
-                            ns.nodes.append(node)
-                        # print(f"发送多段视频: {ns}")  # 添加日志记录
+        if not contains_reply:
+            url = match.group(1)
+            # print(f"检测到抖音链接: {url}")  # 添加日志记录
+            result = await process_douyin(url,api_url)  # 使用 await 调用异步函数
+            if result:
+                # print(f"解析结果: {result}")  # 添加日志记录
+                if result['type'] == "video":
+                    if result['is_multi_part']:
+                        if self.nap_server_address != "localhost":
+                            ns = Nodes([])
+                            for i in range(result['count']):
+                                file_path = result['save_path'][i]
+                                if file_path.endswith('.jpg'):
+                                    nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                                    node = Node(
+                                        uin=event.get_self_id(),
+                                        name="喵喵",
+                                        content=[Image.fromFileSystem(nap_file_path)]
+                                    )
+                                else:
+                                    nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                                    node = Node(
+                                        uin=event.get_self_id(),
+                                        name="喵喵",
+                                        content=[Video.fromFileSystem(nap_file_path)]
+                                    )
+                                # file_path = result['save_path'][i]
+                                # nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                                # node = Node(
+                                #     uin=event.get_self_id(),
+                                #     name="喵喵",
+                                #     content=[Video.fromFileSystem(nap_file_path)]
+                                # )
+                                ns.nodes.append(node)
+                            # print(f"发送多段视频: {ns}")  # 添加日志记录
+                        else:
+                            ns = Nodes([])
+                            for i in range(result['count']):
+                                if file_path.endswith('.jpg'):
+                                    nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                                    node = Node(
+                                        uin=event.get_self_id(),
+                                        name="喵喵",
+                                        content=[Image.fromFileSystem(nap_file_path)]
+                                    )
+                                else:
+                                    nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                                    node = Node(
+                                        uin=event.get_self_id(),
+                                        name="喵喵",
+                                        content=[Video.fromFileSystem(nap_file_path)]
+                                    )
+                                ns.nodes.append(node)
+                            # print(f"发送多段视频: {ns}")  # 添加日志记录
+                        yield event.chain_result([ns])
                     else:
-                        ns = Nodes([])
-                        for i in range(result['count']):
-                            if file_path.endswith('.jpg'):
-                                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                                node = Node(
-                                    uin=event.get_self_id(),
-                                    name="喵喵",
-                                    content=[Image.fromFileSystem(nap_file_path)]
-                                )
-                            else:
-                                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                                node = Node(
-                                    uin=event.get_self_id(),
-                                    name="喵喵",
-                                    content=[Video.fromFileSystem(nap_file_path)]
-                                )
-                            ns.nodes.append(node)
-                        # print(f"发送多段视频: {ns}")  # 添加日志记录
-                    yield event.chain_result([ns])
-                else:
-                    file_path = result['save_path'][0]
-                    if self.nap_server_address != "localhost":
-                        nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                    else:
-                        nap_file_path = file_path
-                    # print(f"发送单段视频: {nap_file_path}")  # 添加日志记录
-                    yield event.chain_result([
-                        Video.fromFileSystem(nap_file_path)
-                    ])
-            elif result['type'] == "image":
-                if result['is_multi_part']:
-                    if self.nap_server_address != "localhost":
-                        ns = Nodes([])
-                        for i in range(result['count']):
-                            file_path = result['save_path'][i]
+                        file_path = result['save_path'][0]
+                        if self.nap_server_address != "localhost":
                             nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                            node = Node(
-                                uin=event.get_self_id(),
-                                name="喵喵",
-                                content=[Image.fromFileSystem(nap_file_path)]
-                            )
-                            ns.nodes.append(node)
+                        else:
+                            nap_file_path = file_path
+                        # print(f"发送单段视频: {nap_file_path}")  # 添加日志记录
+                        yield event.chain_result([
+                            Video.fromFileSystem(nap_file_path)
+                        ])
+                elif result['type'] == "image":
+                    if result['is_multi_part']:
+                        if self.nap_server_address != "localhost":
+                            ns = Nodes([])
+                            for i in range(result['count']):
+                                file_path = result['save_path'][i]
+                                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                                node = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Image.fromFileSystem(nap_file_path)]
+                                )
+                                ns.nodes.append(node)
+                        else:
+                            ns = Nodes([])
+                            for i in range(result['count']):
+                                file_path = result['save_path'][i]
+                                node = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Image.fromFileSystem(file_path)]
+                                )
+                                ns.nodes.append(node)
+                        # print(f"发送多段图片: {ns}")  # 添加日志记录
+                        yield event.chain_result([ns])
                     else:
-                        ns = Nodes([])
-                        for i in range(result['count']):
-                            file_path = result['save_path'][i]
-                            node = Node(
-                                uin=event.get_self_id(),
-                                name="喵喵",
-                                content=[Image.fromFileSystem(file_path)]
-                            )
-                            ns.nodes.append(node)
-                    # print(f"发送多段图片: {ns}")  # 添加日志记录
-                    yield event.chain_result([ns])
+                        file_path = result['save_path'][0]
+                        if self.nap_server_address != "localhost":
+                            nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+                        else:
+                            nap_file_path = file_path
+                        print(f"发送单段图片: {nap_file_path}")  # 添加日志记录
+                        yield event.chain_result([
+                            Image.fromFileSystem(nap_file_path)
+                        ])
                 else:
-                    file_path = result['save_path'][0]
-                    if self.nap_server_address != "localhost":
-                        nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                    else:
-                        nap_file_path = file_path
-                    print(f"发送单段图片: {nap_file_path}")  # 添加日志记录
-                    yield event.chain_result([
-                        Image.fromFileSystem(nap_file_path)
-                    ])
+                    print("解析失败，请检查链接是否正确。")
             else:
-                print("解析失败，请检查链接是否正确。")
-        else:
-            print("解析失败，请检查链接是否正确。")  # 添加日志记录
-            yield event.plain_result("检测到抖音链接，但解析失败，请检查链接是否正确。")
+                print("解析失败，请检查链接是否正确。")  # 添加日志记录
+                yield event.plain_result("检测到抖音链接，但解析失败，请检查链接是否正确。")
 
 @filter.event_message_type(EventMessageType.ALL)
 async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args, **kwargs):
