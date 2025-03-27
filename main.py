@@ -8,7 +8,7 @@ from .bili_get import process_bili_video
 from .douyin_get import process_douyin
 from .auto_delate import delete_old_files
 
-@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.1.7","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
+@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.1.8","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -17,6 +17,7 @@ class hybird_videos_analysis(Star):
         self.douyin_api_url = config.get("douyin_api_url")
         self.delate_time = config.get("delate_time")
         self.max_video_size = config.get("max_video_size")
+        self.videos_download = config.get("videos_download")
 @filter.event_message_type(EventMessageType.ALL)
 async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, **kwargs):
     """
@@ -140,6 +141,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
     """
     自动检测消息中是否包含bili分享链接，并解析。
     """
+    videos_download = self.videos_download
     message_str = event.message_str
     message_obj = event.message_obj 
     message_obj = str(message_obj)
@@ -169,8 +171,11 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
                 ])
                 yield event.chain_result([
                     Image(file=result['cover']),
-                    Video.fromFileSystem(nap_file_path)
                 ])
+                if videos_download:
+                    yield event.chain_result([
+                        Video.fromFileSystem(nap_file_path)
+                    ])
 
     if match:
         if not contains_reply:
@@ -188,5 +193,8 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
                 ])
                 yield event.chain_result([
                     Image(file=result['cover']),
-                    Video.fromFileSystem(nap_file_path)
                 ])
+                if videos_download:
+                    yield event.chain_result([
+                        Video.fromFileSystem(nap_file_path)
+                    ])

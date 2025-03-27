@@ -23,5 +23,10 @@
         "description": "最大视频大小（单位MB）",
         "type": "int",
         "default": 100
+    },
+    "videos_download":{
+        "description": "是否允许下载视频",
+        "type": "bool",
+        "default": true
     }
 }
