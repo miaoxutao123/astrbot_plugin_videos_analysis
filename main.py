@@ -240,7 +240,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
                         if url_mode:
                             if zhuanfa :
                                 ns = Nodes([])
-                                ns.nodes.append(node)
+                                
                                 node1 = Node(
                                     uin=event.get_self_id(),
                                     name="喵喵",
@@ -262,7 +262,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
                         else:
                             if zhuanfa :
                                 ns = Nodes([])
-                                ns.nodes.append(node)
+                                
                                 node1 = Node(
                                     uin=event.get_self_id(),
                                     name="喵喵",
@@ -286,7 +286,6 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
                         if url_mode:
                             if zhuanfa :
                                 ns = Nodes([])
-                                ns.nodes.append(node)
                                 node1 = Node(
                                     uin=event.get_self_id(),
                                     name="喵喵",
