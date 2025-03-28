@@ -20,7 +20,7 @@
         "default": 60
     },
     "max_video_size":{
-        "description": "最大视频大小（单位MB）",
+        "description": "最大视频大小（单位MB）（预留，还未完全实现）",
         "type": "int",
         "default": 100
     },
@@ -28,5 +28,11 @@
         "description": "是否允许下载视频",
         "type": "bool",
         "default": true
+    },
+    "bili_quality":{
+        "description": "B站视频清晰度",
+        "type": "int",
+        "default":32,
+        "hint" :"16: 360P|32: 480P|64: 720P|80: 1080P(暂不支持）|112: 1080P+（高码率）（暂不支持）|120: 4K（暂不支持）"
     }
 }

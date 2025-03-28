@@ -133,7 +133,7 @@ async def download_video(aid, cid, bvid, quality=16):
 
     return filename
 
-async def process_bili_video(url):
+async def process_bili_video(url,download_flag=True,quality=32):
     """主处理函数"""
     # 判断链接类型
     if REG_B23.search(url):
@@ -152,32 +152,93 @@ async def process_bili_video(url):
         return
 
     stats = video_info["stats"]
+    direct_url = get_video_download_url_by_bvid(video_info["bvid"],quality)
     # 下载视频
     if CONFIG["VIDEO"]["send_video"]:
-        print("\n开始下载视频...")
-        filename = await download_video(
-            video_info["aid"],
-            video_info["cid"],
-            video_info["bvid"]
-        )
+        if download_flag:
+            print("\n开始下载视频...")
+            filename = await download_video(
+                video_info["aid"],
+                video_info["cid"],
+                video_info["bvid"]
+            )
 
-        if filename:
-            print(f"视频已保存为：{filename}")
+            if filename:
+                print(f"视频已保存为：{filename}")
+            else:
+                print("下载视频失败")
+            return{
+                "direct_url": direct_url,
+                "title": video_info["title"],
+                "cover": video_info["cover"],
+                "duration": video_info["duration"],
+                "stats": video_info["stats"],
+                "video_path": filename,
+                "view_count" : stats["view"],
+                "like_count" : stats["like"],
+                "danmaku_count" : stats["danmaku"],
+                "coin_count" : stats["coin"],
+                "favorite_count" : stats["favorite"]
+            }
         else:
-            print("下载视频失败")
-    return{
-        "title": video_info["title"],
-        "cover": video_info["cover"],
-        "duration": video_info["duration"],
-        "stats": video_info["stats"],
-        "video_path": filename,
-        "view_count" : stats["view"],
-        "like_count" : stats["like"],
-        "danmaku_count" : stats["danmaku"],
-        "coin_count" : stats["coin"],
-        "favorite_count" : stats["favorite"]
+            return {
+                "direct_url":direct_url,
+                "title": video_info["title"],
+                "cover": video_info["cover"],
+                "duration": video_info["duration"],
+                "stats": video_info["stats"],
+                "video_path": None,
+                "view_count" : stats["view"],
+                "like_count" : stats["like"],
+                "danmaku_count" : stats["danmaku"],
+                "coin_count" : stats["coin"],
+                "favorite_count" : stats["favorite"]
+            }
+async def get_video_download_url_by_bvid(bvid, quality=32):
+    """
+    根据BV号获取Bilibili视频的下载直链
+    :param bvid: 视频的BV号
+    :param quality: 视频质量 (默认16，表示360P16: 360P
+                             32: 480P
+                             64: 720P
+                             80: 1080P
+                             112: 1080P+（高码率）
+                             120: 4K)
+    :return: 视频下载直链或None
+    """
+    # 调用现有的 parse_video 函数解析视频信息
+    video_info = await parse_video(bvid)
+    if not video_info:
+        print("解析视频信息失败")
+        return None
 
-    }
+    aid = video_info["aid"]
+    cid = video_info["cid"]
+
+    # 构造播放地址接口
+    api_url = f"https://api.bilibili.com/x/player/playurl?avid={aid}&cid={cid}&qn={quality}&type=mp4&platform=html5"
+    data = await bili_request(api_url)
+
+    if data.get("code") != 0:
+        print(f"获取播放地址失败: {data.get('message')}")
+        return None
+
+    try:
+        # 提取视频直链
+        video_url = data["data"]["durl"][0]["url"]
+        return video_url
+    except (KeyError, IndexError):
+        print("解析播放地址失败")
+        return None
+
+# # 示例调用
+# async def main():
+#     bvid = "BV1LCobYxEBt"  # 替换为实际的BV号
+#     download_url = await get_video_download_url_by_bvid(bvid)
+#     print(f"视频下载直链: {download_url}")
+
+# if __name__ == "__main__":
+#     asyncio.run(main())
 
 # async def main():
 #     url = input("请输入B站视频链接：")
