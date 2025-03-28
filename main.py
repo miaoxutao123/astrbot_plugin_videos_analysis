@@ -179,14 +179,14 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
                 else:
                     nap_file_path = file_path
                 yield event.chain_result([
-                    Plain(f"视频直链 ：{result['direct_url']}\n \
-视频标题：{result['title']}\n \
-观看次数：{result['view_count']}\n \
-点赞次数：{result['like_count']}\n \
-投币次数：{result['coin_count']}\n \
-收藏次数：{result['favorite_count']}\n \
-弹幕量：{result['danmaku_count']}\n \
-视频时长：{int(result['duration']/60)}分{result['duration']%60}秒\n \
+                    Plain(f"🎥 视频直链 ：{result['direct_url']}\n \
+📜 视频标题：{result['title']}\n \
+👀 观看次数：{result['view_count']}\n \
+👍 点赞次数：{result['like_count']}\n \
+💰 投币次数：{result['coin_count']}\n \
+📂 收藏次数：{result['favorite_count']}\n \
+💬 弹幕量：{result['danmaku_count']}\n \
+⏳ 视频时长：{int(result['duration']/60)}分{result['duration']%60}秒\n \
                           "),
                     Image(file=result['cover'])
                 ])
@@ -207,14 +207,14 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
                 else:
                     nap_file_path = file_path
                 yield event.chain_result([
-                    Plain(f"视频直链 ：{result['direct_url']}\n \
-视频标题：{result['title']}\n \
-观看次数：{result['view_count']}\n \
-点赞次数：{result['like_count']}\n \
-投币次数：{result['coin_count']}\n \
-收藏次数：{result['favorite_count']}\n \
-弹幕量：{result['danmaku_count']}\n \
-视频时长：{int(result['duration']/60)}分{result['duration']%60}秒\n \
+                    Plain(f"🎥 视频直链 ：{result['direct_url']}\n \
+📜 视频标题：{result['title']}\n \
+👀 观看次数：{result['view_count']}\n \
+👍 点赞次数：{result['like_count']}\n \
+💰 投币次数：{result['coin_count']}\n \
+📂 收藏次数：{result['favorite_count']}\n \
+💬 弹幕量：{result['danmaku_count']}\n \
+⏳ 视频时长：{int(result['duration']/60)}分{result['duration']%60}秒\n \
                           "),
                     Image(file=result['cover'])
                 ])
