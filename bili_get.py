@@ -152,7 +152,7 @@ async def process_bili_video(url,download_flag=True,quality=32):
         return
 
     stats = video_info["stats"]
-    direct_url = get_video_download_url_by_bvid(video_info["bvid"],quality)
+    direct_url = await get_video_download_url_by_bvid(video_info["bvid"],quality)
     # 下载视频
     if CONFIG["VIDEO"]["send_video"]:
         if download_flag:
