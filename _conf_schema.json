@@ -24,15 +24,28 @@
         "type": "int",
         "default": 100
     },
-    "videos_download":{
-        "description": "是否允许下载视频",
-        "type": "bool",
-        "default": true
-    },
     "bili_quality":{
         "description": "B站视频清晰度",
         "type": "int",
         "default":32,
         "hint" :"16: 360P|32: 480P|64: 720P|80: 1080P(暂不支持）|112: 1080P+（高码率）（暂不支持）|120: 4K（暂不支持）"
+    },
+    "bili_reply_mode":{
+        "description": "回复模式",
+        "type": "int",
+        "default": 3,
+        "hint" :"0: 纯文本回复|1: 图片|2: 视频|3: 图片+视频"
+    },
+    "bili_url_mode":{
+        "description": "是否生成直链",
+        "type": "bool",
+        "default": true,
+        "hint" :"是否在哔哩哔哩视频解析时生成直链，默认生成直链"
+    },
+    "Merge_and_forward":{
+        "description": "是否合并转发",
+        "type": "bool",
+        "default": false,
+        "hint" :"是否在转发视频时合并视频和图片，默认不合并"
     }
 }

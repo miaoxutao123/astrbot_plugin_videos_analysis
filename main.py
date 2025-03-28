@@ -8,7 +8,7 @@ from .bili_get import process_bili_video
 from .douyin_get import process_douyin
 from .auto_delate import delete_old_files
 
-@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.1.8","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
+@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.1.9","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -17,8 +17,11 @@ class hybird_videos_analysis(Star):
         self.douyin_api_url = config.get("douyin_api_url")
         self.delate_time = config.get("delate_time")
         self.max_video_size = config.get("max_video_size")
-        self.videos_download = config.get("videos_download")
         self.bili_quality = config.get("bili_quality")
+        self.bili_reply_mode = config.get("bili_reply_mode")
+        self.bili_url_mode = config.get("bili_url_mode")
+        self.Merge_and_forward = config.get("Merge_and_forward")
+
 @filter.event_message_type(EventMessageType.ALL)
 async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, **kwargs):
     """
@@ -142,8 +145,14 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
     """
     自动检测消息中是否包含bili分享链接，并解析。
     """
-    videos_download = self.videos_download
     qulity = self.bili_quality
+    reply_mode = self.bili_reply_mode
+    url_mode = self.bili_url_mode
+    if reply_mode == 0 or reply_mode == 1 :
+        videos_download = False
+    else:
+        videos_download = True
+    zhuanfa = self.Merge_and_forward
 
     message_str = event.message_str
     message_obj = event.message_obj 
@@ -156,49 +165,15 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
     if self.delate_time != 0:
         delete_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/", self.delate_time)  # 删除过期文件
 
-    if match_json:
-        if not contains_reply:
-            json_url = match_json.group(0).replace('\\\\', '\\')
-            json_url = json_url.replace('\\\\', '\\').replace('\\/', '/')
-            print(f"检测到bili链接: {json_url}")
-            result = await process_bili_video(json_url, download_flag=videos_download, quality=qulity)
-            if result:
-                if videos_download:
-                    if self.nap_server_address != "localhost":
-                        nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                        print(nap_file_path)
-                    else:
-                        nap_file_path = file_path
-                    yield event.chain_result([
-                        Video.fromFileSystem(nap_file_path)
-                    ])
-                file_path = result['video_path']
-                if self.nap_server_address != "localhost":
-                    nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                    print(nap_file_path)
-                else:
-                    nap_file_path = file_path
-                yield event.chain_result([
-                    Plain(f"🎥 视频直链 ：{result['direct_url']}\n \
-📜 视频标题：{result['title']}\n \
-👀 观看次数：{result['view_count']}\n \
-👍 点赞次数：{result['like_count']}\n \
-💰 投币次数：{result['coin_count']}\n \
-📂 收藏次数：{result['favorite_count']}\n \
-💬 弹幕量：{result['danmaku_count']}\n \
-⏳ 视频时长：{int(result['duration']/60)}分{result['duration']%60}秒\n \
-                          "),
-                    Image(file=result['cover'])
-                ])
-                if videos_download:
-                    yield event.chain_result([
-                        Video.fromFileSystem(nap_file_path)
-                    ])
-
-    if match:
+    if match or match_json:
+        if match:
+            url = match.group(1)
+        if match_json:
+            url = match_json.group(0).replace('\\\\', '\\')
+            url = url.replace('\\\\', '\\').replace('\\/', '/')
         if not contains_reply:
             url = match.group(1)
-            result = await process_bili_video(url)
+            result = await process_bili_video(url,download_flag=videos_download, quality=qulity)
             if result:
                 file_path = result['video_path']
                 if self.nap_server_address != "localhost":
@@ -206,19 +181,152 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
                     print(nap_file_path)
                 else:
                     nap_file_path = file_path
-                yield event.chain_result([
-                    Plain(f"🎥 视频直链 ：{result['direct_url']}\n \
-📜 视频标题：{result['title']}\n \
-👀 观看次数：{result['view_count']}\n \
-👍 点赞次数：{result['like_count']}\n \
-💰 投币次数：{result['coin_count']}\n \
-📂 收藏次数：{result['favorite_count']}\n \
-💬 弹幕量：{result['danmaku_count']}\n \
-⏳ 视频时长：{int(result['duration']/60)}分{result['duration']%60}秒\n \
-                          "),
-                    Image(file=result['cover'])
-                ])
-                if videos_download:
-                    yield event.chain_result([
-                        Video.fromFileSystem(nap_file_path)
-                    ])
+                without_url = f"📜 视频标题：{result['title']}\n👀 观看次数：{result['view_count']}\n👍 点赞次数：{result['like_count']}\n💰 投币次数：{result['coin_count']}\n📂 收藏次数：{result['favorite_count']}\n💬 弹幕量：{result['danmaku_count']}\n⏳ 视频时长：{int(result['duration']/60)}分{result['duration']%60}秒\n"
+                with_url = f"📜 视频标题：{result['title']}\n👀 观看次数：{result['view_count']}\n👍 点赞次数：{result['like_count']}\n💰 投币次数：{result['coin_count']}\n📂 收藏次数：{result['favorite_count']}\n💬 弹幕量：{result['danmaku_count']}\n⏳ 视频时长：{int(result['duration']/60)}分{result['duration']%60}秒\n 🎥 视频直链 ：{result['direct_url']}\n"
+                match reply_mode :
+                    case 0: #纯文本回复
+                        if url_mode:
+                            if zhuanfa :
+                                node = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Plain(with_url)]
+                                )
+                                yield event.chain_result([node])
+                            else:
+                                yield event.chain_result([
+                                Plain(with_url),
+                                ])
+                        else:
+                            if zhuanfa :
+                                node = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Plain(without_url)]
+                                )
+                                yield event.chain_result([node])
+                            else:
+                                yield event.chain_result([
+                                Plain(without_url),
+                                ])
+                    case 1: #带图片回复
+                        if url_mode:
+                            if zhuanfa :
+                                node = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Image(file=result['cover']),Plain(with_url)]
+                                )
+                                yield event.chain_result([node])
+                            else:
+                                yield event.chain_result([
+                                Image(file=result['cover']),
+                                Plain(with_url),
+                                ])
+                        else:
+                            if zhuanfa :
+                                node = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Image(file=result['cover']),Plain(without_url)]
+                                )
+                                yield event.chain_result([node])
+                            else:
+                                yield event.chain_result([
+                                Image(file=result['cover']),
+                                Plain(without_url),
+                                ])
+                    case 2: #不带图片带视频回复
+                        if url_mode:
+                            if zhuanfa :
+                                ns = Nodes([])
+                                ns.nodes.append(node)
+                                node1 = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Video.fromFileSystem(nap_file_path)]
+                                )
+                                node2 = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Plain(with_url)]
+                                )
+                                ns.nodes.append(node1)
+                                ns.nodes.append(node2)
+                                yield event.chain_result([ns])
+                            else:
+                                yield event.chain_result([
+                                Video.fromFileSystem(nap_file_path),
+                                Plain(with_url),
+                                ])
+                        else:
+                            if zhuanfa :
+                                ns = Nodes([])
+                                ns.nodes.append(node)
+                                node1 = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Video.fromFileSystem(nap_file_path)]
+                                )
+                                node2 = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Plain(without_url)]
+                                )
+                                ns.nodes.append(node1)
+                                ns.nodes.append(node2)
+                                yield event.chain_result([ns])
+                            else:
+                                yield event.chain_result([
+                                Video.fromFileSystem(nap_file_path),
+                                Plain(without_url),
+                                ])
+
+                    case 3: #完整回复
+                        if url_mode:
+                            if zhuanfa :
+                                ns = Nodes([])
+                                ns.nodes.append(node)
+                                node1 = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Video.fromFileSystem(nap_file_path)]
+                                )
+                                node2 = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Image(file=result['cover']),Plain(with_url)]
+                                )
+                                ns.nodes.append(node1)
+                                ns.nodes.append(node2)
+                                yield event.chain_result([ns])
+                            else:
+                                yield event.chain_result([
+                                Video.fromFileSystem(nap_file_path),
+                                Image(file=result['cover']),
+                                Plain(with_url),
+                                ])
+                        else:
+                            if zhuanfa :
+                                ns = Nodes([])
+                                ns.nodes.append(node)
+                                node1 = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Image(file=result['cover']),Video.fromFileSystem(nap_file_path)]
+                                )
+                                node2 = Node(
+                                    uin=event.get_self_id(),
+                                    name="喵喵",
+                                    content=[Plain(without_url)]
+                                )
+                                ns.nodes.append(node1)
+                                ns.nodes.append(node2)
+                                yield event.chain_result([ns])
+                            else:
+                                yield event.chain_result([
+                                Image(file=result['cover']),
+                                Video.fromFileSystem(nap_file_path),
+                                Plain(without_url),
+                                ])
+
