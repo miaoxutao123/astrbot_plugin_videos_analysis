@@ -8,7 +8,7 @@ from .bili_get import process_bili_video
 from .douyin_get import process_douyin
 from .auto_delate import delete_old_files
 
-@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.1.9","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
+@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.1.10","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -168,11 +168,10 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
     if match or match_json:
         if match:
             url = match.group(1)
-        if match_json:
+        elif match_json:
             url = match_json.group(0).replace('\\\\', '\\')
             url = url.replace('\\\\', '\\').replace('\\/', '/')
         if not contains_reply:
-            url = match.group(1)
             result = await process_bili_video(url,download_flag=videos_download, quality=qulity)
             if result:
                 file_path = result['video_path']
