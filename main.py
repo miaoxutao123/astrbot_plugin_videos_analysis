@@ -21,7 +21,7 @@ class hybird_videos_analysis(Star):
         self.bili_reply_mode = config.get("bili_reply_mode")
         self.bili_url_mode = config.get("bili_url_mode")
         self.Merge_and_forward = config.get("Merge_and_forward")
-
+        self.bili_use_login = config.get("bili_use_login")
 @filter.event_message_type(EventMessageType.ALL)
 async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, **kwargs):
     """
@@ -148,6 +148,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
     qulity = self.bili_quality
     reply_mode = self.bili_reply_mode
     url_mode = self.bili_url_mode
+    use_login = self.bili_use_login
     if reply_mode == 0 or reply_mode == 1 :
         videos_download = False
     else:
@@ -172,7 +173,8 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
             url = match_json.group(0).replace('\\\\', '\\')
             url = url.replace('\\\\', '\\').replace('\\/', '/')
         if not contains_reply:
-            result = await process_bili_video(url,download_flag=videos_download, quality=qulity)
+            # 传递event对象给process_bili_video函数
+            result = await process_bili_video(url, download_flag=videos_download, quality=qulity, use_login=use_login, event=event)
             if result:
                 file_path = result['video_path']
                 if self.nap_server_address != "localhost":
