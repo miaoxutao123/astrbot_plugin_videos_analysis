@@ -1,0 +1,13 @@
+# 网络请求相关
+aiohttp>=3.8.0
+requests>=2.25.0
+
+# 异步文件操作
+aiofiles>=0.8.0
+
+# 图像处理
+Pillow>=9.0.0
+qrcode>=7.3.0
+
+# 工具库
+asyncio>=3.4.3
