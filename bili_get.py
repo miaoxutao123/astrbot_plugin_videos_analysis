@@ -242,7 +242,7 @@ async def bili_login(event=None):
     
     logger.info("\n请使用B站APP扫描以下二维码登录:")
     
-    # 获取qrcode_key
+    # 获取qrcode_key - 修复这里的变量引用错误
     qrcode_key = qr_data["qrcode_key"]
     
     # 重新创建二维码用于终端显示
@@ -277,7 +277,14 @@ async def bili_login(event=None):
     # 如果有事件对象，发送提醒消息
     if event:
         try:
-            await event.plain_result("检测到需要登录B站账号，请前往控制台扫描二维码完成登录")
+            # 修改这里：使用正确的消息发送方式
+            # 方法1：直接使用 reply 方法
+            event.reply("检测到需要登录B站账号，请前往控制台扫描二维码完成登录")
+            # 如果上面的方法不起作用，可以尝试以下替代方法
+            # 方法2：使用 result 属性
+            # event.result = "检测到需要登录B站账号，请前往控制台扫描二维码完成登录"
+            # 方法3：如果是使用 yield 返回消息
+            # yield Plain("检测到需要登录B站账号，请前往控制台扫描二维码完成登录")
         except Exception as e:
             logger.error(f"发送提醒消息失败: {str(e)}")
     
