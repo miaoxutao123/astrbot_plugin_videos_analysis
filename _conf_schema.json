@@ -51,7 +51,7 @@
     "bili_use_login": {
           "description": "是否使用登录状态下载B站视频",
           "hint": "启用后将尝试使用登录状态下载高清视频，禁用则强制使用无登录方式",
-          "type": "boolean",
+          "type": "bool",
           "default": false
     }
 }
