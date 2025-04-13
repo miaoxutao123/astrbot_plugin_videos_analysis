@@ -1,6 +1,6 @@
 name: astrbot_plugin_videos_analysis # 这是你的插件的唯一识别名。
 desc: 聚合视频解析 # 插件简短描述
 help: 自动解析视频分享链接 # 插件的帮助信息
-version: v0.1.10 # 插件版本号。格式：v1.1.1 或者 v1.1
+version: v0.2.0 # 插件版本号。格式：v1.1.1 或者 v1.1
 author: 喵喵 # 作者
 repo: https://github.com/miaoxutao123/astrbot_plugin_videos_analysis # 插件的仓库地址

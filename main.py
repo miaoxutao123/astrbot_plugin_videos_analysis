@@ -1,6 +1,7 @@
 from astrbot.api.all import *
 from astrbot.api.message_components import Node, Plain, Image, Video, Nodes
 from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api import logger
 import re
 import json  # 添加json模块导入
 from .file_send_server import send_file
@@ -8,7 +9,7 @@ from .bili_get import process_bili_video
 from .douyin_get import process_douyin
 from .auto_delate import delete_old_files
 
-@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.1.10","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
+@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.0","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -173,8 +174,16 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
             url = match_json.group(0).replace('\\\\', '\\')
             url = url.replace('\\\\', '\\').replace('\\/', '/')
         if not contains_reply:
-            # 传递event对象给process_bili_video函数
-            result = await process_bili_video(url, download_flag=videos_download, quality=qulity, use_login=use_login, event=event)
+            # 检查是否需要登录B站账号
+            need_login = False
+            
+            # 传递event对象给process_bili_video函数，但不在bili_get.py中发送消息
+            result = await process_bili_video(url, download_flag=videos_download, quality=qulity, use_login=use_login, event=None)
+            
+            # 如果需要登录，在这里发送提醒消息
+            if need_login:
+                yield event.plain_result("检测到需要登录B站账号，请前往控制台扫描二维码完成登录")
+            
             if result:
                 file_path = result['video_path']
                 if self.nap_server_address != "localhost":
@@ -182,8 +191,8 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
                     print(nap_file_path)
                 else:
                     nap_file_path = file_path
-                without_url = f"📜 视频标题：{result['title']}\n👀 观看次数：{result['view_count']}\n👍 点赞次数：{result['like_count']}\n💰 投币次数：{result['coin_count']}\n📂 收藏次数：{result['favorite_count']}\n💬 弹幕量：{result['danmaku_count']}\n⏳ 视频时长：{int(result['duration']/60)}分{result['duration']%60}秒\n"
-                with_url = f"📜 视频标题：{result['title']}\n👀 观看次数：{result['view_count']}\n👍 点赞次数：{result['like_count']}\n💰 投币次数：{result['coin_count']}\n📂 收藏次数：{result['favorite_count']}\n💬 弹幕量：{result['danmaku_count']}\n⏳ 视频时长：{int(result['duration']/60)}分{result['duration']%60}秒\n 🎥 视频直链 ：{result['direct_url']}\n"
+                without_url = f"📜 视频标题：{result['title']}\n👀 观看次数：{result['view_count']}\n👍 点赞次数：{result['like_count']}\n💰 投币次数：{result['coin_count']}\n📂 收藏次数：{result['favorite_count']}\n💬 弹幕量：{result['danmaku_count']}\n⏳ 视频时长：{int(result['duration']/60)}分{result['duration']%60}秒\n🧷原始链接：{"https://www.bilibili.com/video/" + result['bvid']}"
+                with_url = f"📜 视频标题：{result['title']}\n👀 观看次数：{result['view_count']}\n👍 点赞次数：{result['like_count']}\n💰 投币次数：{result['coin_count']}\n📂 收藏次数：{result['favorite_count']}\n💬 弹幕量：{result['danmaku_count']}\n⏳ 视频时长：{int(result['duration']/60)}分{result['duration']%60}秒\n 🎥 视频直链 ：{result['direct_url']}\n🧷原始链接：{"https://www.bilibili.com/video/" + result['bvid']}"
                 match reply_mode :
                     case 0: #纯文本回复
                         if url_mode:
