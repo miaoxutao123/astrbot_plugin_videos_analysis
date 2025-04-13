@@ -191,8 +191,27 @@ async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args
                     print(nap_file_path)
                 else:
                     nap_file_path = file_path
-                without_url = f"📜 视频标题：{result['title']}\n👀 观看次数：{result['view_count']}\n👍 点赞次数：{result['like_count']}\n💰 投币次数：{result['coin_count']}\n📂 收藏次数：{result['favorite_count']}\n💬 弹幕量：{result['danmaku_count']}\n⏳ 视频时长：{int(result['duration']/60)}分{result['duration']%60}秒\n🧷原始链接：{"https://www.bilibili.com/video/" + result['bvid']}"
-                with_url = f"📜 视频标题：{result['title']}\n👀 观看次数：{result['view_count']}\n👍 点赞次数：{result['like_count']}\n💰 投币次数：{result['coin_count']}\n📂 收藏次数：{result['favorite_count']}\n💬 弹幕量：{result['danmaku_count']}\n⏳ 视频时长：{int(result['duration']/60)}分{result['duration']%60}秒\n 🎥 视频直链 ：{result['direct_url']}\n🧷原始链接：{"https://www.bilibili.com/video/" + result['bvid']}"
+                with_url = (
+                    f"📜 视频标题：{result['title']}\n"
+                    f"👀 观看次数：{result['view_count']}\n"
+                    f"👍 点赞次数：{result['like_count']}\n"
+                    f"💰 投币次数：{result['coin_count']}\n"
+                    f"📂 收藏次数：{result['favorite_count']}\n"
+                    f"💬 弹幕量：{result['danmaku_count']}\n"
+                    f"⏳ 视频时长：{int(result['duration'] / 60)}分{result['duration'] % 60}秒\n"
+                    f"🎥 视频直链：{result['direct_url']}\n"
+                    f"🧷 原始链接：https://www.bilibili.com/video/{result['bvid']}"
+                )
+                without_url = (
+                    f"📜 视频标题：{result['title']}\n"
+                    f"👀 观看次数：{result['view_count']}\n"
+                    f"👍 点赞次数：{result['like_count']}\n"
+                    f"💰 投币次数：{result['coin_count']}\n"
+                    f"📂 收藏次数：{result['favorite_count']}\n"
+                    f"💬 弹幕量：{result['danmaku_count']}\n"
+                    f"⏳ 视频时长：{int(result['duration'] / 60)}分{result['duration'] % 60}秒\n"
+                    f"🧷 原始链接：https://www.bilibili.com/video/{result['bvid']}"
+                )
                 match reply_mode :
                     case 0: #纯文本回复
                         if url_mode:
