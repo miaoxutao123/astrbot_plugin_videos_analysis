@@ -388,13 +388,19 @@ async def bili_login(event=None):
             else:
                 line += "  "  # 空白
         qr_text += line + "\n"
-    
-    # 使用logger.info输出二维码
-    from astrbot.api import logger
     logger.info(qr_text)
     
+    # 保存二维码图片到指定路径
+    image_dir = "data/plugins/astrbot_plugin_videos_analysis/image"
+    os.makedirs(image_dir, exist_ok=True)
+    image_path = os.path.join(image_dir, "bili_login_qrcode.png")
+    with open(image_path, "wb") as f:
+        f.write(base64.b64decode(qr_data["image_base64"]))
+    # logger.info(f"二维码图片已保存到: {image_path}")
+
     # 同时也保留base64编码的输出，以防ASCII显示不正常
-    logger.info("\n如果上方二维码显示异常，请访问以下链接查看二维码:")
+    logger.info(f"\n如果上方二维码显示异常，请到一下路径查看二维码:/n{image_path}")
+    logger.info("\n如果无法找到，请自行解析一下base64编码的二维码:")
     logger.info(f"data:image/png;base64,{qr_data['image_base64']}")
     
     # 创建一个异步任务来检查登录状态

@@ -9,7 +9,7 @@ from .bili_get import process_bili_video
 from .douyin_get import process_douyin
 from .auto_delate import delete_old_files
 
-@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.0","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
+@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.1","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
