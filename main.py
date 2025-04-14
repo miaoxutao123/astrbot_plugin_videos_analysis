@@ -24,7 +24,7 @@ class hybird_videos_analysis(Star):
         self.Merge_and_forward = config.get("Merge_and_forward")
         self.bili_use_login = config.get("bili_use_login")
 @filter.event_message_type(EventMessageType.ALL)
-async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, **kwargs):
+async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
     """
     自动检测消息中是否包含抖音分享链接，并解析。
     """
@@ -142,7 +142,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, context: Context, *args, 
             yield event.plain_result("检测到抖音链接，但解析失败，请检查链接是否正确。")
 
 @filter.event_message_type(EventMessageType.ALL)
-async def auto_parse_bili(self, event: AstrMessageEvent, context: Context, *args, **kwargs):
+async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
     """
     自动检测消息中是否包含bili分享链接，并解析。
     """
