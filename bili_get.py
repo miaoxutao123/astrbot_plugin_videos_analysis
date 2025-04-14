@@ -388,8 +388,12 @@ async def bili_login(event=None):
             else:
                 line += "  "  # 空白
         qr_text += line + "\n"
+    
+    # 使用logger.info输出二维码
+    from astrbot.api import logger
     logger.info(qr_text)
     
+
     # 保存二维码图片到指定路径
     image_dir = "data/plugins/astrbot_plugin_videos_analysis/image"
     os.makedirs(image_dir, exist_ok=True)
