@@ -9,7 +9,7 @@ from .bili_get import process_bili_video
 from .douyin_get import process_douyin
 from .auto_delate import delete_old_files
 
-@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.1","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
+@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.2","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -330,7 +330,9 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                                 yield event.chain_result([ns])
                             else:
                                 yield event.chain_result([
-                                Video.fromFileSystem(nap_file_path),
+                                Video.fromFileSystem(nap_file_path)
+                                ])
+                                yield event.chain_result([
                                 Image(file=result['cover']),
                                 Plain(with_url),
                                 ])
@@ -353,8 +355,9 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                                 yield event.chain_result([ns])
                             else:
                                 yield event.chain_result([
+                                Video.fromFileSystem(nap_file_path)
+                                ])
+                                yield event.chain_result([
                                 Image(file=result['cover']),
-                                Video.fromFileSystem(nap_file_path),
                                 Plain(without_url),
                                 ])
-
