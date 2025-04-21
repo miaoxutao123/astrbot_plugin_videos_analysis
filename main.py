@@ -9,7 +9,7 @@ from .bili_get import process_bili_video
 from .douyin_get import process_douyin
 from .auto_delate import delete_old_files
 
-@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.2","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
+@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.3","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -31,8 +31,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
     api_url = self.douyin_api_url
     # print(f"解析链接：{api_url}")
     message_str = event.message_str
-    match = re.search(r'(https?://v\.douyin\.com/[a-zA-Z0-9_]+)', message_str)
-    
+    match = re.search(r'(https?://v\.douyin\.com/[a-zA-Z0-9_\-]+(?:-[a-zA-Z0-9_\-]+)?)', message_str)
     if self.delate_time != 0:
         delete_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/dy", self.delate_time)
     if match:

@@ -610,7 +610,27 @@ async def process_bili_video(url, download_flag=True, quality=80, use_login=True
         return
 
     stats = video_info["stats"]
-    
+    bvid = video_info["bvid"]
+
+    # 检查本地是否已存在相同 bvid 的视频文件
+    video_file = f"data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/{bvid}_output.mp4"
+    if os.path.exists(video_file):
+        log_callback(f"本地已存在视频文件：{video_file}，跳过下载")
+        return {
+            "direct_url": None,
+            "title": video_info["title"],
+            "cover": video_info["cover"],
+            "duration": video_info["duration"],
+            "stats": video_info["stats"],
+            "video_path": video_file,
+            "view_count": stats["view"],
+            "like_count": stats["like"],
+            "danmaku_count": stats["danmaku"],
+            "coin_count": stats["coin"],
+            "favorite_count": stats["favorite"],
+            "bvid": bvid,
+        }
+
     # 根据use_login参数决定使用哪种方式获取视频链接
     if use_login:
         # 先检查Cookie是否有效
@@ -669,33 +689,33 @@ async def process_bili_video(url, download_flag=True, quality=80, use_login=True
                 print(f"视频已保存为：{filename}")
             else:
                 print("下载视频失败")
-            return{
+            return {
                 "direct_url": direct_url,
                 "title": video_info["title"],
                 "cover": video_info["cover"],
                 "duration": video_info["duration"],
                 "stats": video_info["stats"],
                 "video_path": filename,
-                "view_count" : stats["view"],
-                "like_count" : stats["like"],
-                "danmaku_count" : stats["danmaku"],
-                "coin_count" : stats["coin"],
-                "favorite_count" : stats["favorite"],
+                "view_count": stats["view"],
+                "like_count": stats["like"],
+                "danmaku_count": stats["danmaku"],
+                "coin_count": stats["coin"],
+                "favorite_count": stats["favorite"],
                 "bvid": video_info["bvid"],
             }
         else:
             return {
-                "direct_url":direct_url,
+                "direct_url": direct_url,
                 "title": video_info["title"],
                 "cover": video_info["cover"],
                 "duration": video_info["duration"],
                 "stats": video_info["stats"],
                 "video_path": None,
-                "view_count" : stats["view"],
-                "like_count" : stats["like"],
-                "danmaku_count" : stats["danmaku"],
-                "coin_count" : stats["coin"],
-                "favorite_count" : stats["favorite"],
+                "view_count": stats["view"],
+                "like_count": stats["like"],
+                "danmaku_count": stats["danmaku"],
+                "coin_count": stats["coin"],
+                "favorite_count": stats["favorite"],
                 "bvid": video_info["bvid"],
             }
 
