@@ -546,6 +546,12 @@ async def download_file(url, file_path, headers):
 
 async def download_video_with_cookie(aid, cid, bvid, quality=80, event=None):
     """使用Cookie下载高清视频并合成音视频"""
+    # 检查是否已存在合成后的文件
+    output_file = f"data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/{bvid}_output.mp4"
+    if os.path.exists(output_file):
+        log_callback(f"视频已存在，跳过下载和合成：{output_file}")
+        return output_file
+
     # 获取视频和音频的URL
     result = await get_video_download_url_with_cookie(bvid, quality, event)
     if not result:
@@ -561,14 +567,20 @@ async def download_video_with_cookie(aid, cid, bvid, quality=80, event=None):
     # 下载视频和音频
     video_file = f"data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/{bvid}_video.mp4"
     audio_file = f"data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/{bvid}_audio.mp3"
-    output_file = f"data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/{bvid}_output.mp4"
 
     os.makedirs(os.path.dirname(video_file), exist_ok=True)
 
-    log_callback("正在下载视频...")
-    await download_file(video_url, video_file, headers)
-    log_callback("正在下载音频...")
-    await download_file(audio_url, audio_file, headers)
+    if not os.path.exists(video_file):
+        log_callback("正在下载视频...")
+        await download_file(video_url, video_file, headers)
+    else:
+        log_callback(f"视频文件已存在，跳过下载：{video_file}")
+
+    if not os.path.exists(audio_file):
+        log_callback("正在下载音频...")
+        await download_file(audio_url, audio_file, headers)
+    else:
+        log_callback(f"音频文件已存在，跳过下载：{audio_file}")
 
     # 合成音视频
     log_callback("正在合成音视频...")

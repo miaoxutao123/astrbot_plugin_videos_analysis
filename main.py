@@ -8,21 +8,26 @@ from .file_send_server import send_file
 from .bili_get import process_bili_video
 from .douyin_get import process_douyin
 from .auto_delate import delete_old_files
+from .xhs_get import xhs_parse
 
-@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.3","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
+@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.5","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
         self.nap_server_address = config.get("nap_server_address")
         self.nap_server_port = config.get("nap_server_port")
-        self.douyin_api_url = config.get("douyin_api_url")
         self.delate_time = config.get("delate_time")
         self.max_video_size = config.get("max_video_size")
+        
+        self.douyin_api_url = config.get("douyin_api_url")
+
         self.bili_quality = config.get("bili_quality")
         self.bili_reply_mode = config.get("bili_reply_mode")
         self.bili_url_mode = config.get("bili_url_mode")
         self.Merge_and_forward = config.get("Merge_and_forward")
         self.bili_use_login = config.get("bili_use_login")
+        
+        self.xhs_reply_mode = config.get("xhs_reply_mode")
 @filter.event_message_type(EventMessageType.ALL)
 async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
     """
@@ -50,21 +55,21 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
                                 nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
                                 node = Node(
                                     uin=event.get_self_id(),
-                                    name="喵喵",
+                                    name="astrbot",
                                     content=[Image.fromFileSystem(nap_file_path)]
                                 )
                             else:
                                 nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
                                 node = Node(
                                     uin=event.get_self_id(),
-                                    name="喵喵",
+                                    name="astrbot",
                                     content=[Video.fromFileSystem(nap_file_path)]
                                 )
                             # file_path = result['save_path'][i]
                             # nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
                             # node = Node(
                             #     uin=event.get_self_id(),
-                            #     name="喵喵",
+                            #     name="astrbot",
                             #     content=[Video.fromFileSystem(nap_file_path)]
                             # )
                             ns.nodes.append(node)
@@ -76,14 +81,14 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
                                 nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
                                 node = Node(
                                     uin=event.get_self_id(),
-                                    name="喵喵",
+                                    name="astrbot",
                                     content=[Image.fromFileSystem(nap_file_path)]
                                 )
                             else:
                                 nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
                                 node = Node(
                                     uin=event.get_self_id(),
-                                    name="喵喵",
+                                    name="astrbot",
                                     content=[Video.fromFileSystem(nap_file_path)]
                                 )
                             ns.nodes.append(node)
@@ -108,7 +113,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
                             nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
                             node = Node(
                                 uin=event.get_self_id(),
-                                name="喵喵",
+                                name="astrbot",
                                 content=[Image.fromFileSystem(nap_file_path)]
                             )
                             ns.nodes.append(node)
@@ -118,7 +123,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
                             file_path = result['save_path'][i]
                             node = Node(
                                 uin=event.get_self_id(),
-                                name="喵喵",
+                                name="astrbot",
                                 content=[Image.fromFileSystem(file_path)]
                             )
                             ns.nodes.append(node)
@@ -217,7 +222,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                             if zhuanfa :
                                 node = Node(
                                     uin=event.get_self_id(),
-                                    name="喵喵",
+                                    name="astrbot",
                                     content=[Plain(with_url)]
                                 )
                                 yield event.chain_result([node])
@@ -229,7 +234,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                             if zhuanfa :
                                 node = Node(
                                     uin=event.get_self_id(),
-                                    name="喵喵",
+                                    name="astrbot",
                                     content=[Plain(without_url)]
                                 )
                                 yield event.chain_result([node])
@@ -242,7 +247,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                             if zhuanfa :
                                 node = Node(
                                     uin=event.get_self_id(),
-                                    name="喵喵",
+                                    name="astrbot",
                                     content=[Image(file=result['cover']),Plain(with_url)]
                                 )
                                 yield event.chain_result([node])
@@ -255,7 +260,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                             if zhuanfa :
                                 node = Node(
                                     uin=event.get_self_id(),
-                                    name="喵喵",
+                                    name="astrbot",
                                     content=[Image(file=result['cover']),Plain(without_url)]
                                 )
                                 yield event.chain_result([node])
@@ -271,12 +276,12 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                                 
                                 node1 = Node(
                                     uin=event.get_self_id(),
-                                    name="喵喵",
+                                    name="astrbot",
                                     content=[Video.fromFileSystem(nap_file_path)]
                                 )
                                 node2 = Node(
                                     uin=event.get_self_id(),
-                                    name="喵喵",
+                                    name="astrbot",
                                     content=[Plain(with_url)]
                                 )
                                 ns.nodes.append(node1)
@@ -293,12 +298,12 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                                 
                                 node1 = Node(
                                     uin=event.get_self_id(),
-                                    name="喵喵",
+                                    name="astrbot",
                                     content=[Video.fromFileSystem(nap_file_path)]
                                 )
                                 node2 = Node(
                                     uin=event.get_self_id(),
-                                    name="喵喵",
+                                    name="astrbot",
                                     content=[Plain(without_url)]
                                 )
                                 ns.nodes.append(node1)
@@ -316,12 +321,12 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                                 ns = Nodes([])
                                 node1 = Node(
                                     uin=event.get_self_id(),
-                                    name="喵喵",
+                                    name="astrbot",
                                     content=[Video.fromFileSystem(nap_file_path)]
                                 )
                                 node2 = Node(
                                     uin=event.get_self_id(),
-                                    name="喵喵",
+                                    name="astrbot",
                                     content=[Image(file=result['cover']),Plain(with_url)]
                                 )
                                 ns.nodes.append(node1)
@@ -341,12 +346,12 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                                 ns.nodes.append(node)
                                 node1 = Node(
                                     uin=event.get_self_id(),
-                                    name="喵喵",
+                                    name="astrbot",
                                     content=[Image(file=result['cover']),Video.fromFileSystem(nap_file_path)]
                                 )
                                 node2 = Node(
                                     uin=event.get_self_id(),
-                                    name="喵喵",
+                                    name="astrbot",
                                     content=[Plain(without_url)]
                                 )
                                 ns.nodes.append(node1)
@@ -360,3 +365,136 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                                 Image(file=result['cover']),
                                 Plain(without_url),
                                 ])
+                    case 4: #仅视频
+                        if url_mode:
+                            if zhuanfa :
+                                ns = Nodes([])
+                                node1 = Node(
+                                    uin=event.get_self_id(),
+                                    name="astrbot",
+                                    content=[Video.fromFileSystem(nap_file_path)]
+                                )
+                                ns.nodes.append(node1)
+                                yield event.chain_result([ns])
+                            else:
+                                yield event.chain_result([
+                                Video.fromFileSystem(nap_file_path),
+                                ])
+                        else:
+                            if zhuanfa :
+                                ns = Nodes([])
+                                node1 = Node(
+                                    uin=event.get_self_id(),
+                                    name="astrbot",
+                                    content=[Video.fromFileSystem(nap_file_path)]
+                                )
+                                ns.nodes.append(node1)
+                                yield event.chain_result([ns])
+                            else:
+                                yield event.chain_result([
+                                Video.fromFileSystem(nap_file_path),
+                                ])
+
+# @filter.event_message_type(EventMessageType.ALL)
+# async def auto_parse_ks(self, event: AstrMessageEvent, *args, **kwargs):
+#     """
+#     自动检测消息中是否包含快手分享链接，并解析。
+#     """
+#     api_url = "https://api.kxzjoker.cn/api/jiexi_video"
+#     message_str = event.message_str
+#     match = re.search(r'(https?://v\.k\.ua\.com/[a-zA-Z0-9_\-]+(?:-[a-zA-Z0-9_\-]+)?)', message_str)
+
+@filter.event_message_type(EventMessageType.ALL)
+async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
+    """
+    自动检测消息中是否包含小红书分享链接，并解析。
+    """
+    replay_mode = self.xhs_reply_mode
+    max_video_size = self.max_video_size
+
+    images_pattern = r'(https?://xhslink\.com/[a-zA-Z0-9/]+)'
+    video_pattern = r'(https?://www\.xiaohongshu\.com/discovery/item/[a-zA-Z0-9]+)'
+    # api_url = "https://api.kxzjoker.cn/api/jiexi_video"
+
+    message_str = event.message_str
+    message_obj = event.message_obj 
+    message_obj = str(message_obj)
+
+    # 搜索匹配项
+    image_match = re.search(images_pattern, message_obj)
+    image_match_str = re.search(images_pattern, message_str)
+    video_match = re.search(video_pattern, message_obj)
+    video_match_str = re.search(video_pattern, message_str)
+    contains_reply = re.search(r'reply', message_obj)
+
+    if (image_match_str or image_match) and not contains_reply:
+        match = image_match_str or image_match
+        result = await xhs_parse(match.group(1))
+        
+        ns = Nodes([]) if replay_mode else None
+        title_node = Node(
+            uin=event.get_self_id(),
+            name="astrbot",
+            content=[Plain(result['title'])]
+        )
+        
+        if replay_mode:
+            ns.nodes.append(title_node)
+        else:
+            yield event.chain_result([Plain(result['title'])])
+        
+        for image_url in result['urls']:
+            image_node = Node(
+                uin=event.get_self_id(),
+                name="astrbot",
+                content=[Image.fromURL(image_url)]
+            )
+            if replay_mode:
+                ns.nodes.append(image_node)
+            else:
+                yield event.chain_result([Image.fromURL(image_url)])
+        
+        if replay_mode:
+            yield event.chain_result([ns])
+
+    if (video_match_str or video_match) and not contains_reply:
+        match = video_match_str or video_match
+        result = await xhs_parse(match.group(1))
+        
+        # if result["video_sizes"][i] > max_video_size:
+        #     yield event.plain_result("视频大小大于预设值，不进行解析")
+        #     return
+        
+        ns = Nodes([]) if replay_mode else None
+        title_node = Node(
+            uin=event.get_self_id(),
+            name="astrbot",
+            content=[Plain(result['title'])]
+        )
+        
+        if replay_mode:
+            ns.nodes.append(title_node)
+        else:
+            yield event.chain_result([Plain(result['title'])])
+        
+        for i, url in enumerate(result["urls"]):
+            if result["video_sizes"][i] > 199 * 1024 * 1024:  # Check if video size exceeds 199MB
+                video_node = Node(
+                    uin=event.get_self_id(),
+                    name="astrbot",
+                    content=[File(name=f"视频{i+1}", file=url)]
+                )
+            else:
+                video_node = Node(
+                    uin=event.get_self_id(),
+                    name="astrbot",
+                    content=[Video.fromURL(url)]
+                )
+            
+            if replay_mode:
+                ns.nodes.append(video_node)
+            else:
+                yield event.chain_result([video_node])
+        
+        if replay_mode:
+            yield event.chain_result([ns])

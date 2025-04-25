@@ -22,19 +22,19 @@
     "max_video_size":{
         "description": "最大视频大小（单位MB）（预留，还未完全实现）",
         "type": "int",
-        "default": 100
+        "default": 200
     },
     "bili_quality":{
         "description": "B站视频清晰度",
         "type": "int",
         "default":32,
-        "hint" :"16: 360P|32: 480P|64: 720P|80: 1080P(暂不支持）|112: 1080P+（高码率）（暂不支持）|120: 4K（暂不支持）"
+        "hint" :"16: 360P|32: 480P|64: 720P|80: 1080P|112: 1080P+（高码率）|120: 4K"
     },
     "bili_reply_mode":{
         "description": "回复模式",
         "type": "int",
         "default": 3,
-        "hint" :"0: 纯文本回复|1: 图片|2: 视频|3: 图片+视频"
+        "hint" :"0: 纯文本回复|1: 图片|2: 视频|3: 图片+视频|4: 纯视频回复"
     },
     "bili_url_mode":{
         "description": "是否生成直链",
@@ -53,5 +53,11 @@
           "hint": "启用后将尝试使用登录状态下载高清视频，禁用则强制使用无登录方式",
           "type": "bool",
           "default": false
+    },
+    "xhs_reply_mode":{
+        "description": "小红书是否开启合并转发",
+        "type": "bool",
+        "default": true,
+        "hint" :"默认合并"
     }
 }

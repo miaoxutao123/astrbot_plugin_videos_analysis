@@ -54,6 +54,11 @@ async def download_video(url, filename="video.mp4"):
         url (str): The URL of the video.
         filename (str): The filename to save the video as.
     """
+    # Check if the file already exists
+    if os.path.exists(filename):
+        print(f"File '{filename}' already exists. Skipping download.")
+        return
+
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0'
     }
