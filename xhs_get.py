@@ -3,10 +3,18 @@ import asyncio
 import aiohttp
 
 api = "https://api.kxzjoker.cn/api/jiexi_video?url="
-
+api2 = "https://api.kxzjoker.cn/api/jiexi_video_2?url="
 async def fetch(session, url):
     async with session.get(url) as response:
-        return await response.json()
+        print(f"Status: {response.status}")  # 输出 HTTP 状态码
+        raw_content = await response.text()  # 获取响应的原始内容
+        print(f"Raw Response: {raw_content}")  # 输出原始内容
+        
+        # 检查 Content-Type 是否为 JSON
+        if "application/json" in response.headers.get("Content-Type", ""):
+            return await response.json()
+        else:
+            raise ValueError(f"Unexpected Content-Type: {response.headers.get('Content-Type')}, cannot parse as JSON.")
 
 async def fetch_head(session, url):
     async with session.head(url) as response:
@@ -17,7 +25,17 @@ async def xhs_parse(url):
     小红书分享链接解析，使用看戏仔api
     """
     async with aiohttp.ClientSession() as session:
-        result = await fetch(session, api + url)
+        try:
+            # 尝试使用 api
+            result = await fetch(session, api + url)
+            if result.get("code") == 201:  # 如果接口返回维护状态
+                print("API 维护中，切换到 API2")
+                result = await fetch(session, api2 + url)  # 切换到 api2
+        except Exception as e:
+            print(f"Error using API: {e}")
+            print("尝试切换到 API2")
+            result = await fetch(session, api2 + url)  # 切换到 api2
+
         if result.get("success") == 1:
             data = result["data"]
             if "images" in data:
