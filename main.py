@@ -472,29 +472,49 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
             content=[Plain(result['title'])]
         )
         
-        if replay_mode:
-            ns.nodes.append(title_node)
-        else:
-            yield event.chain_result([Plain(result['title'])])
-        
-        for i, url in enumerate(result["urls"]):
-            if result["video_sizes"][i] > 199 * 1024 * 1024:  # Check if video size exceeds 199MB
-                video_node = Node(
-                    uin=event.get_self_id(),
-                    name="astrbot",
-                    content=[File(name=f"视频{i+1}", file=url)]
-                )
+        if "video_size" in result:
+            if replay_mode:
+                ns.nodes.append(title_node)
             else:
-                video_node = Node(
-                    uin=event.get_self_id(),
-                    name="astrbot",
-                    content=[Video.fromURL(url)]
-                )
+                yield event.chain_result([Plain(result['title'])])
+            
+            for i, url in enumerate(result["urls"]):
+                if result["video_sizes"][i] > 199 * 1024 * 1024:  # Check if video size exceeds 199MB
+                    video_node = Node(
+                        uin=event.get_self_id(),
+                        name="astrbot",
+                        content=[File(name=f"视频{i+1}", file=url)]
+                    )
+                else:
+                    video_node = Node(
+                        uin=event.get_self_id(),
+                        name="astrbot",
+                        content=[Video.fromURL(url)]
+                    )
+                
+                if replay_mode:
+                    ns.nodes.append(video_node)
+                else:
+                    yield event.chain_result([video_node])
             
             if replay_mode:
-                ns.nodes.append(video_node)
+                yield event.chain_result([ns])
+        else:
+            if replay_mode:
+                ns.nodes.append(title_node)
             else:
-                yield event.chain_result([video_node])
-        
-        if replay_mode:
-            yield event.chain_result([ns])
+                yield event.chain_result([Plain(result['title'])])
+            
+            for image_url in result['urls']:
+                image_node = Node(
+                    uin=event.get_self_id(),
+                    name="astrbot",
+                    content=[Image.fromURL(image_url)]
+                )
+                if replay_mode:
+                    ns.nodes.append(image_node)
+                else:
+                    yield event.chain_result([Image.fromURL(image_url)])
+            
+            if replay_mode:
+                yield event.chain_result([ns])

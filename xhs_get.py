@@ -69,7 +69,7 @@ async def xhs_parse(url):
 
 if __name__ == "__main__":
     async def main():
-        print(await xhs_parse("https://www.xiaohongshu.com/discovery/item/6808886f000000001c01f52f"))
-        # print(await xhs_parse("http://xhslink.com/a/20O4Hwe5YYXab"))
+        # print(await xhs_parse("https://www.xiaohongshu.com/discovery/item/6808886f000000001c01f52f"))
+        print(await xhs_parse("http://xhslink.com/a/20O4Hwe5YYXab"))
 
     asyncio.run(main())
