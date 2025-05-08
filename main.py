@@ -39,6 +39,18 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
     match = re.search(r'(https?://v\.douyin\.com/[a-zA-Z0-9_\-]+(?:-[a-zA-Z0-9_\-]+)?)', message_str)
     if self.delate_time != 0:
         delete_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/dy", self.delate_time)
+        if event.get_platform_name() == "aiocqhttp":
+            # qq
+            from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
+            assert isinstance(event, AiocqhttpMessageEvent)
+            client = event.bot # 得到 client
+            # payloads = {
+            #     "user_id": event.get_sender_id(),
+            #     "times": num
+            # }
+            ret = await client.api.call_action('clean_cache') # 调用 协议端  API
+            logger.info(f"删除nap残留数据")
+            # yield event.plain_result(f"{response_str}")
     if match:
         url = match.group(1)
         # print(f"检测到抖音链接: {url}")  # 添加日志记录
