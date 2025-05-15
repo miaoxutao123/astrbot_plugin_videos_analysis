@@ -3,7 +3,9 @@ from astrbot.api.message_components import Node, Plain, Image, Video, Nodes
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api import logger
 import re
-import json  # 添加json模块导入
+import json
+
+from .mcmod_get import mcmod_parse  # 添加json模块导入
 from .file_send_server import send_file
 from .bili_get import process_bili_video
 from .douyin_get import process_douyin
@@ -530,3 +532,91 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
             
             if replay_mode:
                 yield event.chain_result([ns])
+
+@filter.event_message_type(EventMessageType.ALL)
+async def auto_parse_mcmod(self, event: AstrMessageEvent, *args, **kwargs):
+    """
+    自动检测消息中是否包含mcmod分享链接，并解析。
+    """
+    #mcmod链接解析
+    mod_pattern = r'(https?://www\.mcmod\.cn/class/\d+\.html)'
+    modpack_pattern = r'(https?://www\.mcmod\.cn/modpack/\d+\.html)'
+
+    message_str = event.message_str
+    message_obj = event.message_obj 
+    message_obj = str(message_obj)
+
+    # 搜索匹配项
+    mod_match = re.search(mod_pattern, message_obj)
+    mod_match_str = re.search(mod_pattern, message_str)
+    modpack_match = re.search(modpack_pattern, message_obj)
+    modpack_match_str = re.search(modpack_pattern, message_str)
+    contains_reply = re.search(r'reply', message_obj)
+
+    #mod和整合包通用解析
+    if(mod_match_str or mod_match or modpack_match_str or modpack_match) and not contains_reply:
+        match = mod_match_str or mod_match or modpack_match_str or modpack_match
+        logger.info(f"解析MCmod链接: {match.group(1)}")
+        results = await mcmod_parse(match.group(1))
+        
+        if results and results[0]:  # 检查列表不为空且第一个元素存在
+            result = results[0]  # 获取第一个元素
+            logger.info(f"解析结果: {result}")
+            #使用合并转发发送解析内容
+            ns = Nodes([])
+            
+            # 添加名称
+            name_node = Node(
+                uin=event.get_self_id(),
+                name="astrbot",
+                content=[Plain(f"📦 {result.name}")]
+            )
+            ns.nodes.append(name_node)
+            
+            # 添加图标
+            if result.icon_url:
+                icon_node = Node(
+                    uin=event.get_self_id(),
+                    name="astrbot",
+                    content=[Image.fromURL(result.icon_url)]
+                )
+                ns.nodes.append(icon_node)
+
+            # 添加分类
+            if result.categories:
+                categories_str = ''
+                for i in result.categories:
+                    categories_str += i + '/'
+                categories_str = categories_str[:-1]
+                categories_node = Node(
+                    uin=event.get_self_id(),
+                    name="astrbot",
+                    content=[Plain(f"🏷️ 分类: {categories_str}")]
+                )
+                ns.nodes.append(categories_node)
+            
+            # 添加描述
+            if result.description:
+                description_node = Node(
+                    uin=event.get_self_id(),
+                    name="astrbot",
+                    content=[Plain(f"📝 描述:\n{result.description}")]
+                )
+                ns.nodes.append(description_node)
+            
+            # 添加描述图片
+            if result.description_images:
+                for img_url in result.description_images:
+                    img_node = Node(
+                        uin=event.get_self_id(),
+                        name="astrbot",
+                        content=[Image.fromURL(img_url)]
+                    )
+                    ns.nodes.append(img_node)
+
+            yield event.chain_result([ns])
+        else:
+            yield event.plain_result("解析MC百科信息失败，请检查链接是否正确。")
+        
+    
+    
