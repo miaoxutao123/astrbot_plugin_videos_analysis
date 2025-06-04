@@ -355,30 +355,29 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                                 Plain(with_url),
                                 ])
                         else:
-                            if zhuanfa :
-                                ns = Nodes([])
-                                ns.nodes.append(node)
-                                node1 = Node(
-                                    uin=event.get_self_id(),
-                                    name="astrbot",
-                                    content=[Image(file=result['cover']),Video.fromFileSystem(nap_file_path)]
-                                )
-                                node2 = Node(
-                                    uin=event.get_self_id(),
-                                    name="astrbot",
-                                    content=[Plain(without_url)]
-                                )
-                                ns.nodes.append(node1)
-                                ns.nodes.append(node2)
-                                yield event.chain_result([ns])
-                            else:
-                                yield event.chain_result([
-                                Video.fromFileSystem(nap_file_path)
-                                ])
-                                yield event.chain_result([
-                                Image(file=result['cover']),
-                                Plain(without_url),
-                                ])
+                                if zhuanfa :
+                                    ns = Nodes([])
+                                    node1 = Node(
+                                        uin=event.get_self_id(),
+                                        name="astrbot",
+                                        content=[Image(file=result['cover']),Video.fromFileSystem(nap_file_path)]
+                                    )
+                                    node2 = Node(
+                                        uin=event.get_self_id(),
+                                        name="astrbot",
+                                        content=[Plain(without_url)]
+                                    )
+                                    ns.nodes.append(node1)
+                                    ns.nodes.append(node2)
+                                    yield event.chain_result([ns])
+                                else:
+                                    yield event.chain_result([
+                                    Video.fromFileSystem(nap_file_path)
+                                    ])
+                                    yield event.chain_result([
+                                    Image(file=result['cover']),
+                                    Plain(without_url),
+                                    ])
                     case 4: #仅视频
                         if url_mode:
                             if zhuanfa :
@@ -617,6 +616,3 @@ async def auto_parse_mcmod(self, event: AstrMessageEvent, *args, **kwargs):
             yield event.chain_result([ns])
         else:
             yield event.plain_result("解析MC百科信息失败，请检查链接是否正确。")
-        
-    
-    
