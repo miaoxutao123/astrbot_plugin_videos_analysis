@@ -616,3 +616,7 @@ async def auto_parse_mcmod(self, event: AstrMessageEvent, *args, **kwargs):
             yield event.chain_result([ns])
         else:
             yield event.plain_result("解析MC百科信息失败，请检查链接是否正确。")
+            yield event.plain_result("解析MC百科信息失败，请检查链接是否正确。")
+        
+    
+    
