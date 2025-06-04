@@ -355,7 +355,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                                 Plain(with_url),
                                 ])
                         else:
-                                if zhuanfa :
+                            if zhuanfa :
                                     ns = Nodes([])
                                     node1 = Node(
                                         uin=event.get_self_id(),
@@ -370,7 +370,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                                     ns.nodes.append(node1)
                                     ns.nodes.append(node2)
                                     yield event.chain_result([ns])
-                                else:
+                            else:
                                     yield event.chain_result([
                                     Video.fromFileSystem(nap_file_path)
                                     ])
