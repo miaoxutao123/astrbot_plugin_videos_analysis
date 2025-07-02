@@ -214,13 +214,15 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
 
                     # 检查文件大小
                     file_size = os.path.getsize(file_path)
-                    if file_size > 200 * 1024 * 1024:  # 200MB
-                        media_component = File(name=os.path.basename(nap_file_path), file=nap_file_path)
+                    is_file_send = file_size > 200 * 1024 * 1024  # 200MB
+                    if is_file_send:
+                        media_component = File(name=os.path.basename(nap_file_path), file_=nap_file_path)
                     else:
                         media_component = Video.fromFileSystem(nap_file_path)
                 else:
                     # 如果文件不存在或路径为空，则不创建媒体组件
                     media_component = None
+                    is_file_send = False
                 with_url = (
                     f"📜 视频标题：{result['title']}\n"
                     f"👀 观看次数：{result['view_count']}\n"
@@ -296,129 +298,87 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                                 Plain(without_url),
                                 ])
                     case 2: #不带图片带视频回复
-                        if url_mode:
-                            if zhuanfa :
-                                ns = Nodes([])
-                                
-                                node1 = Node(
-                                    uin=event.get_self_id(),
-                                    name="astrbot",
-                                    content=[media_component]
-                                )
-                                node2 = Node(
-                                    uin=event.get_self_id(),
-                                    name="astrbot",
-                                    content=[Plain(with_url)]
-                                )
-                                ns.nodes.append(node1)
-                                ns.nodes.append(node2)
-                                yield event.chain_result([ns])
+                        text_to_send = with_url if url_mode else without_url
+                        if is_file_send:
+                            # 文件发送逻辑
+                            if zhuanfa:
+                                yield event.chain_result([Node(uin=event.get_self_id(), name="astrbot", content=[Plain(text_to_send)])])
                             else:
-                                yield event.chain_result([
-                                media_component,
-                                Plain(with_url),
-                                ])
+                                yield event.plain_result(text_to_send)
+                            if media_component:
+                                yield event.chain_result([media_component])
                         else:
-                            if zhuanfa :
-                                ns = Nodes([])
-                                
-                                node1 = Node(
-                                    uin=event.get_self_id(),
-                                    name="astrbot",
-                                    content=[media_component]
-                                )
-                                node2 = Node(
-                                    uin=event.get_self_id(),
-                                    name="astrbot",
-                                    content=[Plain(without_url)]
-                                )
-                                ns.nodes.append(node1)
-                                ns.nodes.append(node2)
-                                yield event.chain_result([ns])
-                            else:
-                                yield event.chain_result([
-                                media_component,
-                                Plain(without_url),
-                                ])
-
-                    case 3: #完整回复
-                        if url_mode:
-                            if zhuanfa :
-                                ns = Nodes([])
-                                node1 = Node(
-                                    uin=event.get_self_id(),
-                                    name="astrbot",
-                                    content=[media_component]
-                                )
-                                node2 = Node(
-                                    uin=event.get_self_id(),
-                                    name="astrbot",
-                                    content=[Image(file=result['cover']),Plain(with_url)]
-                                )
-                                ns.nodes.append(node1)
-                                ns.nodes.append(node2)
-                                yield event.chain_result([ns])
-                            else:
-                                yield event.chain_result([
-                                media_component
-                                ])
-                                yield event.chain_result([
-                                Image(file=result['cover']),
-                                Plain(with_url),
-                                ])
-                        else:
-                            if zhuanfa :
+                            # 原始视频发送逻辑
+                            if url_mode:
+                                if zhuanfa :
                                     ns = Nodes([])
-                                    node1 = Node(
-                                        uin=event.get_self_id(),
-                                        name="astrbot",
-                                        content=[Image(file=result['cover']),media_component]
-                                    )
-                                    node2 = Node(
-                                        uin=event.get_self_id(),
-                                        name="astrbot",
-                                        content=[Plain(without_url)]
-                                    )
+                                    node1 = Node(uin=event.get_self_id(), name="astrbot", content=[media_component])
+                                    node2 = Node(uin=event.get_self_id(), name="astrbot", content=[Plain(with_url)])
                                     ns.nodes.append(node1)
                                     ns.nodes.append(node2)
                                     yield event.chain_result([ns])
+                                else:
+                                    yield event.chain_result([media_component, Plain(with_url)])
                             else:
-                                    yield event.chain_result([
-                                    media_component
-                                    ])
-                                    yield event.chain_result([
-                                    Image(file=result['cover']),
-                                    Plain(without_url),
-                                    ])
-                    case 4: #仅视频
-                        if url_mode:
-                            if zhuanfa :
-                                ns = Nodes([])
-                                node1 = Node(
-                                    uin=event.get_self_id(),
-                                    name="astrbot",
-                                    content=[media_component]
-                                )
-                                ns.nodes.append(node1)
-                                yield event.chain_result([ns])
+                                if zhuanfa :
+                                    ns = Nodes([])
+                                    node1 = Node(uin=event.get_self_id(), name="astrbot", content=[media_component])
+                                    node2 = Node(uin=event.get_self_id(), name="astrbot", content=[Plain(without_url)])
+                                    ns.nodes.append(node1)
+                                    ns.nodes.append(node2)
+                                    yield event.chain_result([ns])
+                                else:
+                                    yield event.chain_result([media_component, Plain(without_url)])
+
+                    case 3: #完整回复
+                        text_to_send = with_url if url_mode else without_url
+                        if is_file_send:
+                            # 文件发送逻辑
+                            info_content = [Image(file=result['cover']), Plain(text_to_send)]
+                            if zhuanfa:
+                                yield event.chain_result([Node(uin=event.get_self_id(), name="astrbot", content=info_content)])
                             else:
-                                yield event.chain_result([
-                                media_component,
-                                ])
+                                yield event.chain_result(info_content)
+                            if media_component:
+                                yield event.chain_result([media_component])
                         else:
-                            if zhuanfa :
+                            # 原始视频发送逻辑
+                            if url_mode:
+                                if zhuanfa :
+                                    ns = Nodes([])
+                                    node1 = Node(uin=event.get_self_id(), name="astrbot", content=[media_component])
+                                    node2 = Node(uin=event.get_self_id(), name="astrbot", content=[Image(file=result['cover']),Plain(with_url)])
+                                    ns.nodes.append(node1)
+                                    ns.nodes.append(node2)
+                                    yield event.chain_result([ns])
+                                else:
+                                    yield event.chain_result([media_component])
+                                    yield event.chain_result([Image(file=result['cover']), Plain(with_url)])
+                            else:
+                                if zhuanfa :
+                                    ns = Nodes([])
+                                    node1 = Node(uin=event.get_self_id(), name="astrbot", content=[Image(file=result['cover']),media_component])
+                                    node2 = Node(uin=event.get_self_id(), name="astrbot", content=[Plain(without_url)])
+                                    ns.nodes.append(node1)
+                                    ns.nodes.append(node2)
+                                    yield event.chain_result([ns])
+                                else:
+                                    yield event.chain_result([media_component])
+                                    yield event.chain_result([Image(file=result['cover']), Plain(without_url)])
+                    case 4: #仅视频
+                        if is_file_send:
+                            # 文件发送逻辑
+                            if media_component:
+                                yield event.chain_result([media_component])
+                        else:
+                            # 原始视频发送逻辑
+                            if zhuanfa:
                                 ns = Nodes([])
-                                node1 = Node(
-                                    uin=event.get_self_id(),
-                                    name="astrbot",
-                                    content=[media_component]
-                                )
+                                node1 = Node(uin=event.get_self_id(), name="astrbot", content=[media_component])
                                 ns.nodes.append(node1)
                                 yield event.chain_result([ns])
                             else:
-                                yield event.chain_result([
-                                media_component,
-                                ])
+                                yield event.chain_result([media_component])
 
 # @filter.event_message_type(EventMessageType.ALL)
 # async def auto_parse_ks(self, event: AstrMessageEvent, *args, **kwargs):
