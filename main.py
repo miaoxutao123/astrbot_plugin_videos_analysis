@@ -215,7 +215,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                     # 检查文件大小
                     file_size = os.path.getsize(file_path)
                     if file_size > 200 * 1024 * 1024:  # 200MB
-                        media_component = File(name=os.path.basename(nap_file_path), file_=nap_file_path)
+                        media_component = File(name=os.path.basename(nap_file_path), file=nap_file_path)
                     else:
                         media_component = Video.fromFileSystem(nap_file_path)
                 else:
