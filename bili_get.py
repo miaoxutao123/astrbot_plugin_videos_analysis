@@ -532,14 +532,26 @@ async def get_video_download_url_with_cookie(bvid, quality=80, event=None):
         return await get_video_download_url_by_bvid(bvid, 16)
 
 async def download_file(url, file_path, headers):
-    """异步下载文件"""
+    """异步下载文件并显示进度"""
     try:
+        timeout = aiohttp.ClientTimeout(total=3600)  # 设置1小时的超时
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as response:
+            async with session.get(url, headers=headers, timeout=timeout) as response:
                 response.raise_for_status()
+                total_size = int(response.headers.get('Content-Length', 0))
+                downloaded_size = 0
+                last_reported_progress = -1
+
                 async with aiofiles.open(file_path, "wb") as f:
                     async for chunk in response.content.iter_chunked(8192):
                         await f.write(chunk)
+                        downloaded_size += len(chunk)
+                        if total_size > 0:
+                            progress = int((downloaded_size / total_size) * 100)
+                            if progress > last_reported_progress:
+                                log_callback(f"下载 {os.path.basename(file_path)}: {progress}%")
+                                last_reported_progress = progress
+                log_callback(f"文件 {os.path.basename(file_path)} 下载完成。")
     except Exception as e:
         log_callback(f"下载文件失败: {str(e)}")
         raise
