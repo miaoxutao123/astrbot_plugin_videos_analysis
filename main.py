@@ -271,8 +271,20 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
             if video_summary:
                 final_prompt = f"这是一个Bilibili视频的内容摘要：\n\n---\n{video_summary}\n---\n\n请你基于以上内容，并结合你当前的人设和对话上下文，对这个视频发表一下你的看法或评论。"
                 # 调用框架的核心LLM
-                llm_response = await self.context.agent.ask(final_prompt, event=event)
-                yield event.plain_result(llm_response)
+                curr_cid = await self.context.conversation_manager.get_curr_conversation_id(event.unified_msg_origin)
+                conversation = None
+                context = []
+                if curr_cid:
+                    conversation = await self.context.conversation_manager.get_conversation(event.unified_msg_origin, curr_cid)
+                    if conversation:
+                        context = json.loads(conversation.history)
+                
+                yield event.request_llm(
+                    prompt=final_prompt,
+                    session_id=curr_cid,
+                    contexts=context,
+                    conversation=conversation
+                )
             else:
                 yield event.plain_result("未能生成视频摘要，无法进行评论。")
 
