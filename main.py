@@ -175,6 +175,9 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
     message_str = event.message_str
     message_obj_str = str(event.message_obj)
 
+    gemini_base_url = self.gemini_base_url
+    url_video_comprehend = self.url_video_comprehend
+    gemini_api_key = self.gemini_api_key
     # 检查是否是回复消息，如果是则忽略
     if re.search(r'reply', message_obj_str):
         return
@@ -197,7 +200,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
         delete_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/", self.delate_time)
 
     # --- 视频深度理解流程 ---
-    if self.url_video_comprehend and self.llm_model_gemini:
+    if url_video_comprehend:
         yield event.plain_result("检测到B站视频链接，正在进行深度理解，请稍候...")
         
         video_path = None
@@ -217,8 +220,8 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
             video_size_mb = os.path.getsize(video_path) / (1024 * 1024)
             
             # 从环境变量或配置文件中获取API密钥和代理URL
-            api_key = os.getenv("GOOGLE_API_KEY") # 假设API密钥存储在环境变量中
-            proxy_url = self.context.config_manager.get_config('gemini', 'reverse_proxy') # 假设代理配置在gemini插件下
+            api_key = gemini_api_key # 假设API密钥存储在环境变量中
+            proxy_url = gemini_base_url # 假设代理配置在gemini插件下
 
             if not api_key:
                 yield event.plain_result("错误：未配置GOOGLE_API_KEY，无法使用视频理解功能。")
