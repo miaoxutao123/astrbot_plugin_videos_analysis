@@ -361,3 +361,4 @@ async def process_audio_with_gemini(api_key: str, audio_path: str, reverse_proxy
 if __name__ == "__main__":
     # 您可以在终端中执行 `python gemini_content.py` 来运行此脚本。
     # asyncio.run(main())
+    pass
