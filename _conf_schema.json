@@ -59,5 +59,27 @@
         "type": "bool",
         "default": true,
         "hint" :"默认合并"
+    },
+    "url_video_comprehend":{
+        "description": "分享链接视频分析功能是否开启",
+        "type": "bool",
+        "default": false,
+        "hint": "实验性功能，会消耗大量token，默认关闭，开启后会将视频使用两种方式交给llm分析，如果是Gemini的话将上传视频到Gemini api或file api直接分析，若是其他多模态模型会使用一个简单的flow把视频拆分为多张图片和字幕实现视频理解功能"
+    },
+    "upload_video_comprehend":{
+        "description": "读取你发送的视频到llm进行分析",
+        "type": "bool",
+        "default": false,
+        "hint": "实验性功能（暂时还未实现），会消耗大量token，默认关闭，会读取你发的所有视频到llm，可能会导致未知bug，开启后将上传你发送给bot的视频到llm进行分析，若使用Gemini则会上传到Gemini api或file api，若使用其他模型则会使用一个简单的flow把视频拆分为多张图片和字幕实现视频理解功能"
+    },
+    "gemini_base_url": {
+        "description": "Gemini API 基础地址,反代地址也填写到这里",
+        "type": "string",
+        "default": "https://generative-api.google.com/v1alpha2"
+    },
+    "gemini_api_key": {
+        "description": "Gemini API Key",
+        "type": "string",
+        "default": ""
     }
 }
