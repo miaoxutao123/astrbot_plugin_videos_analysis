@@ -327,9 +327,10 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
             f"📂 收藏次数：{result['favorite_count']}\n"
             f"💬 弹幕量：{result['danmaku_count']}\n"
             f"⏳ 视频时长：{int(result['duration'] / 60)}分{result['duration'] % 60}秒\n"
-            f"{(f'🎥 视频直链：{result['direct_url']}' + chr(10)) if url_mode else ''}"
-            f"🧷 原始链接：https://www.bilibili.com/video/{result['bvid']}"
         )
+        if url_mode:
+            info_text += f"🎥 视频直链：{result['direct_url']}\n"
+        info_text += f"🧷 原始链接：https://www.bilibili.com/video/{result['bvid']}"
 
         # 根据回复模式构建响应
         if reply_mode == 0: # 纯文本
