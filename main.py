@@ -293,9 +293,10 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
             yield event.plain_result("处理视频时发生未知错误。")
         finally:
             # 4. 清理临时文件
-            if temp_dir and os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir)
-                logger.info(f"已清理临时文件夹: {temp_dir}")
+            if video_path and os.path.exists(video_path):
+                # 之前这里会把整个bili文件夹删了，现在只删除本次下载的视频
+                os.remove(video_path)
+                logger.info(f"已清理临时文件: {video_path}")
         return # 结束函数，不执行后续的常规解析
 
     # --- 常规视频解析流程 (如果深度理解未开启) ---

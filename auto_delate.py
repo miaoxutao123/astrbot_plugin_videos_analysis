@@ -8,6 +8,7 @@ TIME_THRESHOLD = 60
 FOLDER_PATH = "D:/coding/code/python/astrbotplg/AstrBot/data/plugins/astrbot_plugin_videos_analysis/download_videos/dy"
 
 def delete_old_files(folder_path, time_threshold):
+    os.makedirs(folder_path, exist_ok=True)
     time_threshold = time_threshold*60
     current_time = time.time()
     for filename in os.listdir(folder_path):
