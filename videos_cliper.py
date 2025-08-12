@@ -37,11 +37,11 @@ async def separate_audio_video(video_path: str):
 
     # 分离音频的命令
     audio_command = [
-        'ffmpeg', '-i', video_path, '-vn', '-acodec', 'mp3', '-y', audio_path
+        "ffmpeg", "-i", video_path, "-vn", "-acodec", "mp3", "-y", audio_path
     ]
     # 分离视频的命令
     video_command = [
-        'ffmpeg', '-i', video_path, '-an', '-vcodec', 'copy', '-y', video_only_path
+        "ffmpeg", "-i", video_path, "-an", "-vcodec", "copy", "-y", video_only_path
     ]
 
     audio_success = await run_ffmpeg_command(audio_command)
@@ -57,7 +57,7 @@ async def extract_frame(video_path: str, time_point: str):
     从视频文件的指定时间点异步提取一帧图像。
 
     :param video_path: 输入视频文件的路径。
-    :param time_point: 'HH:MM:SS' 格式的时间点。
+    :param time_point: "HH:MM:SS" 格式的时间点。
     :return: 提取出的帧图像的路径，如果出错则返回 None。
     """
     if not os.path.exists(video_path):
@@ -69,7 +69,7 @@ async def extract_frame(video_path: str, time_point: str):
 
     # 提取帧的命令
     command = [
-        'ffmpeg', '-i', video_path, '-ss', time_point, '-vframes', '1', '-y', frame_path
+        "ffmpeg", "-i", video_path, "-ss", time_point, "-vframes", "1", "-y", frame_path
     ]
 
     success = await run_ffmpeg_command(command)
@@ -95,13 +95,13 @@ async def extract_frames_by_interval(video_path: str, interval: int):
     base, ext = os.path.splitext(video_path)
     output_dir = f"{base}_frames_interval_{interval}s"
     os.makedirs(output_dir, exist_ok=True)
-    
+
     frame_pattern = os.path.join(output_dir, "frame_%04d.png")
 
     # 使用 fps 过滤器提取帧的命令
     # fps=1/interval 表示每 interval 秒提取一帧
     command = [
-        'ffmpeg', '-i', video_path, '-vf', f'fps=1/{interval}', '-y', frame_pattern
+        "ffmpeg", "-i", video_path, "-vf", f"fps=1/{interval}", "-y", frame_pattern
     ]
 
     success = await run_ffmpeg_command(command)
@@ -111,7 +111,7 @@ async def extract_frames_by_interval(video_path: str, interval: int):
         extracted_frames = sorted([
             os.path.join(output_dir, f)
             for f in os.listdir(output_dir)
-            if f.startswith('frame_') and f.endswith('.png')
+            if f.startswith("frame_") and f.endswith(".png")
         ])
         return extracted_frames
     else:

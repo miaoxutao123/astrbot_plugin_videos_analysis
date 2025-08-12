@@ -11,7 +11,7 @@ import httpx
 import json
 from google.api_core.client_options import ClientOptions
 
-# 注意：此脚本需要安装 'google-generativeai' 和 'Pillow' 库。
+# 注意：此脚本需要安装 "google-generativeai" 和 "Pillow" 库。
 # 您可以使用以下命令安装：
 # pip install google-generativeai pillow
 
@@ -54,12 +54,12 @@ async def send_to_gemini_async(
         # 重新构建不带路径的端点，例如 "http://my-proxy.com:8080"
         endpoint = f"{parsed_url.scheme}://{parsed_url.netloc}"
         
-        # 直接将端点作为字典传递给 client_options，并强制使用 'rest' 传输
+        # 直接将端点作为字典传递给 client_options，并强制使用 "rest" 传输
         # 这会指示客户端将所有API请求直接发送到我们的HTTP代理。
         genai.configure(
             api_key=api_key,
-            transport='rest',
-            client_options={'api_endpoint': endpoint}
+            transport="rest",
+            client_options={"api_endpoint": endpoint}
         )
     else:
         # 不使用代理时，恢复默认配置
@@ -124,9 +124,9 @@ async def send_to_gemini_async(
                     # 现在响应应该是包含文件元数据的正确JSON
                     uploaded_file_data = response.json()
                     
-                    # 从 'file' 键中提取元数据
-                    file_info = uploaded_file_data.get('file')
-                    if not file_info or 'name' not in file_info:
+                    # 从 "file" 键中提取元数据
+                    file_info = uploaded_file_data.get("file")
+                    if not file_info or "name" not in file_info:
                         raise ValueError(f"从服务器返回的响应格式不正确: {uploaded_file_data}")
 
                     # 使用上传后的文件名字获取文件状态
@@ -139,7 +139,7 @@ async def send_to_gemini_async(
         
         # 等待文件处理完成
         while video_file.state.name == "PROCESSING":
-            print('.', end='', flush=True)
+            print(".", end="", flush=True)
             await asyncio.sleep(5)
             video_file = genai.get_file(name=video_file.name)
 
@@ -162,7 +162,7 @@ async def send_to_gemini_async(
     model = genai.GenerativeModel(model_name)
     start_time = time.monotonic()
 
-    # 当使用反向代理 (transport='rest') 时，`generate_content_async` 可能会出现问题。
+    # 当使用反向代理 (transport="rest") 时，`generate_content_async` 可能会出现问题。
     # 一个更稳妥的方法是，在这种情况下，在线程池中运行同步的 `generate_content` 方法。
     if reverse_proxy_url:
         # 在 executor 中运行同步方法以避免阻塞事件循环
@@ -237,7 +237,7 @@ async def process_audio_with_gemini(api_key: str, audio_path: str, reverse_proxy
 
     请将你的回答严格格式化为单个JSON对象，该对象包含两个键：
     -   `"description"`: 一个包含音频内容描述的字符串。
-    -   `"timestamps"`: 一个由 'HH:MM:SS' 格式的时间戳字符串组成的数组。
+    -   `"timestamps"`: 一个由 "HH:MM:SS" 格式的时间戳字符串组成的数组。
 
     输出示例:
     {
@@ -272,7 +272,7 @@ async def process_audio_with_gemini(api_key: str, audio_path: str, reverse_proxy
             timestamps = data.get("timestamps", [])
             
             if not isinstance(description, str) or not isinstance(timestamps, list):
-                print("错误: JSON响应的格式不正确（'description'应为字符串，'timestamps'应为列表）。")
+                print("错误: JSON响应的格式不正确（\"description\"应为字符串，\"timestamps\"应为列表）。")
                 return None, None, duration
                 
             print(f"成功提取描述: {description}")
@@ -334,7 +334,7 @@ async def process_audio_with_gemini(api_key: str, audio_path: str, reverse_proxy
 #     # 注意：请确保此路径指向一个实际存在的音频文件
 #     audio_file = "data/astrbot_plugin_videos_analysis/test.mp3"
 #     if not os.path.exists(audio_file):
-#         print(f"错误：找不到示例音频文件 '{audio_file}'。请更新路径。")
+#         print(f"错误：找不到示例音频文件 "{audio_file}"。请更新路径。")
 #         return
 
 #     description, timestamps, _ = await process_audio_with_gemini(
@@ -349,7 +349,7 @@ async def process_audio_with_gemini(api_key: str, audio_path: str, reverse_proxy
 #         print(f"关键帧时间戳: {timestamps}")
         
 #         if timestamps:
-#             print("\n这些时间戳可用于 'videos_cliper.py' 中的 'extract_frame' 函数来提取关键帧。")
+#             print("\n这些时间戳可用于 "videos_cliper.py" 中的 "extract_frame" 函数来提取关键帧。")
 #             # 这是一个如何使用时间戳的示例：
 #             # from videos_cliper import extract_frame
 #             # video_file_for_clipping = "path/to/your/video.mp4" # 需要与音频对应的视频文件

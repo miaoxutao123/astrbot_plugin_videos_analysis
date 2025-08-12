@@ -14,7 +14,6 @@ from .auto_delete import delete_old_files
 from .xhs_get import xhs_parse
 from .gemini_content import process_audio_with_gemini, process_images_with_gemini, process_video_with_gemini
 from .videos_cliper import separate_audio_video, extract_frame
-import shutil
 
 @register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.8","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
@@ -24,7 +23,7 @@ class hybird_videos_analysis(Star):
         self.nap_server_port = config.get("nap_server_port")
         self.delete_time = config.get("delete_time")
         self.max_video_size = config.get("max_video_size")
-        
+
         self.douyin_api_url = config.get("douyin_api_url")
         self.url_video_comprehend = config.get("url_video_comprehend")
         self.gemini_base_url = config.get("gemini_base_url")
@@ -36,7 +35,7 @@ class hybird_videos_analysis(Star):
         self.bili_url_mode = config.get("bili_url_mode")
         self.Merge_and_forward = config.get("Merge_and_forward")
         self.bili_use_login = config.get("bili_use_login")
-        
+
         self.xhs_reply_mode = config.get("xhs_reply_mode")
 
     async def _send_file_if_needed(self, file_path: str) -> str:
@@ -56,29 +55,29 @@ class hybird_videos_analysis(Star):
     async def _process_multi_part_media(self, event, result, media_type: str):
         """Helper function to process multi-part media (images or videos)"""
         ns = Nodes([])
-        for i in range(result['count']):
-            file_path = result['save_path'][i]
+        for i in range(result["count"]):
+            file_path = result["save_path"][i]
             nap_file_path = await self._send_file_if_needed(file_path)
-            
-            if media_type == "image" or file_path.endswith('.jpg'):
+
+            if media_type == "image" or file_path.endswith(".jpg"):
                 content = [Image.fromFileSystem(nap_file_path)]
             else:
                 content = [Video.fromFileSystem(nap_file_path)]
-            
+
             node = self._create_node(event, content)
             ns.nodes.append(node)
         return ns
 
     async def _process_single_media(self, event, result, media_type: str):
         """Helper function to process single media file"""
-        file_path = result['save_path'][0]
+        file_path = result["save_path"][0]
         nap_file_path = await self._send_file_if_needed(file_path)
-        
+
         if media_type == "image":
             return [Image.fromFileSystem(nap_file_path)]
         else:
             return [Video.fromFileSystem(nap_file_path)]
-    
+
     async def _cleanup_old_files(self, folder_path: str):
         """Helper function to clean up old files if delete_time is configured"""
         if self.delete_time > 0:
@@ -90,27 +89,27 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
     """
     api_url = self.douyin_api_url
     message_str = event.message_str
-    match = re.search(r'(https?://v\.douyin\.com/[a-zA-Z0-9_\-]+(?:-[a-zA-Z0-9_\-]+)?)', message_str)
-    
+    match = re.search(r"(https?://v\.douyin\.com/[a-zA-Z0-9_\-]+(?:-[a-zA-Z0-9_\-]+)?)", message_str)
+
     await self._cleanup_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/dy")
-    
+
     if not match:
         return
-        
+
     url = match.group(1)
     result = await process_douyin(url, api_url)
-    
+
     if not result:
         yield event.plain_result("检测到抖音链接，但解析失败，请检查链接是否正确。")
         return
-    
-    content_type = result['type']
+
+    content_type = result["type"]
     if content_type not in ["video", "image"]:
         print("解析失败，请检查链接是否正确。")
         return
-    
+
     # 处理多段内容
-    if result['is_multi_part']:
+    if result["is_multi_part"]:
         ns = await self._process_multi_part_media(event, result, content_type)
         yield event.chain_result([ns])
     else:
@@ -132,13 +131,13 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
     url_video_comprehend = self.url_video_comprehend
     gemini_api_key = self.gemini_api_key
     # 检查是否是回复消息，如果是则忽略
-    if re.search(r'reply', message_obj_str):
+    if re.search(r"reply", message_obj_str):
         return
 
     # 查找Bilibili链接
-    match_json = re.search(r'https:\\\\/\\\\/b23\.tv\\\\/[a-zA-Z0-9]+', message_obj_str)
-    match_plain = re.search(r'(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|BV1\w{9}|av\d+)', message_str)
-    
+    match_json = re.search(r"https:\\\\/\\\\/b23\.tv\\\\/[a-zA-Z0-9]+", message_obj_str)
+    match_plain = re.search(r"(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|BV1\w{9}|av\d+)", message_str)
+
     if not (match_plain or match_json):
         return
 
@@ -146,7 +145,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
     if match_plain:
         url = match_plain.group(1)
     elif match_json:
-        url = match_json.group(0).replace('\\\\', '\\').replace('\\/', '/')
+        url = match_json.group(0).replace("\\\\", "\\").replace("\\/", "/")
 
     # 删除过期文件
     await self._cleanup_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/")
@@ -154,24 +153,24 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
     # --- 视频深度理解流程 ---
     if url_video_comprehend:
         yield event.plain_result("检测到B站视频链接，正在进行深度理解，请稍候...")
-        
+
         # --- 获取Gemini API配置 ---
         api_key = None
         proxy_url = None
-        
+
         # 1. 优先尝试从框架的默认Provider获取
         provider = self.context.provider_manager.curr_provider_inst
-        if provider and provider.meta().type == 'googlegenai_chat_completion':
+        if provider and provider.meta().type == "googlegenai_chat_completion":
             logger.info("检测到框架默认LLM为Gemini，将使用框架配置。")
             api_key = provider.get_current_key()
             # gemini_source.py 中 api_base 属性可直接访问
-            proxy_url = getattr(provider, 'api_base', None)
-        
+            proxy_url = getattr(provider, "api_base", None)
+
         # 2. 如果框架没有配置Gemini，则回退到插件自身配置
         if not api_key:
             logger.info("框架默认LLM不是Gemini，回退到插件自身配置。")
-            api_key = self.gemini_api_key
-            proxy_url = self.gemini_base_url
+            api_key = gemini_api_key
+            proxy_url = gemini_base_url
 
         # 3. 如果最终都没有配置，则提示用户
         if not api_key:
@@ -183,21 +182,21 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
         try:
             # 1. 下载视频 (强制不使用登录)
             download_result = await process_bili_video(url, download_flag=True, quality=self.bili_quality, use_login=False, event=None)
-            if not download_result or not download_result.get('video_path'):
+            if not download_result or not download_result.get("video_path"):
                 yield event.plain_result("视频下载失败，无法进行理解。")
                 return
-            
-            video_path = download_result['video_path']
+
+            video_path = download_result["video_path"]
             temp_dir = os.path.dirname(video_path)
             video_summary = ""
-
+            temp_dir = temp_dir
             # 2. 检查文件大小并选择策略
             video_size_mb = os.path.getsize(video_path) / (1024 * 1024)
 
             if video_size_mb > 30:
                 # --- 大视频处理流程 (音频+关键帧) ---
                 yield event.plain_result(f"视频大小为 {video_size_mb:.2f}MB，采用音频+关键帧模式进行分析...")
-                
+
                 # a. 分离音视频
                 separated_files = await separate_audio_video(video_path)
                 if not separated_files:
@@ -211,13 +210,15 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                     yield event.plain_result("音频分析失败，无法提取关键信息。")
                     return
 
-                # c. 提取关键帧
+                # c. 提取关键帧并记录时间戳
                 image_paths = []
+                ts_and_paths = []
                 for ts in timestamps:
                     frame_path = await extract_frame(video_only_path, ts)
                     if frame_path:
                         image_paths.append(frame_path)
-                
+                        ts_and_paths.append((ts, frame_path))
+
                 if not image_paths:
                     # 如果没有提取到关键帧，仅使用音频描述
                     video_summary = description
@@ -226,6 +227,20 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                     prompt = f"这是关于一个视频的摘要和一些从该视频中提取的关键帧。视频摘要如下：\n\n{description}\n\n请结合摘要和这些关键帧，对整个视频内容进行一个全面、生动的总结。"
                     summary_tuple = await process_images_with_gemini(api_key, prompt, image_paths, proxy_url)
                     video_summary = summary_tuple[0] if summary_tuple else "无法生成最终摘要。"
+
+                # 新增：将提取的关键帧和时间戳发送给用户
+                if ts_and_paths:
+                    key_frames_nodes = Nodes([])
+                    key_frames_nodes.nodes.append(self._create_node(event, [Plain("以下是视频的关键时刻：")]))
+                    for ts, frame_path in ts_and_paths:
+                        # 确保文件可以通过网络访问
+                        nap_frame_path = await self._send_file_if_needed(frame_path)
+                        node_content = [
+                            Image.fromFileSystem(nap_frame_path),
+                            Plain(f"时间点: {ts}")
+                        ]
+                        key_frames_nodes.nodes.append(self._create_node(event, node_content))
+                    yield event.chain_result([key_frames_nodes])
 
             else:
                 # --- 小视频处理流程 (直接上传) ---
@@ -250,7 +265,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
 
                 # 将视频摘要作为一条用户消息添加到历史记录中
                 context.append({"role": "user", "content": summary_message_for_context})
-                
+
                 # 更新数据库中的对话历史
                 await self.context.conversation_manager.update_conversation(
                     unified_msg_origin=event.unified_msg_origin,
@@ -294,9 +309,9 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
     zhuanfa = self.Merge_and_forward
 
     result = await process_bili_video(url, download_flag=videos_download, quality=qulity, use_login=use_login, event=None)
-    
+
     if result:
-        file_path = result.get('video_path')
+        file_path = result.get("video_path")
         media_component = None
         if file_path and os.path.exists(file_path):
             nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port) if self.nap_server_address != "localhost" else file_path
@@ -323,11 +338,11 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
         if reply_mode == 0: # 纯文本
             content = [Plain(info_text)]
         elif reply_mode == 1: # 带图片
-            content = [Image(file=result['cover']), Plain(info_text)]
+            content = [Image(file=result["cover"]), Plain(info_text)]
         elif reply_mode == 2: # 带视频
             content = [media_component, Plain(info_text)] if media_component else [Plain(info_text)]
         elif reply_mode == 3: # 完整
-            content = [Image(file=result['cover']), media_component, Plain(info_text)]
+            content = [Image(file=result["cover"]), media_component, Plain(info_text)]
             content = [c for c in content if c] # 移除None
         elif reply_mode == 4: # 仅视频
             content = [media_component] if media_component else []
@@ -357,7 +372,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
 #     """
 #     api_url = "https://api.kxzjoker.cn/api/jiexi_video"
 #     message_str = event.message_str
-#     match = re.search(r'(https?://v\.k\.ua\.com/[a-zA-Z0-9_\-]+(?:-[a-zA-Z0-9_\-]+)?)', message_str)
+#     match = re.search(r"(https?://v\.k\.ua\.com/[a-zA-Z0-9_\-]+(?:-[a-zA-Z0-9_\-]+)?)", message_str)
 
 @filter.event_message_type(EventMessageType.ALL)
 async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
@@ -366,8 +381,8 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
     """
     replay_mode = self.xhs_reply_mode
 
-    images_pattern = r'(https?://xhslink\.com/[a-zA-Z0-9/]+)'
-    video_pattern = r'(https?://www\.xiaohongshu\.com/discovery/item/[a-zA-Z0-9]+)'
+    images_pattern = r"(https?://xhslink\.com/[a-zA-Z0-9/]+)"
+    video_pattern = r"(https?://www\.xiaohongshu\.com/discovery/item/[a-zA-Z0-9]+)"
 
     message_str = event.message_str
     message_obj_str = str(event.message_obj)
@@ -375,7 +390,7 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
     # 搜索匹配项
     image_match = re.search(images_pattern, message_obj_str) or re.search(images_pattern, message_str)
     video_match = re.search(video_pattern, message_obj_str) or re.search(video_pattern, message_str)
-    contains_reply = re.search(r'reply', message_obj_str)
+    contains_reply = re.search(r"reply", message_obj_str)
 
     if contains_reply:
         return
@@ -384,20 +399,20 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
     if image_match:
         result = await xhs_parse(image_match.group(1))
         ns = Nodes([]) if replay_mode else None
-        title_node = self._create_node(event, [Plain(result['title'])])
-        
+        title_node = self._create_node(event, [Plain(result["title"])])
+
         if replay_mode:
             ns.nodes.append(title_node)
         else:
-            yield event.chain_result([Plain(result['title'])])
-        
-        for image_url in result['urls']:
+            yield event.chain_result([Plain(result["title"])])
+
+        for image_url in result["urls"]:
             image_node = self._create_node(event, [Image.fromURL(image_url)])
             if replay_mode:
                 ns.nodes.append(image_node)
             else:
                 yield event.chain_result([Image.fromURL(image_url)])
-        
+
         if replay_mode:
             yield event.chain_result([ns])
 
@@ -405,14 +420,14 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
     if video_match:
         result = await xhs_parse(video_match.group(1))
         ns = Nodes([]) if replay_mode else None
-        title_node = self._create_node(event, [Plain(result['title'])])
-        
+        title_node = self._create_node(event, [Plain(result["title"])])
+
         if "video_sizes" in result:
             if replay_mode:
                 ns.nodes.append(title_node)
             else:
-                yield event.chain_result([Plain(result['title'])])
-            
+                yield event.chain_result([Plain(result["title"])])
+
             for url in result["urls"]:
                 video_node = self._create_node(event, [Video.fromURL(url)])
                 if replay_mode:
@@ -424,15 +439,15 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
             if replay_mode:
                 ns.nodes.append(title_node)
             else:
-                yield event.chain_result([Plain(result['title'])])
-            
-            for image_url in result['urls']:
+                yield event.chain_result([Plain(result["title"])])
+
+            for image_url in result["urls"]:
                 image_node = self._create_node(event, [Image.fromURL(image_url)])
                 if replay_mode:
                     ns.nodes.append(image_node)
                 else:
                     yield event.chain_result([Image.fromURL(image_url)])
-        
+
         if replay_mode:
             yield event.chain_result([ns])
 
@@ -441,58 +456,55 @@ async def auto_parse_mcmod(self, event: AstrMessageEvent, *args, **kwargs):
     """
     自动检测消息中是否包含mcmod分享链接，并解析。
     """
-    mod_pattern = r'(https?://www\.mcmod\.cn/class/\d+\.html)'
-    modpack_pattern = r'(https?://www\.mcmod\.cn/modpack/\d+\.html)'
+    mod_pattern = r"(https?://www\.mcmod\.cn/class/\d+\.html)"
+    modpack_pattern = r"(https?://www\.mcmod\.cn/modpack/\d+\.html)"
 
     message_str = event.message_str
     message_obj_str = str(event.message_obj)
 
     # 搜索匹配项
-    match = (re.search(mod_pattern, message_obj_str) or 
-             re.search(mod_pattern, message_str) or 
-             re.search(modpack_pattern, message_obj_str) or 
+    match = (re.search(mod_pattern, message_obj_str) or
+             re.search(mod_pattern, message_str) or
+             re.search(modpack_pattern, message_obj_str) or
              re.search(modpack_pattern, message_str))
-    
-    contains_reply = re.search(r'reply', message_obj_str)
+
+    contains_reply = re.search(r"reply", message_obj_str)
 
     if not match or contains_reply:
         return
 
     logger.info(f"解析MCmod链接: {match.group(1)}")
     results = await mcmod_parse(match.group(1))
-    
+
     if not results or not results[0]:
         yield event.plain_result("解析MC百科信息失败，请检查链接是否正确。")
         return
-    
+
     result = results[0]
     logger.info(f"解析结果: {result}")
-    
+
     # 使用合并转发发送解析内容
     ns = Nodes([])
-    
+
     # 添加名称
     ns.nodes.append(self._create_node(event, [Plain(f"📦 {result.name}")]))
-    
+
     # 添加图标
     if result.icon_url:
         ns.nodes.append(self._create_node(event, [Image.fromURL(result.icon_url)]))
 
     # 添加分类
     if result.categories:
-        categories_str = '/'.join(result.categories)
+        categories_str = "/".join(result.categories)
         ns.nodes.append(self._create_node(event, [Plain(f"🏷️ 分类: {categories_str}")]))
-    
+
     # 添加描述
     if result.description:
         ns.nodes.append(self._create_node(event, [Plain(f"📝 描述:\n{result.description}")]))
-    
+
     # 添加描述图片
     if result.description_images:
         for img_url in result.description_images:
             ns.nodes.append(self._create_node(event, [Image.fromURL(img_url)]))
 
     yield event.chain_result([ns])
-        
-    
-    
