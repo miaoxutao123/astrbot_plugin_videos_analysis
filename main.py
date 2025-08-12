@@ -10,7 +10,7 @@ from .mcmod_get import mcmod_parse
 from .file_send_server import send_file
 from .bili_get import process_bili_video
 from .douyin_get import process_douyin
-from .auto_delate import delete_old_files
+from .auto_delete import delete_old_files
 from .xhs_get import xhs_parse
 from .gemini_content import process_audio_with_gemini, process_images_with_gemini, process_video_with_gemini
 from .videos_cliper import separate_audio_video, extract_frame
@@ -22,7 +22,7 @@ class hybird_videos_analysis(Star):
         super().__init__(context)
         self.nap_server_address = config.get("nap_server_address")
         self.nap_server_port = config.get("nap_server_port")
-        self.delate_time = config.get("delate_time")
+        self.delete_time = config.get("delete_time")
         self.max_video_size = config.get("max_video_size")
         
         self.douyin_api_url = config.get("douyin_api_url")
@@ -38,134 +38,87 @@ class hybird_videos_analysis(Star):
         self.bili_use_login = config.get("bili_use_login")
         
         self.xhs_reply_mode = config.get("xhs_reply_mode")
+
+    async def _send_file_if_needed(self, file_path: str) -> str:
+        """Helper function to send file through NAP server if needed"""
+        if self.nap_server_address != "localhost":
+            return await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
+        return file_path
+
+    def _create_node(self, event, content):
+        """Helper function to create a node with consistent format"""
+        return Node(
+            uin=event.get_self_id(),
+            name="astrbot",
+            content=content
+        )
+
+    async def _process_multi_part_media(self, event, result, media_type: str):
+        """Helper function to process multi-part media (images or videos)"""
+        ns = Nodes([])
+        for i in range(result['count']):
+            file_path = result['save_path'][i]
+            nap_file_path = await self._send_file_if_needed(file_path)
+            
+            if media_type == "image" or file_path.endswith('.jpg'):
+                content = [Image.fromFileSystem(nap_file_path)]
+            else:
+                content = [Video.fromFileSystem(nap_file_path)]
+            
+            node = self._create_node(event, content)
+            ns.nodes.append(node)
+        return ns
+
+    async def _process_single_media(self, event, result, media_type: str):
+        """Helper function to process single media file"""
+        file_path = result['save_path'][0]
+        nap_file_path = await self._send_file_if_needed(file_path)
+        
+        if media_type == "image":
+            return [Image.fromFileSystem(nap_file_path)]
+        else:
+            return [Video.fromFileSystem(nap_file_path)]
+    
+    async def _cleanup_old_files(self, folder_path: str):
+        """Helper function to clean up old files if delete_time is configured"""
+        if self.delete_time > 0:
+            delete_old_files(folder_path, self.delete_time)
 @filter.event_message_type(EventMessageType.ALL)
 async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
     """
     自动检测消息中是否包含抖音分享链接，并解析。
     """
     api_url = self.douyin_api_url
-    # print(f"解析链接：{api_url}")
     message_str = event.message_str
     match = re.search(r'(https?://v\.douyin\.com/[a-zA-Z0-9_\-]+(?:-[a-zA-Z0-9_\-]+)?)', message_str)
-    if self.delate_time != 0:
-        delete_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/dy", self.delate_time)
-        # if event.get_platform_name() == "aiocqhttp":
-        #     # qq
-        #     from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-        #     assert isinstance(event, AiocqhttpMessageEvent)
-        #     client = event.bot # 得到 client
-        #     # payloads = {
-        #     #     "user_id": event.get_sender_id(),
-        #     #     "times": num
-        #     # }
-        #     ret = await client.api.call_action('clean_cache') # 调用 协议端  API
-        #     logger.info(f"删除nap残留数据")
-        #     # yield event.plain_result(f"{response_str}")
-    if match:
-        url = match.group(1)
-        # print(f"检测到抖音链接: {url}")  # 添加日志记录
-        result = await process_douyin(url,api_url)  # 使用 await 调用异步函数
-        if result:
-            # print(f"解析结果: {result}")  # 添加日志记录
-            if result['type'] == "video":
-                if result['is_multi_part']:
-                    if self.nap_server_address != "localhost":
-                        ns = Nodes([])
-                        for i in range(result['count']):
-                            file_path = result['save_path'][i]
-                            if file_path.endswith('.jpg'):
-                                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                                node = Node(
-                                    uin=event.get_self_id(),
-                                    name="astrbot",
-                                    content=[Image.fromFileSystem(nap_file_path)]
-                                )
-                            else:
-                                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                                node = Node(
-                                    uin=event.get_self_id(),
-                                    name="astrbot",
-                                    content=[Video.fromFileSystem(nap_file_path)]
-                                )
-                            # file_path = result['save_path'][i]
-                            # nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                            # node = Node(
-                            #     uin=event.get_self_id(),
-                            #     name="astrbot",
-                            #     content=[Video.fromFileSystem(nap_file_path)]
-                            # )
-                            ns.nodes.append(node)
-                        # print(f"发送多段视频: {ns}")  # 添加日志记录
-                    else:
-                        ns = Nodes([])
-                        for i in range(result['count']):
-                            if file_path.endswith('.jpg'):
-                                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                                node = Node(
-                                    uin=event.get_self_id(),
-                                    name="astrbot",
-                                    content=[Image.fromFileSystem(nap_file_path)]
-                                )
-                            else:
-                                nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                                node = Node(
-                                    uin=event.get_self_id(),
-                                    name="astrbot",
-                                    content=[Video.fromFileSystem(nap_file_path)]
-                                )
-                            ns.nodes.append(node)
-                        # print(f"发送多段视频: {ns}")  # 添加日志记录
-                    yield event.chain_result([ns])
-                else:
-                    file_path = result['save_path'][0]
-                    if self.nap_server_address != "localhost":
-                        nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                    else:
-                        nap_file_path = file_path
-                    # print(f"发送单段视频: {nap_file_path}")  # 添加日志记录
-                    yield event.chain_result([
-                        Video.fromFileSystem(nap_file_path)
-                    ])
-            elif result['type'] == "image":
-                if result['is_multi_part']:
-                    if self.nap_server_address != "localhost":
-                        ns = Nodes([])
-                        for i in range(result['count']):
-                            file_path = result['save_path'][i]
-                            nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                            node = Node(
-                                uin=event.get_self_id(),
-                                name="astrbot",
-                                content=[Image.fromFileSystem(nap_file_path)]
-                            )
-                            ns.nodes.append(node)
-                    else:
-                        ns = Nodes([])
-                        for i in range(result['count']):
-                            file_path = result['save_path'][i]
-                            node = Node(
-                                uin=event.get_self_id(),
-                                name="astrbot",
-                                content=[Image.fromFileSystem(file_path)]
-                            )
-                            ns.nodes.append(node)
-                    # print(f"发送多段图片: {ns}")  # 添加日志记录
-                    yield event.chain_result([ns])
-                else:
-                    file_path = result['save_path'][0]
-                    if self.nap_server_address != "localhost":
-                        nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port)
-                    else:
-                        nap_file_path = file_path
-                    print(f"发送单段图片: {nap_file_path}")  # 添加日志记录
-                    yield event.chain_result([
-                        Image.fromFileSystem(nap_file_path)
-                    ])
-            else:
-                print("解析失败，请检查链接是否正确。")
-        else:
-            print("解析失败，请检查链接是否正确。")  # 添加日志记录
-            yield event.plain_result("检测到抖音链接，但解析失败，请检查链接是否正确。")
+    
+    await self._cleanup_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/dy")
+    
+    if not match:
+        return
+        
+    url = match.group(1)
+    result = await process_douyin(url, api_url)
+    
+    if not result:
+        yield event.plain_result("检测到抖音链接，但解析失败，请检查链接是否正确。")
+        return
+    
+    content_type = result['type']
+    if content_type not in ["video", "image"]:
+        print("解析失败，请检查链接是否正确。")
+        return
+    
+    # 处理多段内容
+    if result['is_multi_part']:
+        ns = await self._process_multi_part_media(event, result, content_type)
+        yield event.chain_result([ns])
+    else:
+        # 处理单段内容
+        content = await self._process_single_media(event, result, content_type)
+        if content_type == "image":
+            print(f"发送单段图片: {content[0]}")
+        yield event.chain_result(content)
 
 @filter.event_message_type(EventMessageType.ALL)
 async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
@@ -196,8 +149,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
         url = match_json.group(0).replace('\\\\', '\\').replace('\\/', '/')
 
     # 删除过期文件
-    if self.delate_time > 0:
-        delete_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/", self.delate_time)
+    await self._cleanup_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/")
 
     # --- 视频深度理解流程 ---
     if url_video_comprehend:
@@ -379,33 +331,26 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
     自动检测消息中是否包含小红书分享链接，并解析。
     """
     replay_mode = self.xhs_reply_mode
-    max_video_size = self.max_video_size
 
     images_pattern = r'(https?://xhslink\.com/[a-zA-Z0-9/]+)'
     video_pattern = r'(https?://www\.xiaohongshu\.com/discovery/item/[a-zA-Z0-9]+)'
-    # api_url = "https://api.kxzjoker.cn/api/jiexi_video"
 
     message_str = event.message_str
-    message_obj = event.message_obj 
-    message_obj = str(message_obj)
+    message_obj_str = str(event.message_obj)
 
     # 搜索匹配项
-    image_match = re.search(images_pattern, message_obj)
-    image_match_str = re.search(images_pattern, message_str)
-    video_match = re.search(video_pattern, message_obj)
-    video_match_str = re.search(video_pattern, message_str)
-    contains_reply = re.search(r'reply', message_obj)
+    image_match = re.search(images_pattern, message_obj_str) or re.search(images_pattern, message_str)
+    video_match = re.search(video_pattern, message_obj_str) or re.search(video_pattern, message_str)
+    contains_reply = re.search(r'reply', message_obj_str)
 
-    if (image_match_str or image_match) and not contains_reply:
-        match = image_match_str or image_match
-        result = await xhs_parse(match.group(1))
-        
+    if contains_reply:
+        return
+
+    # 处理图片链接
+    if image_match:
+        result = await xhs_parse(image_match.group(1))
         ns = Nodes([]) if replay_mode else None
-        title_node = Node(
-            uin=event.get_self_id(),
-            name="astrbot",
-            content=[Plain(result['title'])]
-        )
+        title_node = self._create_node(event, [Plain(result['title'])])
         
         if replay_mode:
             ns.nodes.append(title_node)
@@ -413,11 +358,7 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
             yield event.chain_result([Plain(result['title'])])
         
         for image_url in result['urls']:
-            image_node = Node(
-                uin=event.get_self_id(),
-                name="astrbot",
-                content=[Image.fromURL(image_url)]
-            )
+            image_node = self._create_node(event, [Image.fromURL(image_url)])
             if replay_mode:
                 ns.nodes.append(image_node)
             else:
@@ -426,20 +367,11 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
         if replay_mode:
             yield event.chain_result([ns])
 
-    if (video_match_str or video_match) and not contains_reply:
-        match = video_match_str or video_match
-        result = await xhs_parse(match.group(1))
-        
-        # if result["video_sizes"][i] > max_video_size:
-        #     yield event.plain_result("视频大小大于预设值，不进行解析")
-        #     return
-        
+    # 处理视频链接
+    if video_match:
+        result = await xhs_parse(video_match.group(1))
         ns = Nodes([]) if replay_mode else None
-        title_node = Node(
-            uin=event.get_self_id(),
-            name="astrbot",
-            content=[Plain(result['title'])]
-        )
+        title_node = self._create_node(event, [Plain(result['title'])])
         
         if "video_sizes" in result:
             if replay_mode:
@@ -447,132 +379,86 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
             else:
                 yield event.chain_result([Plain(result['title'])])
             
-            for i, url in enumerate(result["urls"]):
-                # if result["video_sizes"][i] > 199 * 1024 * 1024:  # Check if video size exceeds 199MB
-                #     video_node = Node(
-                #         uin=event.get_self_id(),
-                #         name="astrbot",
-                #         content=[File(name=f"视频{i+1}", file=url)]
-                #     )
-                # else:
-                video_node = Node(
-                    uin=event.get_self_id(),
-                    name="astrbot",
-                    content=[Video.fromURL(url)]
-                )
-                
+            for url in result["urls"]:
+                video_node = self._create_node(event, [Video.fromURL(url)])
                 if replay_mode:
                     ns.nodes.append(video_node)
                 else:
                     yield event.chain_result([video_node])
-            
-            if replay_mode:
-                yield event.chain_result([ns])
         else:
+            # 处理图片内容
             if replay_mode:
                 ns.nodes.append(title_node)
             else:
                 yield event.chain_result([Plain(result['title'])])
             
             for image_url in result['urls']:
-                image_node = Node(
-                    uin=event.get_self_id(),
-                    name="astrbot",
-                    content=[Image.fromURL(image_url)]
-                )
+                image_node = self._create_node(event, [Image.fromURL(image_url)])
                 if replay_mode:
                     ns.nodes.append(image_node)
                 else:
                     yield event.chain_result([Image.fromURL(image_url)])
-            
-            if replay_mode:
-                yield event.chain_result([ns])
+        
+        if replay_mode:
+            yield event.chain_result([ns])
 
 @filter.event_message_type(EventMessageType.ALL)
 async def auto_parse_mcmod(self, event: AstrMessageEvent, *args, **kwargs):
     """
     自动检测消息中是否包含mcmod分享链接，并解析。
     """
-    #mcmod链接解析
     mod_pattern = r'(https?://www\.mcmod\.cn/class/\d+\.html)'
     modpack_pattern = r'(https?://www\.mcmod\.cn/modpack/\d+\.html)'
 
     message_str = event.message_str
-    message_obj = event.message_obj 
-    message_obj = str(message_obj)
+    message_obj_str = str(event.message_obj)
 
     # 搜索匹配项
-    mod_match = re.search(mod_pattern, message_obj)
-    mod_match_str = re.search(mod_pattern, message_str)
-    modpack_match = re.search(modpack_pattern, message_obj)
-    modpack_match_str = re.search(modpack_pattern, message_str)
-    contains_reply = re.search(r'reply', message_obj)
+    match = (re.search(mod_pattern, message_obj_str) or 
+             re.search(mod_pattern, message_str) or 
+             re.search(modpack_pattern, message_obj_str) or 
+             re.search(modpack_pattern, message_str))
+    
+    contains_reply = re.search(r'reply', message_obj_str)
 
-    #mod和整合包通用解析
-    if(mod_match_str or mod_match or modpack_match_str or modpack_match) and not contains_reply:
-        match = mod_match_str or mod_match or modpack_match_str or modpack_match
-        logger.info(f"解析MCmod链接: {match.group(1)}")
-        results = await mcmod_parse(match.group(1))
-        
-        if results and results[0]:  # 检查列表不为空且第一个元素存在
-            result = results[0]  # 获取第一个元素
-            logger.info(f"解析结果: {result}")
-            #使用合并转发发送解析内容
-            ns = Nodes([])
-            
-            # 添加名称
-            name_node = Node(
-                uin=event.get_self_id(),
-                name="astrbot",
-                content=[Plain(f"📦 {result.name}")]
-            )
-            ns.nodes.append(name_node)
-            
-            # 添加图标
-            if result.icon_url:
-                icon_node = Node(
-                    uin=event.get_self_id(),
-                    name="astrbot",
-                    content=[Image.fromURL(result.icon_url)]
-                )
-                ns.nodes.append(icon_node)
+    if not match or contains_reply:
+        return
 
-            # 添加分类
-            if result.categories:
-                categories_str = ''
-                for i in result.categories:
-                    categories_str += i + '/'
-                categories_str = categories_str[:-1]
-                categories_node = Node(
-                    uin=event.get_self_id(),
-                    name="astrbot",
-                    content=[Plain(f"🏷️ 分类: {categories_str}")]
-                )
-                ns.nodes.append(categories_node)
-            
-            # 添加描述
-            if result.description:
-                description_node = Node(
-                    uin=event.get_self_id(),
-                    name="astrbot",
-                    content=[Plain(f"📝 描述:\n{result.description}")]
-                )
-                ns.nodes.append(description_node)
-            
-            # 添加描述图片
-            if result.description_images:
-                for img_url in result.description_images:
-                    img_node = Node(
-                        uin=event.get_self_id(),
-                        name="astrbot",
-                        content=[Image.fromURL(img_url)]
-                    )
-                    ns.nodes.append(img_node)
+    logger.info(f"解析MCmod链接: {match.group(1)}")
+    results = await mcmod_parse(match.group(1))
+    
+    if not results or not results[0]:
+        yield event.plain_result("解析MC百科信息失败，请检查链接是否正确。")
+        return
+    
+    result = results[0]
+    logger.info(f"解析结果: {result}")
+    
+    # 使用合并转发发送解析内容
+    ns = Nodes([])
+    
+    # 添加名称
+    ns.nodes.append(self._create_node(event, [Plain(f"📦 {result.name}")]))
+    
+    # 添加图标
+    if result.icon_url:
+        ns.nodes.append(self._create_node(event, [Image.fromURL(result.icon_url)]))
 
-            yield event.chain_result([ns])
-        else:
-            yield event.plain_result("解析MC百科信息失败，请检查链接是否正确。")
-            yield event.plain_result("解析MC百科信息失败，请检查链接是否正确。")
+    # 添加分类
+    if result.categories:
+        categories_str = '/'.join(result.categories)
+        ns.nodes.append(self._create_node(event, [Plain(f"🏷️ 分类: {categories_str}")]))
+    
+    # 添加描述
+    if result.description:
+        ns.nodes.append(self._create_node(event, [Plain(f"📝 描述:\n{result.description}")]))
+    
+    # 添加描述图片
+    if result.description_images:
+        for img_url in result.description_images:
+            ns.nodes.append(self._create_node(event, [Image.fromURL(img_url)]))
+
+    yield event.chain_result([ns])
         
     
     
