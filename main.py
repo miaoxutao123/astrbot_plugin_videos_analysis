@@ -155,6 +155,29 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
     if url_video_comprehend:
         yield event.plain_result("检测到B站视频链接，正在进行深度理解，请稍候...")
         
+        # --- 获取Gemini API配置 ---
+        api_key = None
+        proxy_url = None
+        
+        # 1. 优先尝试从框架的默认Provider获取
+        provider = self.context.provider_manager.curr_provider_inst
+        if provider and provider.meta().type == 'googlegenai_chat_completion':
+            logger.info("检测到框架默认LLM为Gemini，将使用框架配置。")
+            api_key = provider.get_current_key()
+            # gemini_source.py 中 api_base 属性可直接访问
+            proxy_url = getattr(provider, 'api_base', None)
+        
+        # 2. 如果框架没有配置Gemini，则回退到插件自身配置
+        if not api_key:
+            logger.info("框架默认LLM不是Gemini，回退到插件自身配置。")
+            api_key = self.gemini_api_key
+            proxy_url = self.gemini_base_url
+
+        # 3. 如果最终都没有配置，则提示用户
+        if not api_key:
+            yield event.plain_result("❌ 视频深度理解失败：\n框架的默认LLM不是Gemini，并且您没有在videos_analysis插件的配置中提供gemini_api_key。请在任一处完成配置。")
+            return
+
         video_path = None
         temp_dir = None
         try:
@@ -170,14 +193,6 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
 
             # 2. 检查文件大小并选择策略
             video_size_mb = os.path.getsize(video_path) / (1024 * 1024)
-            
-            # 从环境变量或配置文件中获取API密钥和代理URL
-            api_key = gemini_api_key # 假设API密钥存储在环境变量中
-            proxy_url = gemini_base_url # 假设代理配置在gemini插件下
-
-            if not api_key:
-                yield event.plain_result("错误：未配置GOOGLE_API_KEY，无法使用视频理解功能。")
-                return
 
             if video_size_mb > 30:
                 # --- 大视频处理流程 (音频+关键帧) ---
@@ -221,7 +236,9 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
 
             # 3. 将摘要提交给框架LLM进行评价
             if video_summary:
-                final_prompt = f"这是一个Bilibili视频的内容摘要：\n\n---\n{video_summary}\n---\n\n请你基于以上内容，并结合你当前的人设和对话上下文，对这个视频发表一下你的看法或评论。"
+                # 构造要插入上下文的视频摘要信息
+                summary_message_for_context = f"（系统提示：我刚刚深度分析了一个Bilibili视频，以下是视频内容的摘要：\n\n{video_summary}）"
+
                 # 调用框架的核心LLM
                 curr_cid = await self.context.conversation_manager.get_curr_conversation_id(event.unified_msg_origin)
                 conversation = None
@@ -230,7 +247,24 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                     conversation = await self.context.conversation_manager.get_conversation(event.unified_msg_origin, curr_cid)
                     if conversation:
                         context = json.loads(conversation.history)
+
+                # 将视频摘要作为一条用户消息添加到历史记录中
+                context.append({"role": "user", "content": summary_message_for_context})
                 
+                # 更新数据库中的对话历史
+                await self.context.conversation_manager.update_conversation(
+                    unified_msg_origin=event.unified_msg_origin,
+                    conversation_id=curr_cid,
+                    history=context
+                )
+
+                # 更新 conversation 对象中的历史，以便传递给 request_llm
+                if conversation:
+                    conversation.history = json.dumps(context)
+
+                # 准备给LLM的最终提示
+                final_prompt = "请你基于以上内容（特别是刚刚提供的视频摘要），并结合你当前的人设和对话上下文，对这个视频发表一下你的看法或评论。"
+
                 yield event.request_llm(
                     prompt=final_prompt,
                     session_id=curr_cid,
