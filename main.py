@@ -205,7 +205,29 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                 audio_path, video_only_path = separated_files
 
                 # b. 分析音频获取描述和时间戳
-                description, timestamps, _ = await process_audio_with_gemini(api_key, audio_path, proxy_url)
+                audio_prompt = """
+    你是一位专业的视频内容分析师。你的任务是分析所提供的音频，并完成以下两项工作：
+    1.  为整个音频内容撰写一段简洁、全面的文字描述。
+    2.  识别出音频中暗示着重要视觉事件发生的关键时刻（例如：突然的巨响、对话的转折点、情绪高潮等），并提供这些时刻的时间戳。
+
+    请将你的回答严格格式化为单个JSON对象，该对象包含两个键：
+    -   `"description"`: 一个包含音频内容描述的字符串。
+    -   `"timestamps"`: 一个由 "HH:MM:SS" 格式的时间戳字符串组成的数组。
+    """
+                audio_response = await provider.text_chat(prompt=audio_prompt, audio_path=audio_path)
+                
+                description = ""
+                timestamps = []
+                try:
+                    # 清理可能的Markdown代码块标记
+                    cleaned_response = audio_response.completion_text.strip().removeprefix("```json").removesuffix("```").strip()
+                    audio_data = json.loads(cleaned_response)
+                    description = audio_data.get("description", "")
+                    timestamps = audio_data.get("timestamps", [])
+                except (json.JSONDecodeError, AttributeError):
+                    yield event.plain_result("音频分析失败：无法解析模型返回的JSON。")
+                    return
+
                 if not description or not timestamps:
                     yield event.plain_result("音频分析失败，无法提取关键信息。")
                     return
@@ -218,15 +240,15 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                     if frame_path:
                         image_paths.append(frame_path)
                         ts_and_paths.append((ts, frame_path))
-
+                
                 if not image_paths:
                     # 如果没有提取到关键帧，仅使用音频描述
                     video_summary = description
                 else:
                     # d. 结合音频描述和关键帧进行综合理解
-                    prompt = f"这是关于一个视频的摘要和一些从该视频中提取的关键帧。视频摘要如下：\n\n{description}\n\n请结合摘要和这些关键帧，对整个视频内容进行一个全面、生动的总结。"
-                    summary_tuple = await process_images_with_gemini(api_key, prompt, image_paths, proxy_url)
-                    video_summary = summary_tuple[0] if summary_tuple else "无法生成最终摘要。"
+                    image_prompt = f"这是关于一个视频的摘要和一些从该视频中提取的关键帧。视频摘要如下：\n\n{description}\n\n请结合摘要和这些关键帧，对整个视频内容进行一个全面、生动的总结。"
+                    image_response = await provider.text_chat(prompt=image_prompt, image_urls=[f"file:///{p}" for p in image_paths])
+                    video_summary = image_response.completion_text if image_response else "无法生成最终摘要。"
 
                 # 新增：将提取的关键帧和时间戳发送给用户
                 if ts_and_paths:
@@ -245,9 +267,9 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
             else:
                 # --- 小视频处理流程 (直接上传) ---
                 yield event.plain_result(f"视频大小为 {video_size_mb:.2f}MB，直接上传视频进行分析...")
-                prompt = "请详细描述这个视频的内容，包括场景、人物、动作和传达的核心信息。"
-                summary_tuple = await process_video_with_gemini(api_key, prompt, video_path, proxy_url)
-                video_summary = summary_tuple[0] if summary_tuple else "视频分析失败。"
+                video_prompt = "请详细描述这个视频的内容，包括场景、人物、动作和传达的核心信息。"
+                video_response = await provider.text_chat(prompt=video_prompt, video_path=video_path)
+                video_summary = video_response.completion_text if video_response else "视频分析失败。"
 
             # 3. 将摘要提交给框架LLM进行评价
             if video_summary:
