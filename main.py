@@ -11,7 +11,7 @@ import httpx
 import aiofiles
 import asyncio
 
-from douyin_scraper.douyin_parser import DouyinParser
+from .douyin_scraper.douyin_parser import DouyinParser
 from .mcmod_get import mcmod_parse
 from .file_send_server import send_file
 from .bili_get import process_bili_video
