@@ -3,8 +3,8 @@ import json
 import re
 import httpx
 from urllib.parse import urlencode
-from crawlers.douyin.web.utils import AwemeIdFetcher, BogusManager
-from crawlers.douyin.web.endpoints import DouyinAPIEndpoints
+from .crawlers.douyin.web.utils import AwemeIdFetcher, BogusManager
+from .crawlers.douyin.web.endpoints import DouyinAPIEndpoints
 
 class DouyinParser:
     """
