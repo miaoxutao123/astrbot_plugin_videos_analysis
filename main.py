@@ -118,6 +118,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
         logger.info("解析失败，请检查链接是否正确。无法判断链接内容类型。")
         return
 
+    is_multi_part = False
     if "media_urls" in result and len(result["media_urls"]) != 1:
         is_multi_part = True
 
