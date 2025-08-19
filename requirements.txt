@@ -13,3 +13,14 @@ qrcode>=7.3.0
 # 工具库
 asyncio>=3.4.3
 google-generativeai
+
+# 数据库
+PyYAML==6.0.1
+
+# 安全相关
+gmssl==3.2.2
+
+# 其他
+rich
+browser-cookie3==0.19.1
+importlib_resources==6.4.0
