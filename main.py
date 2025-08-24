@@ -9,19 +9,18 @@ import json
 import os
 import httpx
 import aiofiles
-import asyncio
 
 from .douyin_scraper.douyin_parser import DouyinParser
 from .mcmod_get import mcmod_parse
 from .file_send_server import send_file
 from .bili_get import process_bili_video
-from .douyin_get import process_douyin
+from .douyin_download import download
 from .auto_delete import delete_old_files
 from .xhs_get import xhs_parse
 from .gemini_content import process_audio_with_gemini, process_images_with_gemini, process_video_with_gemini
 from .videos_cliper import separate_audio_video, extract_frame
 
-@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.8","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
+@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.9","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -63,14 +62,56 @@ class hybird_videos_analysis(Star):
     async def _process_multi_part_media(self, event, result, media_type: str):
         """Helper function to process multi-part media (images or videos)"""
         ns = Nodes([])
-        for i in range(len(result["media_urls"])):
-            file_path = result["media_urls"][i]
-            # nap_file_path = await self._send_file_if_needed(file_path)
+        download_dir = "data/plugins/astrbot_plugin_videos_analysis/download_videos/dy"
+        os.makedirs(download_dir, exist_ok=True)
 
-            if media_type == "image" or file_path.endswith(".jpg"):
-                content = [Comp.Image.fromURL(file_path)]
-            else:
-                content = [Comp.Video.fromURL(file_path)]
+        for i in range(len(result["media_urls"])):
+            media_url = result["media_urls"][i]
+            aweme_id = result.get("aweme_id", "unknown")
+
+            try:
+                if media_type == "image" or media_url.endswith(".jpg"):
+                    # 下载图片
+                    file_extension = ".jpg"
+                    local_filename = f"{download_dir}/{aweme_id}_{i}{file_extension}"
+
+                    logger.info(f"开始下载图片 {i+1}: {media_url}")
+                    success = await download(media_url, local_filename, self.doyin_cookie)
+
+                    if success and os.path.exists(local_filename):
+                        # 发送本地文件
+                        nap_file_path = await self._send_file_if_needed(local_filename)
+                        content = [Comp.Image.fromFileSystem(nap_file_path)]
+                        logger.info(f"图片 {i+1} 下载并发送成功")
+                    else:
+                        content = [Comp.Plain(f"图片 {i+1} 下载失败")]
+                        logger.error(f"图片 {i+1} 下载失败，文件不存在或下载失败: {local_filename}")
+                else:
+                    # 下载视频
+                    file_extension = ".mp4"
+                    local_filename = f"{download_dir}/{aweme_id}_{i}{file_extension}"
+
+                    logger.info(f"开始下载视频 {i+1}: {media_url}")
+                    await download(media_url, local_filename, self.doyin_cookie)
+
+                    # 检查文件大小决定发送方式
+                    if os.path.exists(local_filename):
+                        file_size_mb = os.path.getsize(local_filename) / (1024 * 1024)
+                        nap_file_path = await self._send_file_if_needed(local_filename)
+
+                        if file_size_mb > self.max_video_size:
+                            content = [Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))]
+                            logger.info(f"视频 {i+1} 过大({file_size_mb:.2f}MB)，以文件形式发送")
+                        else:
+                            content = [Comp.Video.fromFileSystem(nap_file_path)]
+                            logger.info(f"视频 {i+1} 下载并发送成功({file_size_mb:.2f}MB)")
+                    else:
+                        content = [Comp.Plain(f"视频 {i+1} 下载失败")]
+                        logger.error(f"视频 {i+1} 下载失败，文件不存在: {local_filename}")
+
+            except Exception as e:
+                logger.error(f"处理媒体文件 {i+1} 时发生错误: {e}")
+                content = [Comp.Plain(f"媒体文件 {i+1} 处理失败: {str(e)}")]
 
             node = self._create_node(event, content)
             ns.nodes.append(node)
@@ -78,13 +119,54 @@ class hybird_videos_analysis(Star):
 
     async def _process_single_media(self, event, result, media_type: str):
         """Helper function to process single media file"""
-        file_path = result["media_urls"][0]
-        # nap_file_path = await self._send_file_if_needed(file_path)
+        media_url = result["media_urls"][0]
+        download_dir = "data/plugins/astrbot_plugin_videos_analysis/download_videos/dy"
+        os.makedirs(download_dir, exist_ok=True)
+        aweme_id = result.get("aweme_id", "unknown")
 
-        if media_type == "image":
-            return [Comp.Image.fromURL(file_path)]
-        else:
-            return [Comp.Video.fromURL(file_path)]
+        try:
+            if media_type == "image":
+                # 下载图片
+                file_extension = ".jpg"
+                local_filename = f"{download_dir}/{aweme_id}{file_extension}"
+
+                logger.info(f"开始下载图片: {media_url}")
+                success = await download(media_url, local_filename, self.doyin_cookie)
+
+                if success and os.path.exists(local_filename):
+                    # 发送本地文件
+                    nap_file_path = await self._send_file_if_needed(local_filename)
+                    logger.info("图片下载并发送成功")
+                    return [Comp.Image.fromFileSystem(nap_file_path)]
+                else:
+                    logger.error(f"图片下载失败，文件不存在或下载失败: {local_filename}")
+                    return [Comp.Plain("图片下载失败")]
+            else:
+                # 下载视频
+                file_extension = ".mp4"
+                local_filename = f"{download_dir}/{aweme_id}{file_extension}"
+
+                logger.info(f"开始下载视频: {media_url}")
+                await download(media_url, local_filename, self.doyin_cookie)
+
+                # 检查文件大小决定发送方式
+                if os.path.exists(local_filename):
+                    file_size_mb = os.path.getsize(local_filename) / (1024 * 1024)
+                    nap_file_path = await self._send_file_if_needed(local_filename)
+
+                    if file_size_mb > self.max_video_size:
+                        logger.info(f"视频过大({file_size_mb:.2f}MB)，以文件形式发送")
+                        return [Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))]
+                    else:
+                        logger.info(f"视频下载并发送成功({file_size_mb:.2f}MB)")
+                        return [Comp.Video.fromFileSystem(nap_file_path)]
+                else:
+                    logger.error(f"视频下载失败，文件不存在: {local_filename}")
+                    return [Comp.Plain("视频下载失败")]
+
+        except Exception as e:
+            logger.error(f"处理媒体文件时发生错误: {e}")
+            return [Comp.Plain(f"媒体文件处理失败: {str(e)}")]
 
     async def _cleanup_old_files(self, folder_path: str):
         """Helper function to clean up old files if delete_time is configured"""
@@ -105,8 +187,10 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
     if not match:
         return
 
-    parser = DouyinParser(cookie = cookie)
+    # 发送开始解析的提示
+    yield event.plain_result("正在解析抖音链接...")
 
+    parser = DouyinParser(cookie = cookie)
     result = await parser.parse(message_str)
 
     if not result:
@@ -114,24 +198,37 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
         return
 
     content_type = result["type"]
-    if content_type not in ["video", "image"]:
+    if content_type not in ["video", "image", "multi_video"]:
         logger.info("解析失败，请检查链接是否正确。无法判断链接内容类型。")
+        yield event.plain_result("解析失败，无法识别内容类型。")
         return
+
+    # 发送下载提示
+    media_count = len(result.get("media_urls", []))
+    if media_count > 1:
+        yield event.plain_result(f"检测到 {media_count} 个文件，正在下载...")
+    else:
+        yield event.plain_result("正在下载媒体文件...")
 
     is_multi_part = False
     if "media_urls" in result and len(result["media_urls"]) != 1:
         is_multi_part = True
 
-    # 处理多段内容
-    if is_multi_part:
-        ns = await self._process_multi_part_media(event, result, content_type)
-        yield event.chain_result([ns])
-    else:
-        # 处理单段内容
-        content = await self._process_single_media(event, result, content_type)
-        if content_type == "image":
-            print(f"发送单段图片: {content[0]}")
-        yield event.chain_result(content)
+    try:
+        # 处理多段内容
+        if is_multi_part:
+            ns = await self._process_multi_part_media(event, result, content_type)
+            yield event.chain_result([ns])
+        else:
+            # 处理单段内容
+            content = await self._process_single_media(event, result, content_type)
+            if content_type == "image":
+                logger.info(f"发送单段图片: {content[0]}")
+            yield event.chain_result(content)
+    except Exception as e:
+        logger.error(f"处理抖音媒体时发生错误: {e}")
+        yield event.plain_result(f"处理媒体文件时发生错误: {str(e)}")
+        return
 
 @filter.event_message_type(EventMessageType.ALL)
 async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
