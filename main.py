@@ -188,6 +188,31 @@ class hybird_videos_analysis(Star):
             logger.error(f"处理媒体文件时发生错误: {e}")
             return [Comp.Plain(f"媒体文件处理失败: {str(e)}")]
 
+    async def _safe_send_video(self, event, media_component, file_path=None):
+        """安全发送视频，包含降级方案"""
+        try:
+            # 尝试发送视频
+            yield event.chain_result([media_component])
+            logger.info("视频发送成功")
+        except Exception as video_error:
+            logger.warning(f"视频发送失败: {video_error}")
+
+            # 降级方案1: 尝试以文件形式发送
+            if file_path and os.path.exists(file_path):
+                try:
+                    nap_file_path = await self._send_file_if_needed(file_path)
+                    file_component = Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))
+                    yield event.chain_result([file_component])
+                    logger.info("视频改为文件形式发送成功")
+                    yield event.plain_result("⚠️ 视频发送失败，已改为文件形式发送")
+                except Exception as file_error:
+                    logger.error(f"文件形式发送也失败: {file_error}")
+                    # 降级方案2: 发送错误提示
+                    yield event.plain_result("❌ 视频发送失败，文件可能过大或格式不支持")
+            else:
+                # 降级方案2: 发送错误提示
+                yield event.plain_result("❌ 视频发送失败，文件可能过大或格式不支持")
+
     async def _cleanup_old_files(self, folder_path: str):
         """Helper function to clean up old files if delete_time is configured"""
         if self.delete_time > 0:
@@ -426,7 +451,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                 if current_persona and hasattr(current_persona, 'prompt'):
                     persona_prompt = f"请保持你的人格设定：{current_persona.prompt}\n\n"
 
-                final_prompt = f"{persona_prompt}我刚刚分析了这个B站视频的内容：\n\n{video_summary}\n\n请基于这个视频内容，结合你的人格特点，自然地发表你的看法或评论。不要说这是我转述给你的，请像你亲自观看了这个视频一样回应。"
+                final_prompt = f"{persona_prompt}我刚刚分析了这个B站视频的内容：\n\n{video_summary}\n\n请基于这个视频内容，结合你的人格特点，自然地发表你的看法或评论。不要说这是我转述给你的，请像你亲自观看了这个用户给你分享的来自bilibili的视频一样回应。"
 
                 yield event.request_llm(
                     prompt=final_prompt,
@@ -467,7 +492,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
             if file_size_mb > 200:
                 media_component = Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))
             else:
-                media_component = Video.fromFileSystem(path = nap_file_path)
+                media_component = Comp.Video.fromFileSystem(path = nap_file_path)
 
         # 构建信息文本，加入错误处理
         try:
@@ -509,12 +534,20 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
             if media_component:
                 if zhuanfa:
                     # 合并转发模式，但视频单独发送
-                    yield event.chain_result([media_component])
                     yield event.chain_result([Comp.Plain(info_text)])
+                    if file_size_mb <= 100:
+                        content = [Comp.Video.fromFileSystem(path = nap_file_path)]
+                    else:
+                        content = [Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))]
+                    yield event.chain_result(content)
                 else:
                     # 分别发送
-                    yield event.chain_result([media_component])
                     yield event.chain_result([Comp.Plain(info_text)])
+                    if file_size_mb <= 100:
+                        content = [Comp.Video.fromFileSystem(path = nap_file_path)]
+                    else:
+                        content = [Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))]
+                    yield event.chain_result(content)
             else:
                 yield event.chain_result([Comp.Plain(info_text)])
         elif reply_mode == 3: # 完整
@@ -529,8 +562,11 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                 else:
                     yield event.chain_result([Comp.Plain("封面图片获取失败\n" + info_text)])
                 # 视频单独发送
-                if media_component:
-                    yield event.chain_result([media_component])
+                if file_size_mb <= 100:
+                        content = [Comp.Video.fromFileSystem(path = nap_file_path)]
+                else:
+                        content = [Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))]
+                yield event.chain_result(content)
             else:
                 # 分别发送所有内容
                 if cover_url:
@@ -538,12 +574,18 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                 else:
                     yield event.chain_result([Comp.Plain("封面图片获取失败")])
                 yield event.chain_result([Comp.Plain(info_text)])
-                if media_component:
-                    yield event.chain_result([media_component])
+                if file_size_mb <= 100:
+                        content = [Comp.Video.fromFileSystem(path = nap_file_path)]
+                else:
+                        content = [Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))]
+                yield event.chain_result(content)
         elif reply_mode == 4: # 仅视频
             if media_component:
-                yield event.chain_result([media_component])
-
+                if file_size_mb <= 100:
+                        content = [Comp.Video.fromFileSystem(path = nap_file_path)]
+                else:
+                        content = [Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))]
+                yield event.chain_result(content)
 # @filter.event_message_type(EventMessageType.ALL)
 # async def auto_parse_ks(self, event: AstrMessageEvent, *args, **kwargs):
 #     """
@@ -902,7 +944,7 @@ async def process_direct_video(self, event: AstrMessageEvent, *args, **kwargs):
             if current_persona and hasattr(current_persona, 'prompt'):
                 persona_prompt = f"请保持你的人格设定：{current_persona.prompt}\n\n"
 
-            final_prompt = f"{persona_prompt}我刚刚看了你发送的视频，内容是这样的：\n\n{video_summary}\n\n请基于这个视频内容，结合你的人格特点，自然地回应我。就像你亲自看过这个视频一样。"
+            final_prompt = f"{persona_prompt}我刚刚分析了这个B站视频的内容：\n\n{video_summary}\n\n请基于这个视频内容，结合你的人格特点，自然地发表你的看法或评论。不要说这是我转述给你的，请像你亲自观看了这个用户给你分享的视频一样回应。"
 
             yield event.request_llm(
                 prompt=final_prompt,
