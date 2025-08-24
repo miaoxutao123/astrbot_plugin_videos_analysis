@@ -34,7 +34,7 @@ async def get_location_from_url(url, cookie=None):
         "Upgrade-Insecure-Requests": "1",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
     }
-    
+
     if cookie:
         headers["Cookie"] = clean_cookie(cookie)
 
@@ -52,7 +52,7 @@ async def get_location_from_url(url, cookie=None):
 async def download_douyin_image(url, filename, cookie=None):
     """
     专门用于下载抖音图片的函数
-    
+
     Args:
         url (str): 抖音图片URL
         filename (str): 保存文件名
@@ -118,26 +118,26 @@ async def download_douyin_image(url, filename, cookie=None):
     for attempt in range(max_retries):
         current_headers = retry_strategies[attempt % len(retry_strategies)].copy()
         strategy_name = ["桌面端", "iPhone", "Android", "抖音APP", "爬虫"][attempt % len(retry_strategies)]
-        
+
         if cookie and strategy_name not in ["抖音APP", "爬虫"]:
             current_headers['Cookie'] = clean_cookie(cookie)
-            
+
         try:
             timeout = aiohttp.ClientTimeout(total=30, connect=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 print(f"Attempt {attempt + 1}: Trying {strategy_name} strategy")
-                
+
                 async with session.get(url, headers=current_headers, allow_redirects=True) as response:
                     print(f"Image download attempt {attempt + 1}: Status {response.status}")
-                    
+
                     if response.status == 200:
                         os.makedirs(os.path.dirname(filename), exist_ok=True)
-                        
+
                         content = await response.read()
                         if len(content) > 1000:  # 确保不是错误页面
                             async with aiofiles.open(filename, 'wb') as f:
                                 await f.write(content)
-                            
+
                             print(f"Image download successful with {strategy_name}: {filename} ({len(content)} bytes)")
                             return True
                         else:
@@ -148,20 +148,17 @@ async def download_douyin_image(url, filename, cookie=None):
                         return False
                     else:
                         print(f"Image download failed with status {response.status}")
-                        
-                except aiohttp.ClientResponseError as e:
-                    print(f"HTTP error with {strategy_name}: {e.status} {e.message}")
-                except aiohttp.ClientError as e:
-                    print(f"Network error with {strategy_name}: {e}")
-                except Exception as e:
-                    print(f"Unexpected error with {strategy_name}: {e}")
-            
+
+        except aiohttp.ClientResponseError as e:
+            print(f"HTTP error with {strategy_name}: {e.status} {e.message}")
+        except aiohttp.ClientError as e:
+            print(f"Network error with {strategy_name}: {e}")
         except Exception as e:
-            print(f"Session error attempt {attempt + 1}: {e}")
-            
+            print(f"Unexpected error with {strategy_name}: {e}")
+
         if attempt < max_retries - 1:
             await asyncio.sleep(2)  # 增加等待时间
-    
+
     print(f"Failed to download image after {max_retries} attempts")
     return False
 
@@ -191,7 +188,7 @@ async def download_video(url, filename="video.mp4", cookie=None):
         'Sec-Fetch-Site': 'cross-site',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
-    
+
     # 添加Cookie如果提供了
     if cookie:
         headers['Cookie'] = clean_cookie(cookie)
@@ -204,7 +201,7 @@ async def download_video(url, filename="video.mp4", cookie=None):
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url, headers=headers, allow_redirects=True) as response:
                     print(f"Attempt {attempt + 1}: Status {response.status}")
-                    
+
                     if response.status == 403:
                         print("403 Forbidden - trying with mobile headers...")
                         # 尝试移动端请求头
@@ -215,11 +212,11 @@ async def download_video(url, filename="video.mp4", cookie=None):
                         }
                         if cookie:
                             mobile_headers['Cookie'] = clean_cookie(cookie)
-                            
+
                         async with session.get(url, headers=mobile_headers, allow_redirects=True) as retry_response:
                             response = retry_response
                             print(f"Mobile retry status: {response.status}")
-                    
+
                     response.raise_for_status()
 
                     if response.status == 304:
@@ -239,12 +236,12 @@ async def download_video(url, filename="video.mp4", cookie=None):
                             if total_size and downloaded % (block_size * 10) == 0:  # 减少打印频率
                                 progress = (downloaded / total_size) * 100
                                 print(f"\rDownloading: {progress:.1f}% ({downloaded}/{total_size})", end="")
-                    
+
                     if total_size:
                         print(f"\nDownload complete! File saved: {filename}")
                     else:
                         print(f"Download complete! File saved: {filename} (Size unknown)")
-                    
+
                     # 验证文件是否成功下载
                     if os.path.exists(filename) and os.path.getsize(filename) > 0:
                         print(f"File verified successfully: {os.path.getsize(filename)} bytes")
@@ -270,10 +267,10 @@ async def download_video(url, filename="video.mp4", cookie=None):
             if attempt == max_retries - 1:
                 print(f"All {max_retries} attempts failed. Error: {e}")
                 return
-        
+
         # 等待一秒后重试
         await asyncio.sleep(1)
-    
+
     print("Download failed after all retries")
 
 async def download(url, filename="video.mp4", cookie=None):
@@ -290,7 +287,7 @@ async def download(url, filename="video.mp4", cookie=None):
         print(f"Detected Douyin image, using specialized download method")
         success = await download_douyin_image(url, filename, cookie)
         return success
-    
+
     # 对于视频或其他媒体，使用原来的逻辑
     location_data = await get_location_from_url(url, cookie)
 

@@ -379,7 +379,7 @@ async def bili_login(event=None):
     
     # 获取二维码矩阵并在终端中打印
     matrix = qr.get_matrix()
-    qr_text = "\n"
+    qr_text = "\n======= B站登录二维码 =======\n"
     for row in matrix:
         line = ""
         for cell in row:
@@ -388,10 +388,14 @@ async def bili_login(event=None):
             else:
                 line += "  "  # 空白
         qr_text += line + "\n"
+    qr_text += "==========================\n"
     
-    # 使用logger.info输出二维码
+    # 使用print直接输出到控制台，确保二维码能正常显示
+    print(qr_text)
+    
+    # 同时使用logger记录
     from astrbot.api import logger
-    logger.info(qr_text)
+    logger.info("B站登录二维码已显示在控制台")
     
 
     # 保存二维码图片到指定路径
@@ -402,10 +406,11 @@ async def bili_login(event=None):
         f.write(base64.b64decode(qr_data["image_base64"]))
     # logger.info(f"二维码图片已保存到: {image_path}")
 
-    # 同时也保留base64编码的输出，以防ASCII显示不正常
-    logger.info(f"\n如果上方二维码显示异常，请到一下路径查看二维码:/n{image_path}")
-    logger.info("\n如果无法找到，请自行解析一下base64编码的二维码:")
-    logger.info(f"data:image/png;base64,{qr_data['image_base64']}")
+    # 提供备用显示方式
+    print(f"\n如果上方二维码显示异常，请查看二维码文件: {image_path}")
+    logger.info(f"二维码图片已保存到: {image_path}")
+    logger.info("如果无法扫描，可复制下方base64码用在线工具解析:")
+    logger.info(f"data:image/png;base64,{qr_data['image_base64'][:50]}...")
     
     # 创建一个异步任务来检查登录状态
     login_task = asyncio.create_task(check_login_status_loop(qrcode_key))
