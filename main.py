@@ -467,7 +467,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
             if file_size_mb > 200:
                 media_component = Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))
             else:
-                media_component = Comp.Video.fromFileSystem(path = nap_file_path)
+                media_component = Video.fromFileSystem(path = nap_file_path)
 
         # 构建信息文本，加入错误处理
         try:
@@ -581,7 +581,7 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
             logger.error(f"小红书图片解析失败: {result.get('error', '未知错误') if result else '返回结果为空'}")
             yield event.plain_result("小红书链接解析失败，请检查链接是否正确")
             return
-            
+
         ns = Nodes([]) if replay_mode else None
         title = result.get("title", "小红书内容")  # 提供默认标题
         title_node = self._create_node(event, [Plain(title)])
@@ -596,7 +596,7 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
             logger.warning("小红书解析结果中没有找到图片URL")
             yield event.plain_result("未找到可用的图片链接")
             return
-            
+
         for image_url in urls:
             image_node = self._create_node(event, [Image.fromURL(image_url)])
             if replay_mode:
@@ -614,7 +614,7 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
             logger.error(f"小红书视频解析失败: {result.get('error', '未知错误') if result else '返回结果为空'}")
             yield event.plain_result("小红书链接解析失败，请检查链接是否正确")
             return
-            
+
         ns = Nodes([]) if replay_mode else None
         title = result.get("title", "小红书内容")  # 提供默认标题
         title_node = self._create_node(event, [Plain(title)])
@@ -631,7 +631,7 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
                 logger.warning("小红书解析结果中没有找到视频URL")
                 yield event.plain_result("未找到可用的视频链接")
                 return
-                
+
             for url in urls:
                 video_node = self._create_node(event, [Video.fromURL(url)])
                 if replay_mode:
@@ -650,7 +650,7 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
                 logger.warning("小红书解析结果中没有找到图片URL")
                 yield event.plain_result("未找到可用的图片链接")
                 return
-                
+
             for image_url in urls:
                 image_node = self._create_node(event, [Image.fromURL(image_url)])
                 if replay_mode:
@@ -811,7 +811,7 @@ async def process_direct_video(self, event: AstrMessageEvent, *args, **kwargs):
             response = await client.get(video_url)
             response.raise_for_status()
 
-            async with aiofiles.open(video_path, 'wb') as f:
+            async with aiofiles.open(video_path, "wb") as f:
                 await f.write(response.content)
 
         logger.info(f"视频下载完成: {video_path}")
