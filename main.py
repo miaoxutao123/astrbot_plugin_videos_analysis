@@ -487,44 +487,62 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
             logger.error(f"构建B站信息文本时出错: {e}")
             info_text = f"B站视频信息获取失败: {result.get('title', '未知视频')}"
 
-        # 根据回复模式构建响应
+        # 根据回复模式构建响应，视频单独发送提高稳定性
         if reply_mode == 0: # 纯文本
-            content = [Comp.Plain(info_text)]
+            yield event.chain_result([Comp.Plain(info_text)])
         elif reply_mode == 1: # 带图片
             cover_url = result.get("cover")
             if cover_url:
-                content = [Comp.Image.fromURL(cover_url), Comp.Plain(info_text)]
+                if zhuanfa:
+                    # 合并转发模式
+                    ns = Nodes([])
+                    ns.nodes.append(self._create_node(event, [Comp.Image.fromURL(cover_url)]))
+                    ns.nodes.append(self._create_node(event, [Comp.Plain(info_text)]))
+                    yield event.chain_result([ns])
+                else:
+                    # 分别发送
+                    yield event.chain_result([Comp.Image.fromURL(cover_url)])
+                    yield event.chain_result([Comp.Plain(info_text)])
             else:
-                content = [Comp.Plain("封面图片获取失败\n" + info_text)]
+                yield event.chain_result([Comp.Plain("封面图片获取失败\n" + info_text)])
         elif reply_mode == 2: # 带视频
-            content = [media_component, Comp.Plain(info_text)] if media_component else [Plain(info_text)]
+            if media_component:
+                if zhuanfa:
+                    # 合并转发模式，但视频单独发送
+                    yield event.chain_result([media_component])
+                    yield event.chain_result([Comp.Plain(info_text)])
+                else:
+                    # 分别发送
+                    yield event.chain_result([media_component])
+                    yield event.chain_result([Comp.Plain(info_text)])
+            else:
+                yield event.chain_result([Comp.Plain(info_text)])
         elif reply_mode == 3: # 完整
             cover_url = result.get("cover")
-            if cover_url:
-                content = [Comp.Image(file=cover_url), media_component, Comp.Plain(info_text)]
-            else:
-                content = [media_component, Comp.Plain("封面图片获取失败\n" + info_text)]
-            content = [c for c in content if c] # 移除None
-        elif reply_mode == 4: # 仅视频
-            content = [media_component] if media_component else []
-        else:
-            content = []
-
-        if content:
             if zhuanfa:
-                # 将所有内容放入一个Node中进行合并转发
-                flat_content = []
-                for item in content:
-                    if isinstance(item, list):
-                        flat_content.extend(item)
-                    else:
-                        flat_content.append(item)
-                node = Node(uin=event.get_self_id(), name="astrbot", content=flat_content)
-                yield event.chain_result([node])
+                # 合并转发模式，视频单独发送
+                if cover_url:
+                    ns = Nodes([])
+                    ns.nodes.append(self._create_node(event, [Comp.Image.fromURL(cover_url)]))
+                    ns.nodes.append(self._create_node(event, [Comp.Plain(info_text)]))
+                    yield event.chain_result([ns])
+                else:
+                    yield event.chain_result([Comp.Plain("封面图片获取失败\n" + info_text)])
+                # 视频单独发送
+                if media_component:
+                    yield event.chain_result([media_component])
             else:
-                # 逐条发送
-                for item in content:
-                    yield event.chain_result([item])
+                # 分别发送所有内容
+                if cover_url:
+                    yield event.chain_result([Comp.Image.fromURL(cover_url)])
+                else:
+                    yield event.chain_result([Comp.Plain("封面图片获取失败")])
+                yield event.chain_result([Comp.Plain(info_text)])
+                if media_component:
+                    yield event.chain_result([media_component])
+        elif reply_mode == 4: # 仅视频
+            if media_component:
+                yield event.chain_result([media_component])
 
 # @filter.event_message_type(EventMessageType.ALL)
 # async def auto_parse_ks(self, event: AstrMessageEvent, *args, **kwargs):
