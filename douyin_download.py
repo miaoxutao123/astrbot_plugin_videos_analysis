@@ -62,52 +62,70 @@ async def download_douyin_image(url, filename, cookie=None):
         print(f"File '{filename}' already exists. Skipping download.")
         return True
 
-    # 抖音图片专用请求头
-    headers = {
-        'Accept': 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-        'Accept-Encoding': 'gzip, deflate, br, zstd',
-        'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'Pragma': 'no-cache',
-        'Referer': 'https://www.douyin.com/',
-        'Sec-Fetch-Dest': 'image',
-        'Sec-Fetch-Mode': 'no-cors',
-        'Sec-Fetch-Site': 'cross-site',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
-    
-    if cookie:
-        headers['Cookie'] = clean_cookie(cookie)
-
-    max_retries = 3
+    max_retries = 5
     retry_strategies = [
-        # 策略1: 桌面端请求头
-        headers,
-        # 策略2: 移动端请求头
+        # 策略1: 完整桌面端请求头
+        {
+            'Accept': 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'DNT': '1',
+            'Pragma': 'no-cache',
+            'Referer': 'https://www.douyin.com/',
+            'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"Windows"',
+            'Sec-Fetch-Dest': 'image',
+            'Sec-Fetch-Mode': 'no-cors',
+            'Sec-Fetch-Site': 'cross-site',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        },
+        # 策略2: iPhone移动端请求头
         {
             'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
-            'Accept-Language': 'zh-CN,zh;q=0.9',
+            'Accept-Language': 'zh-CN,zh-Hans;q=0.9',
+            'Connection': 'keep-alive',
             'Referer': 'https://www.douyin.com/',
-            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1'
+            'Sec-Fetch-Dest': 'image',
+            'Sec-Fetch-Mode': 'no-cors',
+            'Sec-Fetch-Site': 'cross-site',
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
         },
-        # 策略3: 最简请求头
+        # 策略3: Android移动端请求头
         {
-            'User-Agent': 'Mozilla/5.0 (Linux; Android 10; SM-G975F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.106 Mobile Safari/537.36',
-            'Referer': 'https://www.douyin.com/'
+            'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Connection': 'keep-alive',
+            'Referer': 'https://www.douyin.com/',
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36'
+        },
+        # 策略4: 模拟抖音APP请求头
+        {
+            'Accept': '*/*',
+            'Connection': 'keep-alive',
+            'User-Agent': 'com.ss.android.ugc.aweme/180400 (Linux; U; Android 11; zh_CN; SM-G973F; Build/RP1A.200720.012; Cronet/TTNetVersion:36a9da4a 2021-11-26 QuicVersion:8d8b5b0e 2021-11-23)',
+            'X-Requested-With': 'com.ss.android.ugc.aweme'
+        },
+        # 策略5: 最简请求头
+        {
+            'User-Agent': 'Mozilla/5.0 (compatible; Baiduspider/2.0; +http://www.baidu.com/search/spider.html)',
+            'Accept': '*/*'
         }
     ]
 
     for attempt in range(max_retries):
-        current_headers = retry_strategies[attempt % len(retry_strategies)]
-        if cookie and 'Cookie' not in current_headers:
-            current_headers = current_headers.copy()
+        current_headers = retry_strategies[attempt % len(retry_strategies)].copy()
+        strategy_name = ["桌面端", "iPhone", "Android", "抖音APP", "爬虫"][attempt % len(retry_strategies)]
+        
+        if cookie and strategy_name not in ["抖音APP", "爬虫"]:
             current_headers['Cookie'] = clean_cookie(cookie)
             
         try:
             timeout = aiohttp.ClientTimeout(total=30, connect=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                print(f"Attempt {attempt + 1}: Trying image download with strategy {(attempt % len(retry_strategies)) + 1}")
+                print(f"Attempt {attempt + 1}: Trying {strategy_name} strategy")
                 
                 async with session.get(url, headers=current_headers, allow_redirects=True) as response:
                     print(f"Image download attempt {attempt + 1}: Status {response.status}")
@@ -116,23 +134,33 @@ async def download_douyin_image(url, filename, cookie=None):
                         os.makedirs(os.path.dirname(filename), exist_ok=True)
                         
                         content = await response.read()
-                        if len(content) > 0:
+                        if len(content) > 1000:  # 确保不是错误页面
                             async with aiofiles.open(filename, 'wb') as f:
                                 await f.write(content)
                             
-                            print(f"Image download successful: {filename} ({len(content)} bytes)")
+                            print(f"Image download successful with {strategy_name}: {filename} ({len(content)} bytes)")
                             return True
                         else:
-                            print("Downloaded image is empty, retrying...")
+                            print(f"Downloaded content too small ({len(content)} bytes), likely an error page")
                             continue
+                    elif response.status == 404:
+                        print(f"Image not found (404), skipping retries")
+                        return False
                     else:
                         print(f"Image download failed with status {response.status}")
                         
+                except aiohttp.ClientResponseError as e:
+                    print(f"HTTP error with {strategy_name}: {e.status} {e.message}")
+                except aiohttp.ClientError as e:
+                    print(f"Network error with {strategy_name}: {e}")
+                except Exception as e:
+                    print(f"Unexpected error with {strategy_name}: {e}")
+            
         except Exception as e:
-            print(f"Image download attempt {attempt + 1} failed: {e}")
+            print(f"Session error attempt {attempt + 1}: {e}")
             
         if attempt < max_retries - 1:
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)  # 增加等待时间
     
     print(f"Failed to download image after {max_retries} attempts")
     return False

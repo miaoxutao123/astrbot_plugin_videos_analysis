@@ -84,8 +84,13 @@ class hybird_videos_analysis(Star):
                         content = [Comp.Image.fromFileSystem(nap_file_path)]
                         logger.info(f"图片 {i+1} 下载并发送成功")
                     else:
-                        content = [Comp.Plain(f"图片 {i+1} 下载失败")]
-                        logger.error(f"图片 {i+1} 下载失败，文件不存在或下载失败: {local_filename}")
+                        # 图片下载失败，发送URL备用方案
+                        try:
+                            content = [Comp.Image.fromURL(media_url)]
+                            logger.warning(f"图片 {i+1} 本地下载失败，尝试直接发送URL")
+                        except Exception as url_error:
+                            content = [Comp.Plain(f"图片 {i+1} 下载失败且URL发送失败")]
+                            logger.error(f"图片 {i+1} 下载失败，文件不存在或下载失败: {local_filename}, URL发送也失败: {url_error}")
                 else:
                     # 下载视频
                     file_extension = ".mp4"
@@ -106,8 +111,13 @@ class hybird_videos_analysis(Star):
                             content = [Comp.Video.fromFileSystem(nap_file_path)]
                             logger.info(f"视频 {i+1} 下载并发送成功({file_size_mb:.2f}MB)")
                     else:
-                        content = [Comp.Plain(f"视频 {i+1} 下载失败")]
-                        logger.error(f"视频 {i+1} 下载失败，文件不存在: {local_filename}")
+                        # 视频下载失败，尝试URL发送
+                        try:
+                            content = [Comp.Video.fromURL(media_url)]
+                            logger.warning(f"视频 {i+1} 本地下载失败，尝试直接发送URL")
+                        except Exception as url_error:
+                            content = [Comp.Plain(f"视频 {i+1} 下载失败")]
+                            logger.error(f"视频 {i+1} 下载失败，文件不存在: {local_filename}, URL发送也失败: {url_error}")
 
             except Exception as e:
                 logger.error(f"处理媒体文件 {i+1} 时发生错误: {e}")
@@ -139,8 +149,13 @@ class hybird_videos_analysis(Star):
                     logger.info("图片下载并发送成功")
                     return [Comp.Image.fromFileSystem(nap_file_path)]
                 else:
-                    logger.error(f"图片下载失败，文件不存在或下载失败: {local_filename}")
-                    return [Comp.Plain("图片下载失败")]
+                    # 图片下载失败，尝试直接发送URL
+                    try:
+                        logger.warning(f"图片本地下载失败，尝试直接发送URL")
+                        return [Comp.Image.fromURL(media_url)]
+                    except Exception as url_error:
+                        logger.error(f"图片下载失败，文件不存在或下载失败: {local_filename}, URL发送也失败: {url_error}")
+                        return [Comp.Plain("图片下载失败")]
             else:
                 # 下载视频
                 file_extension = ".mp4"
@@ -161,8 +176,13 @@ class hybird_videos_analysis(Star):
                         logger.info(f"视频下载并发送成功({file_size_mb:.2f}MB)")
                         return [Comp.Video.fromFileSystem(nap_file_path)]
                 else:
-                    logger.error(f"视频下载失败，文件不存在: {local_filename}")
-                    return [Comp.Plain("视频下载失败")]
+                    # 视频下载失败，尝试直接发送URL
+                    try:
+                        logger.warning(f"视频本地下载失败，尝试直接发送URL")
+                        return [Comp.Video.fromURL(media_url)]
+                    except Exception as url_error:
+                        logger.error(f"视频下载失败，文件不存在: {local_filename}, URL发送也失败: {url_error}")
+                        return [Comp.Plain("视频下载失败")]
 
         except Exception as e:
             logger.error(f"处理媒体文件时发生错误: {e}")
@@ -449,28 +469,41 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
             else:
                 media_component = Comp.Video.fromFileSystem(path = nap_file_path)
 
-        info_text = (
-            f"📜 视频标题：{result['title']}\n"
-            f"👀 观看次数：{result['view_count']}\n"
-            f"👍 点赞次数：{result['like_count']}\n"
-            f"💰 投币次数：{result['coin_count']}\n"
-            f"📂 收藏次数：{result['favorite_count']}\n"
-            f"💬 弹幕量：{result['danmaku_count']}\n"
-            f"⏳ 视频时长：{int(result['duration'] / 60)}分{result['duration'] % 60}秒\n"
-        )
-        if url_mode:
-            info_text += f"🎥 视频直链：{result['direct_url']}\n"
-        info_text += f"🧷 原始链接：https://www.bilibili.com/video/{result['bvid']}"
+        # 构建信息文本，加入错误处理
+        try:
+            info_text = (
+                f"📜 视频标题：{result.get('title', '未知标题')}\n"
+                f"👀 观看次数：{result.get('view_count', 0)}\n"
+                f"👍 点赞次数：{result.get('like_count', 0)}\n"
+                f"💰 投币次数：{result.get('coin_count', 0)}\n"
+                f"📂 收藏次数：{result.get('favorite_count', 0)}\n"
+                f"💬 弹幕量：{result.get('danmaku_count', 0)}\n"
+                f"⏳ 视频时长：{int(result.get('duration', 0) / 60)}分{result.get('duration', 0) % 60}秒\n"
+            )
+            if url_mode:
+                info_text += f"🎥 视频直链：{result.get('direct_url', '无')}\n"
+            info_text += f"🧷 原始链接：https://www.bilibili.com/video/{result.get('bvid', 'unknown')}"
+        except Exception as e:
+            logger.error(f"构建B站信息文本时出错: {e}")
+            info_text = f"B站视频信息获取失败: {result.get('title', '未知视频')}"
 
         # 根据回复模式构建响应
         if reply_mode == 0: # 纯文本
             content = [Comp.Plain(info_text)]
         elif reply_mode == 1: # 带图片
-            content = [Comp.Image.fromURL(result["cover"]),Comp.Plain(info_text)]
+            cover_url = result.get("cover")
+            if cover_url:
+                content = [Comp.Image.fromURL(cover_url), Comp.Plain(info_text)]
+            else:
+                content = [Comp.Plain("封面图片获取失败\n" + info_text)]
         elif reply_mode == 2: # 带视频
             content = [media_component, Comp.Plain(info_text)] if media_component else [Plain(info_text)]
         elif reply_mode == 3: # 完整
-            content = [Comp.Image(file=result["cover"]), media_component,Comp.Plain(info_text)]
+            cover_url = result.get("cover")
+            if cover_url:
+                content = [Comp.Image(file=cover_url), media_component, Comp.Plain(info_text)]
+            else:
+                content = [media_component, Comp.Plain("封面图片获取失败\n" + info_text)]
             content = [c for c in content if c] # 移除None
         elif reply_mode == 4: # 仅视频
             content = [media_component] if media_component else []
@@ -526,15 +559,27 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
     # 处理图片链接
     if image_match:
         result = await xhs_parse(image_match.group(1))
+        if not result or "error" in result:
+            logger.error(f"小红书图片解析失败: {result.get('error', '未知错误') if result else '返回结果为空'}")
+            yield event.plain_result("小红书链接解析失败，请检查链接是否正确")
+            return
+            
         ns = Nodes([]) if replay_mode else None
-        title_node = self._create_node(event, [Plain(result["title"])])
+        title = result.get("title", "小红书内容")  # 提供默认标题
+        title_node = self._create_node(event, [Plain(title)])
 
         if replay_mode:
             ns.nodes.append(title_node)
         else:
-            yield event.chain_result([Plain(result["title"])])
+            yield event.chain_result([Plain(title)])
 
-        for image_url in result["urls"]:
+        urls = result.get("urls", [])
+        if not urls:
+            logger.warning("小红书解析结果中没有找到图片URL")
+            yield event.plain_result("未找到可用的图片链接")
+            return
+            
+        for image_url in urls:
             image_node = self._create_node(event, [Image.fromURL(image_url)])
             if replay_mode:
                 ns.nodes.append(image_node)
@@ -547,16 +592,29 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
     # 处理视频链接
     if video_match:
         result = await xhs_parse(video_match.group(1))
+        if not result or "error" in result:
+            logger.error(f"小红书视频解析失败: {result.get('error', '未知错误') if result else '返回结果为空'}")
+            yield event.plain_result("小红书链接解析失败，请检查链接是否正确")
+            return
+            
         ns = Nodes([]) if replay_mode else None
-        title_node = self._create_node(event, [Plain(result["title"])])
+        title = result.get("title", "小红书内容")  # 提供默认标题
+        title_node = self._create_node(event, [Plain(title)])
 
         if "video_sizes" in result:
+            # 处理视频内容
             if replay_mode:
                 ns.nodes.append(title_node)
             else:
-                yield event.chain_result([Plain(result["title"])])
+                yield event.chain_result([Plain(title)])
 
-            for url in result["urls"]:
+            urls = result.get("urls", [])
+            if not urls:
+                logger.warning("小红书解析结果中没有找到视频URL")
+                yield event.plain_result("未找到可用的视频链接")
+                return
+                
+            for url in urls:
                 video_node = self._create_node(event, [Video.fromURL(url)])
                 if replay_mode:
                     ns.nodes.append(video_node)
@@ -567,9 +625,15 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
             if replay_mode:
                 ns.nodes.append(title_node)
             else:
-                yield event.chain_result([Plain(result["title"])])
+                yield event.chain_result([Plain(title)])
 
-            for image_url in result["urls"]:
+            urls = result.get("urls", [])
+            if not urls:
+                logger.warning("小红书解析结果中没有找到图片URL")
+                yield event.plain_result("未找到可用的图片链接")
+                return
+                
+            for image_url in urls:
                 image_node = self._create_node(event, [Image.fromURL(image_url)])
                 if replay_mode:
                     ns.nodes.append(image_node)
