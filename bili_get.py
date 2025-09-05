@@ -78,21 +78,36 @@ def av2bv(av):
 
 async def bili_request(url, return_json=True):
     """发送B站API请求"""
+    if not url or not isinstance(url, str):
+        return {"code": -400, "message": "Invalid URL"}
+        
     headers = {
         "referer": "https://www.bilibili.com/",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
     }
 
     try:
-        async with aiohttp.ClientSession() as session:
+        timeout = aiohttp.ClientTimeout(total=30)  # 30秒超时
+        async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url, headers=headers) as response:
                 response.raise_for_status()
+                
                 if return_json:
-                    return await response.json()
+                    try:
+                        data = await response.json()
+                        if not isinstance(data, dict):
+                            return {"code": -400, "message": "Invalid JSON format"}
+                        return data
+                    except aiohttp.ContentTypeError:
+                        return {"code": -400, "message": "Invalid content type"}
+                    except Exception as e:
+                        return {"code": -400, "message": f"JSON parse error: {str(e)}"}
                 else:
                     return await response.read()
     except aiohttp.ClientError as e:
-        return {"code": -400, "message": str(e)}
+        return {"code": -400, "message": f"Network error: {str(e)}"}
+    except asyncio.TimeoutError:
+        return {"code": -400, "message": "Request timeout"}
     
 # 添加检查Cookie是否有效的函数
 
@@ -396,6 +411,7 @@ async def bili_login(event=None):
     # 同时使用logger记录
     from astrbot.api import logger
     logger.info("B站登录二维码已显示在控制台")
+    logger.info(qr_text)
     
 
     # 保存二维码图片到指定路径
@@ -622,24 +638,39 @@ async def process_bili_video(url, download_flag=True, quality=80, use_login=True
         use_login: 是否使用登录状态下载，设为False则强制使用无Cookie方式
         event: 消息事件对象，用于发送提醒消息
     """
-    # 判断链接类型
-    if REG_B23.search(url):
-        video_info = await parse_b23(REG_B23.search(url).group())
-    elif REG_BV.search(url):
-        video_info = await parse_video(REG_BV.search(url).group())
-    elif REG_AV.search(url):
-        bvid = av2bv(REG_AV.search(url).group())
-        video_info = await parse_video(bvid) if bvid else None
-    else:
-        print("不支持的链接格式")
-        return
+    if not url or not isinstance(url, str):
+        log_callback("无效的URL参数")
+        return None
+        
+    video_info = None
+    
+    # 判断链接类型并解析
+    try:
+        if REG_B23.search(url):
+            video_info = await parse_b23(REG_B23.search(url).group())
+        elif REG_BV.search(url):
+            video_info = await parse_video(REG_BV.search(url).group())
+        elif REG_AV.search(url):
+            bvid = av2bv(REG_AV.search(url).group())
+            video_info = await parse_video(bvid) if bvid else None
+        else:
+            log_callback("不支持的链接格式")
+            return None
+    except Exception as e:
+        log_callback(f"解析链接时发生错误: {str(e)}")
+        return None
 
     if not video_info:
-        print("解析视频信息失败")
-        return
+        log_callback("解析视频信息失败")
+        return None
 
-    stats = video_info["stats"]
-    bvid = video_info["bvid"]
+    # 安全获取统计信息
+    stats = video_info.get("stats", {})
+    bvid = video_info.get("bvid")
+    
+    if not bvid:
+        log_callback("无法获取视频BV号")
+        return None
 
     # 检查本地是否已存在相同 bvid 的视频文件
     video_file = f"data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/{bvid}_output.mp4"
@@ -647,16 +678,16 @@ async def process_bili_video(url, download_flag=True, quality=80, use_login=True
         log_callback(f"本地已存在视频文件：{video_file}，跳过下载")
         return {
             "direct_url": None,
-            "title": video_info["title"],
-            "cover": video_info["cover"],
-            "duration": video_info["duration"],
-            "stats": video_info["stats"],
+            "title": video_info.get("title", "未知标题"),
+            "cover": video_info.get("cover", ""),
+            "duration": video_info.get("duration", 0),
+            "stats": stats,
             "video_path": video_file,
-            "view_count": stats["view"],
-            "like_count": stats["like"],
-            "danmaku_count": stats["danmaku"],
-            "coin_count": stats["coin"],
-            "favorite_count": stats["favorite"],
+            "view_count": stats.get("view", 0),
+            "like_count": stats.get("like", 0),
+            "danmaku_count": stats.get("danmaku", 0),
+            "coin_count": stats.get("coin", 0),
+            "favorite_count": stats.get("favorite", 0),
             "bvid": bvid,
         }
 

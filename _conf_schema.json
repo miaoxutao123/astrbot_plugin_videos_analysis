@@ -67,6 +67,18 @@
         "default": true,
         "hint" :"默认合并"
     },
+    "douyin_video_comprehend":{
+        "description": "抖音视频深度理解功能是否开启",
+        "type": "bool",
+        "default": false,
+        "hint": "实验性功能，会消耗大量token，默认关闭，开启后会将抖音视频和图片使用Gemini进行深度分析"
+    },
+    "show_progress_messages":{
+        "description": "是否显示进度提示信息",
+        "type": "bool",
+        "default": true,
+        "hint": "是否显示类似'正在理解视频内容，请稍后...'的进度提示信息"
+    },
     "url_video_comprehend":{
         "description": "分享链接视频分析功能是否开启",
         "type": "bool",

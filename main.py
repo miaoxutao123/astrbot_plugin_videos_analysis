@@ -20,7 +20,7 @@ from .xhs_get import xhs_parse
 from .gemini_content import process_audio_with_gemini, process_images_with_gemini, process_video_with_gemini
 from .videos_cliper import separate_audio_video, extract_frame
 
-@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.9","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
+@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.12","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -44,6 +44,10 @@ class hybird_videos_analysis(Star):
         self.bili_use_login = config.get("bili_use_login")
 
         self.xhs_reply_mode = config.get("xhs_reply_mode")
+        
+        # 抖音深度理解配置
+        self.douyin_video_comprehend = config.get("douyin_video_comprehend")
+        self.show_progress_messages = config.get("show_progress_messages")
 
     async def _send_file_if_needed(self, file_path: str) -> str:
         """Helper function to send file through NAP server if needed"""
@@ -218,6 +222,249 @@ class hybird_videos_analysis(Star):
         if self.delete_time > 0:
             delete_old_files(folder_path, self.delete_time)
 
+    async def _get_gemini_api_config(self):
+        """获取Gemini API配置的辅助函数"""
+        api_key = None
+        proxy_url = None
+
+        # 1. 优先尝试从框架的默认Provider获取
+        provider = self.context.provider_manager.curr_provider_inst
+        if provider and provider.meta().type == "googlegenai_chat_completion":
+            logger.info("检测到框架默认LLM为Gemini，将使用框架配置。")
+            api_key = provider.get_current_key()
+            # 获取代理URL，支持多种可能的属性名
+            proxy_url = getattr(provider, "api_base", None) or getattr(provider, "base_url", None)
+            if proxy_url:
+                logger.info(f"使用框架配置的代理地址：{proxy_url}")
+            else:
+                logger.info("框架配置中未找到代理地址，将使用官方API。")
+
+        # 2. 如果默认Provider不是Gemini，尝试查找其他Gemini Provider
+        if not api_key:
+            logger.info("默认Provider不是Gemini，搜索其他Provider...")
+            for provider_name, provider_inst in self.context.provider_manager.providers.items():
+                if provider_inst and provider_inst.meta().type == "googlegenai_chat_completion":
+                    logger.info(f"在Provider列表中找到Gemini配置：{provider_name}，将使用该配置。")
+                    api_key = provider_inst.get_current_key()
+                    proxy_url = getattr(provider_inst, "api_base", None) or getattr(provider_inst, "base_url", None)
+                    if proxy_url:
+                        logger.info(f"使用Provider {provider_name} 的代理地址：{proxy_url}")
+                    break
+
+        # 3. 如果框架中没有找到Gemini配置，则回退到插件自身配置
+        if not api_key:
+            logger.info("框架中未找到Gemini配置，回退到插件自身配置。")
+            api_key = self.gemini_api_key
+            proxy_url = self.gemini_base_url
+            if api_key:
+                logger.info("使用插件配置的API Key。")
+                if proxy_url:
+                    logger.info(f"使用插件配置的代理地址：{proxy_url}")
+                else:
+                    logger.info("插件配置中未设置代理地址，将使用官方API。")
+
+        return api_key, proxy_url
+
+    async def _send_llm_response(self, event, video_summary: str, platform: str = "抖音"):
+        """将视频摘要提交给框架LLM进行评价"""
+        if not video_summary:
+            return
+
+        # 获取当前对话和人格信息
+        curr_cid = await self.context.conversation_manager.get_curr_conversation_id(event.unified_msg_origin)
+        conversation = None
+        context = []
+        if curr_cid:
+            conversation = await self.context.conversation_manager.get_conversation(event.unified_msg_origin, curr_cid)
+            if conversation:
+                context = json.loads(conversation.history)
+
+        # 获取当前人格设定
+        provider = self.context.provider_manager.curr_provider_inst
+        current_persona = None
+        if provider and hasattr(provider, 'personality'):
+            current_persona = provider.personality
+        elif self.context.provider_manager.selected_default_persona:
+            current_persona = self.context.provider_manager.selected_default_persona
+
+        # 构造包含人格和视频摘要的提示
+        persona_prompt = ""
+        if current_persona and hasattr(current_persona, 'prompt'):
+            persona_prompt = f"请保持你的人格设定：{current_persona.prompt}\n\n"
+
+        final_prompt = f"{persona_prompt}我刚刚分析了这个{platform}视频的内容：\n\n{video_summary}\n\n请基于这个视频内容，结合你的人格特点，自然地发表你的看法或评论。不要说这是我转述给你的，请像你亲自观看了这个用户给你分享的来自{platform}的视频一样回应。"
+
+        yield event.request_llm(
+            prompt=final_prompt,
+            session_id=curr_cid,
+            contexts=context,
+            conversation=conversation
+        )
+
+    async def _process_douyin_comprehension(self, event, result, content_type: str, api_key: str, proxy_url: str):
+        """处理抖音视频/图片的深度理解"""
+        download_dir = "data/plugins/astrbot_plugin_videos_analysis/download_videos/dy"
+        os.makedirs(download_dir, exist_ok=True)
+        
+        media_urls = result.get("media_urls", [])
+        aweme_id = result.get("aweme_id", "unknown")
+        
+        if content_type == "image":
+            # 处理图片理解
+            await self._process_douyin_images_comprehension(event, media_urls, aweme_id, download_dir, api_key, proxy_url)
+        elif content_type in ["video", "multi_video"]:
+            # 处理视频理解
+            await self._process_douyin_videos_comprehension(event, media_urls, aweme_id, download_dir, api_key, proxy_url)
+
+    async def _process_douyin_images_comprehension(self, event, media_urls, aweme_id, download_dir, api_key, proxy_url):
+        """处理抖音图片的深度理解"""
+        if self.show_progress_messages:
+            yield event.plain_result(f"检测到 {len(media_urls)} 张图片，正在下载并分析...")
+        
+        # 下载所有图片
+        image_paths = []
+        for i, media_url in enumerate(media_urls):
+            local_filename = f"{download_dir}/{aweme_id}_{i}.jpg"
+            
+            logger.info(f"开始下载图片 {i+1}: {media_url}")
+            success = await download(media_url, local_filename, self.doyin_cookie)
+            
+            if success and os.path.exists(local_filename):
+                image_paths.append(local_filename)
+                logger.info(f"图片 {i+1} 下载成功")
+            else:
+                logger.warning(f"图片 {i+1} 下载失败")
+        
+        if not image_paths:
+            yield event.plain_result("抱歉，无法下载图片进行分析。")
+            return
+        
+        # 使用Gemini分析图片
+        try:
+            if self.show_progress_messages:
+                yield event.plain_result("正在使用AI分析图片内容...")
+            
+            prompt = "请详细描述这些图片的内容，包括场景、人物、物品、文字信息和传达的核心信息。如果是多张图片，请分别描述每张图片的内容。"
+            image_response = await process_images_with_gemini(api_key, prompt, image_paths, proxy_url)
+            
+            if image_response and image_response[0]:
+                # 发送分析后的图片
+                for i, image_path in enumerate(image_paths):
+                    nap_file_path = await self._send_file_if_needed(image_path)
+                    yield event.chain_result([Comp.Image.fromFileSystem(nap_file_path)])
+                
+                # 发送AI分析结果
+                await self._send_llm_response(event, image_response[0], "抖音")
+            else:
+                yield event.plain_result("抱歉，我暂时无法理解这些图片的内容。")
+                
+        except Exception as e:
+            logger.error(f"处理抖音图片理解时发生错误: {e}")
+            yield event.plain_result("抱歉，分析图片时出现了问题。")
+
+    async def _process_douyin_videos_comprehension(self, event, media_urls, aweme_id, download_dir, api_key, proxy_url):
+        """处理抖音视频的深度理解"""
+        # 处理第一个视频（抖音通常是单个视频）
+        media_url = media_urls[0]
+        local_filename = f"{download_dir}/{aweme_id}.mp4"
+        
+        if self.show_progress_messages:
+            yield event.plain_result("正在下载视频进行分析...")
+        
+        logger.info(f"开始下载视频: {media_url}")
+        await download(media_url, local_filename, self.doyin_cookie)
+        
+        if not os.path.exists(local_filename):
+            yield event.plain_result("抱歉，无法下载视频进行分析。")
+            return
+        
+        try:
+            # 检查文件大小并选择策略
+            video_size_mb = os.path.getsize(local_filename) / (1024 * 1024)
+            video_summary = ""
+            
+            if video_size_mb > 30:
+                # --- 大视频处理流程 (音频+关键帧) ---
+                if self.show_progress_messages:
+                    yield event.plain_result(f"视频大小为 {video_size_mb:.2f}MB，采用音频+关键帧模式进行分析...")
+                
+                # a. 分离音视频
+                separated_files = await separate_audio_video(local_filename)
+                if not separated_files:
+                    yield event.plain_result("抱歉，我无法分离这个视频的音频和视频。")
+                    return
+                audio_path, video_only_path = separated_files
+                
+                # b. 分析音频获取描述和时间戳
+                description, timestamps, _ = await process_audio_with_gemini(api_key, audio_path, proxy_url)
+                if not description or not timestamps:
+                    yield event.plain_result("抱歉，我无法分析这个视频的音频内容。")
+                    return
+                
+                # c. 提取关键帧并记录时间戳
+                image_paths = []
+                ts_and_paths = []
+                for ts in timestamps:
+                    frame_path = await extract_frame(video_only_path, ts)
+                    if frame_path:
+                        image_paths.append(frame_path)
+                        ts_and_paths.append((ts, frame_path))
+                
+                if not image_paths:
+                    # 如果没有提取到关键帧，仅使用音频描述
+                    video_summary = description
+                else:
+                    # d. 结合音频描述和关键帧进行综合理解
+                    prompt = f"这是关于一个抖音视频的摘要和一些从该视频中提取的关键帧。视频摘要如下：\n\n{description}\n\n请结合摘要和这些关键帧，对整个视频内容进行一个全面、生动的总结。"
+                    summary_tuple = await process_images_with_gemini(api_key, prompt, image_paths, proxy_url)
+                    video_summary = summary_tuple[0] if summary_tuple else "无法生成最终摘要。"
+                
+                # 发送关键帧和时间戳给用户
+                if ts_and_paths:
+                    key_frames_nodes = Nodes([])
+                    key_frames_nodes.nodes.append(self._create_node(event, [Plain("以下是视频的关键时刻：")]))
+                    for ts, frame_path in ts_and_paths:
+                        nap_frame_path = await self._send_file_if_needed(frame_path)
+                        node_content = [
+                            Image.fromFileSystem(nap_frame_path),
+                            Plain(f"时间点: {ts}")
+                        ]
+                        key_frames_nodes.nodes.append(self._create_node(event, node_content))
+                    yield event.chain_result([key_frames_nodes])
+                    
+            else:
+                # --- 小视频处理流程 (直接上传) ---
+                if self.show_progress_messages:
+                    yield event.plain_result(f"视频大小为 {video_size_mb:.2f}MB，直接上传视频进行分析...")
+                
+                video_prompt = "请详细描述这个抖音视频的内容，包括场景、人物、动作、音乐、文字信息和传达的核心信息。"
+                video_response = await process_video_with_gemini(api_key, video_prompt, local_filename, proxy_url)
+                video_summary = video_response[0] if video_response and video_response[0] else "抱歉，我暂时无法理解这个视频内容。"
+            
+            # 发送原视频
+            nap_file_path = await self._send_file_if_needed(local_filename)
+            file_size_mb = os.path.getsize(local_filename) / (1024 * 1024)
+            
+            if file_size_mb > self.max_video_size:
+                yield event.chain_result([Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))])
+            else:
+                yield event.chain_result([Comp.Video.fromFileSystem(nap_file_path)])
+            
+            # 发送AI分析结果
+            if video_summary:
+                await self._send_llm_response(event, video_summary, "抖音")
+            else:
+                yield event.plain_result("抱歉，我无法理解这个视频的内容。")
+                
+        except Exception as e:
+            logger.error(f"处理抖音视频理解时发生错误: {e}")
+            yield event.plain_result("抱歉，分析视频时出现了问题。")
+        finally:
+            # 清理临时文件
+            if os.path.exists(local_filename):
+                os.remove(local_filename)
+                logger.info(f"已清理临时文件: {local_filename}")
+
 @filter.event_message_type(EventMessageType.ALL)
 async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
     """
@@ -233,7 +480,8 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
         return
 
     # 发送开始解析的提示
-    yield event.plain_result("正在解析抖音链接...")
+    if self.show_progress_messages:
+        yield event.plain_result("正在解析抖音链接...")
 
     parser = DouyinParser(cookie = cookie)
     result = await parser.parse(message_str)
@@ -248,12 +496,36 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
         yield event.plain_result("解析失败，无法识别内容类型。")
         return
 
+    # --- 抖音深度理解流程 ---
+    if self.douyin_video_comprehend and content_type in ["video", "multi_video", "image"]:
+        if self.show_progress_messages:
+            yield event.plain_result("我看到了一个抖音视频链接，让我来仔细分析一下内容，请稍等一下...")
+
+        # 获取Gemini API配置
+        api_key, proxy_url = await self._get_gemini_api_config()
+        
+        # 如果最终都没有配置，则提示用户
+        if not api_key:
+            yield event.plain_result("抱歉，我需要Gemini API才能理解视频，但是没有找到相关配置。\n请在框架中配置Gemini Provider或在插件配置中提供gemini_api_key。")
+            # 继续执行常规解析流程
+        else:
+            # 执行深度理解流程
+            try:
+                await self._process_douyin_comprehension(event, result, content_type, api_key, proxy_url)
+                return  # 深度理解完成后直接返回，不执行常规解析
+            except Exception as e:
+                logger.error(f"处理抖音视频理解时发生错误: {e}")
+                yield event.plain_result("抱歉，处理这个视频时出现了一些问题，将使用常规模式解析。")
+                # 继续执行常规解析流程
+
+    # --- 常规解析流程 ---
     # 发送下载提示
     media_count = len(result.get("media_urls", []))
-    if media_count > 1:
-        yield event.plain_result(f"检测到 {media_count} 个文件，正在下载...")
-    else:
-        yield event.plain_result("正在下载媒体文件...")
+    if self.show_progress_messages:
+        if media_count > 1:
+            yield event.plain_result(f"检测到 {media_count} 个文件，正在下载...")
+        else:
+            yield event.plain_result("正在下载媒体文件...")
 
     is_multi_part = False
     if "media_urls" in result and len(result["media_urls"]) != 1:
@@ -308,49 +580,13 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
 
     # --- 视频深度理解流程 ---
     if url_video_comprehend:
-        yield event.plain_result("我看到了一个B站视频链接，让我来仔细分析一下内容，请稍等一下...")
+        if self.show_progress_messages:
+            yield event.plain_result("我看到了一个B站视频链接，让我来仔细分析一下内容，请稍等一下...")
 
-        # --- 获取Gemini API配置 ---
-        api_key = None
-        proxy_url = None
+        # 获取Gemini API配置
+        api_key, proxy_url = await self._get_gemini_api_config()
 
-        # 1. 优先尝试从框架的默认Provider获取
-        provider = self.context.provider_manager.curr_provider_inst
-        if provider and provider.meta().type == "googlegenai_chat_completion":
-            logger.info("检测到框架默认LLM为Gemini，将使用框架配置。")
-            api_key = provider.get_current_key()
-            # 获取代理URL，支持多种可能的属性名
-            proxy_url = getattr(provider, "api_base", None) or getattr(provider, "base_url", None)
-            if proxy_url:
-                logger.info(f"使用框架配置的代理地址：{proxy_url}")
-            else:
-                logger.info("框架配置中未找到代理地址，将使用官方API。")
-
-        # 2. 如果默认Provider不是Gemini，尝试查找其他Gemini Provider
-        if not api_key:
-            logger.info("默认Provider不是Gemini，搜索其他Provider...")
-            for provider_name, provider_inst in self.context.provider_manager.providers.items():
-                if provider_inst and provider_inst.meta().type == "googlegenai_chat_completion":
-                    logger.info(f"在Provider列表中找到Gemini配置：{provider_name}，将使用该配置。")
-                    api_key = provider_inst.get_current_key()
-                    proxy_url = getattr(provider_inst, "api_base", None) or getattr(provider_inst, "base_url", None)
-                    if proxy_url:
-                        logger.info(f"使用Provider {provider_name} 的代理地址：{proxy_url}")
-                    break
-
-        # 3. 如果框架中没有找到Gemini配置，则回退到插件自身配置
-        if not api_key:
-            logger.info("框架中未找到Gemini配置，回退到插件自身配置。")
-            api_key = gemini_api_key
-            proxy_url = gemini_base_url
-            if api_key:
-                logger.info("使用插件配置的API Key。")
-                if proxy_url:
-                    logger.info(f"使用插件配置的代理地址：{proxy_url}")
-                else:
-                    logger.info("插件配置中未设置代理地址，将使用官方API。")
-
-        # 4. 如果最终都没有配置，则提示用户
+        # 如果最终都没有配置，则提示用户
         if not api_key:
             yield event.plain_result("抱歉，我需要Gemini API才能理解视频，但是没有找到相关配置。\n请在框架中配置Gemini Provider或在插件配置中提供gemini_api_key。")
             return
@@ -373,7 +609,8 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
 
             if video_size_mb > 30:
                 # --- 大视频处理流程 (音频+关键帧) ---
-                yield event.plain_result(f"视频大小为 {video_size_mb:.2f}MB，采用音频+关键帧模式进行分析...")
+                if self.show_progress_messages:
+                    yield event.plain_result(f"视频大小为 {video_size_mb:.2f}MB，采用音频+关键帧模式进行分析...")
 
                 # a. 分离音视频
                 separated_files = await separate_audio_video(video_path)
@@ -422,43 +659,15 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
 
             else:
                 # --- 小视频处理流程 (直接上传) ---
-                yield event.plain_result(f"视频大小为 {video_size_mb:.2f}MB，直接上传视频进行分析...")
+                if self.show_progress_messages:
+                    yield event.plain_result(f"视频大小为 {video_size_mb:.2f}MB，直接上传视频进行分析...")
                 video_prompt = "请详细描述这个视频的内容，包括场景、人物、动作和传达的核心信息。"
                 video_response = await process_video_with_gemini(api_key, video_prompt, video_path, proxy_url)
                 video_summary = video_response[0] if video_response and video_response[0] else "抱歉，我暂时无法理解这个视频内容。"
 
             # 3. 将摘要提交给框架LLM进行评价
             if video_summary:
-                # 获取当前对话和人格信息
-                curr_cid = await self.context.conversation_manager.get_curr_conversation_id(event.unified_msg_origin)
-                conversation = None
-                context = []
-                if curr_cid:
-                    conversation = await self.context.conversation_manager.get_conversation(event.unified_msg_origin, curr_cid)
-                    if conversation:
-                        context = json.loads(conversation.history)
-
-                # 获取当前人格设定
-                provider = self.context.provider_manager.curr_provider_inst
-                current_persona = None
-                if provider and hasattr(provider, 'personality'):
-                    current_persona = provider.personality
-                elif self.context.provider_manager.selected_default_persona:
-                    current_persona = self.context.provider_manager.selected_default_persona
-
-                # 构造包含人格和视频摘要的提示
-                persona_prompt = ""
-                if current_persona and hasattr(current_persona, 'prompt'):
-                    persona_prompt = f"请保持你的人格设定：{current_persona.prompt}\n\n"
-
-                final_prompt = f"{persona_prompt}我刚刚分析了这个B站视频的内容：\n\n{video_summary}\n\n请基于这个视频内容，结合你的人格特点，自然地发表你的看法或评论。不要说这是我转述给你的，请像你亲自观看了这个用户给你分享的来自bilibili的视频一样回应。"
-
-                yield event.request_llm(
-                    prompt=final_prompt,
-                    session_id=curr_cid,
-                    contexts=context,
-                    conversation=conversation
-                )
+                await self._send_llm_response(event, video_summary, "B站")
             else:
                 yield event.plain_result("抱歉，我无法理解这个视频的内容。")
 
@@ -489,7 +698,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
         if file_path and os.path.exists(file_path):
             nap_file_path = await send_file(file_path, HOST=self.nap_server_address, PORT=self.nap_server_port) if self.nap_server_address != "localhost" else file_path
             file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-            if file_size_mb > 200:
+            if file_size_mb > 100:
                 media_component = Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))
             else:
                 media_component = Comp.Video.fromFileSystem(path = nap_file_path)
@@ -535,19 +744,10 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                 if zhuanfa:
                     # 合并转发模式，但视频单独发送
                     yield event.chain_result([Comp.Plain(info_text)])
-                    if file_size_mb <= 100:
-                        content = [Comp.Video.fromFileSystem(path = nap_file_path)]
-                    else:
-                        content = [Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))]
-                    yield event.chain_result(content)
+                    yield event.chain_result([media_component])
                 else:
                     # 分别发送
-                    yield event.chain_result([Comp.Plain(info_text)])
-                    if file_size_mb <= 100:
-                        content = [Comp.Video.fromFileSystem(path = nap_file_path)]
-                    else:
-                        content = [Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))]
-                    yield event.chain_result(content)
+                    yield event.chain_result([media_component])
             else:
                 yield event.chain_result([Comp.Plain(info_text)])
         elif reply_mode == 3: # 完整
@@ -562,11 +762,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                 else:
                     yield event.chain_result([Comp.Plain("封面图片获取失败\n" + info_text)])
                 # 视频单独发送
-                if file_size_mb <= 100:
-                        content = [Comp.Video.fromFileSystem(path = nap_file_path)]
-                else:
-                        content = [Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))]
-                yield event.chain_result(content)
+                yield event.chain_result([media_component])
             else:
                 # 分别发送所有内容
                 if cover_url:
@@ -574,18 +770,11 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                 else:
                     yield event.chain_result([Comp.Plain("封面图片获取失败")])
                 yield event.chain_result([Comp.Plain(info_text)])
-                if file_size_mb <= 100:
-                        content = [Comp.Video.fromFileSystem(path = nap_file_path)]
-                else:
-                        content = [Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))]
-                yield event.chain_result(content)
+                yield event.chain_result([media_component])
         elif reply_mode == 4: # 仅视频
             if media_component:
-                if file_size_mb <= 100:
-                        content = [Comp.Video.fromFileSystem(path = nap_file_path)]
-                else:
-                        content = [Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))]
-                yield event.chain_result(content)
+                yield event.chain_result([media_component])
+
 # @filter.event_message_type(EventMessageType.ALL)
 # async def auto_parse_ks(self, event: AstrMessageEvent, *args, **kwargs):
 #     """

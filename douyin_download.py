@@ -3,10 +3,20 @@ import aiohttp
 import re
 import os
 import aiofiles
+from .douyin_scraper.cookie_extractor import extract_and_format_cookies
 
 def clean_cookie(cookie):
-    # 使用正则表达式移除无法编码的字符
-    return re.sub(r'[^\x00-\x7F]+', '', cookie)
+    """
+    清理cookie字符串，移除无法编码的字符并格式化抖音cookie
+    """
+    if not cookie:
+        return ""
+    
+    # 首先格式化抖音cookie
+    formatted_cookie = extract_and_format_cookies(cookie)
+    
+    # 然后移除无法编码的字符
+    return re.sub(r'[^\x00-\x7F]+', '', formatted_cookie)
 
 async def get_location_from_url(url, cookie=None):
     """

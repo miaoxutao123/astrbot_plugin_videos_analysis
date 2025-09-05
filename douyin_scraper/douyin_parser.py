@@ -5,13 +5,15 @@ import httpx
 from urllib.parse import urlencode
 from .crawlers.douyin.web.utils import AwemeIdFetcher, BogusManager
 from .crawlers.douyin.web.endpoints import DouyinAPIEndpoints
+from .cookie_extractor import extract_and_format_cookies
 
 class DouyinParser:
     """
     一个独立的抖音分享链接解析器。
     """
     def __init__(self, cookie: str):
-        self.cookie = cookie
+        # 使用cookie_extractor格式化cookie
+        self.cookie = extract_and_format_cookies(cookie) if cookie else ""
         self.id_fetcher = AwemeIdFetcher()
         self.user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36"
         self.headers = {
