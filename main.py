@@ -311,10 +311,12 @@ class hybird_videos_analysis(Star):
         
         if content_type == "image":
             # 处理图片理解
-            await self._process_douyin_images_comprehension(event, media_urls, aweme_id, download_dir, api_key, proxy_url)
+            async for response in self._process_douyin_images_comprehension(event, media_urls, aweme_id, download_dir, api_key, proxy_url):
+                yield response
         elif content_type in ["video", "multi_video"]:
             # 处理视频理解
-            await self._process_douyin_videos_comprehension(event, media_urls, aweme_id, download_dir, api_key, proxy_url)
+            async for response in self._process_douyin_videos_comprehension(event, media_urls, aweme_id, download_dir, api_key, proxy_url):
+                yield response
 
     async def _process_douyin_images_comprehension(self, event, media_urls, aweme_id, download_dir, api_key, proxy_url):
         """处理抖音图片的深度理解"""
@@ -511,7 +513,8 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
         else:
             # 执行深度理解流程
             try:
-                await self._process_douyin_comprehension(event, result, content_type, api_key, proxy_url)
+                async for response in self._process_douyin_comprehension(event, result, content_type, api_key, proxy_url):
+                    yield response
                 return  # 深度理解完成后直接返回，不执行常规解析
             except Exception as e:
                 logger.error(f"处理抖音视频理解时发生错误: {e}")
