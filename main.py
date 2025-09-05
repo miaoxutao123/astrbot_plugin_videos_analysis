@@ -297,12 +297,22 @@ class hybird_videos_analysis(Star):
 
             final_prompt = f"{persona_prompt}我刚刚分析了这个{platform}视频的内容：\n\n{video_summary}\n\n请基于这个视频内容，结合你的人格特点，自然地发表你的看法或评论。不要说这是我转述给你的，请像你亲自观看了这个用户给你分享的来自{platform}的视频一样回应。"
 
-            yield event.request_llm(
+            # event.request_llm 可能返回一个async generator，需要正确处理
+            llm_result = event.request_llm(
                 prompt=final_prompt,
                 session_id=curr_cid,
                 contexts=context,
                 conversation=conversation
             )
+            
+            # 检查是否是async generator
+            if hasattr(llm_result, '__aiter__'):
+                # 是async generator，逐个yield结果
+                async for result in llm_result:
+                    yield result
+            else:
+                # 不是async generator，直接yield
+                yield llm_result
 
     async def _process_douyin_comprehension(self, event, result, content_type: str, api_key: str, proxy_url: str):
         """处理抖音视频/图片的深度理解"""
@@ -1144,12 +1154,22 @@ async def process_direct_video(self, event: AstrMessageEvent, *args, **kwargs):
 
             final_prompt = f"{persona_prompt}我刚刚分析了这个B站视频的内容：\n\n{video_summary}\n\n请基于这个视频内容，结合你的人格特点，自然地发表你的看法或评论。不要说这是我转述给你的，请像你亲自观看了这个用户给你分享的视频一样回应。"
 
-            yield event.request_llm(
+            # event.request_llm 可能返回一个async generator，需要正确处理
+            llm_result = event.request_llm(
                 prompt=final_prompt,
                 session_id=curr_cid,
                 contexts=context,
                 conversation=conversation
             )
+            
+            # 检查是否是async generator
+            if hasattr(llm_result, '__aiter__'):
+                # 是async generator，逐个yield结果
+                async for result in llm_result:
+                    yield result
+            else:
+                # 不是async generator，直接yield
+                yield llm_result
         else:
             yield event.plain_result("未能生成视频摘要，无法进行评论。")
 
