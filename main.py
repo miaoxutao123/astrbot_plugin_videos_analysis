@@ -356,7 +356,8 @@ class hybird_videos_analysis(Star):
                     yield event.chain_result([Comp.Image.fromFileSystem(nap_file_path)])
                 
                 # 发送AI分析结果
-                await self._send_llm_response(event, image_response[0], "抖音")
+                async for response in self._send_llm_response(event, image_response[0], "抖音"):
+                    yield response
             else:
                 yield event.plain_result("抱歉，我暂时无法理解这些图片的内容。")
                 
@@ -454,7 +455,8 @@ class hybird_videos_analysis(Star):
             
             # 发送AI分析结果
             if video_summary:
-                await self._send_llm_response(event, video_summary, "抖音")
+                async for response in self._send_llm_response(event, video_summary, "抖音"):
+                    yield response
             else:
                 yield event.plain_result("抱歉，我无法理解这个视频的内容。")
                 
@@ -670,7 +672,8 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
 
             # 3. 将摘要提交给框架LLM进行评价
             if video_summary:
-                await self._send_llm_response(event, video_summary, "B站")
+                async for response in self._send_llm_response(event, video_summary, "B站"):
+                    yield response
             else:
                 yield event.plain_result("抱歉，我无法理解这个视频的内容。")
 
