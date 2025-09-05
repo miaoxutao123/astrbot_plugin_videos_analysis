@@ -266,40 +266,43 @@ class hybird_videos_analysis(Star):
         return api_key, proxy_url
 
     async def _send_llm_response(self, event, video_summary: str, platform: str = "抖音"):
-        """将视频摘要提交给框架LLM进行评价"""
+        """将视频摘要提交给框架LLM进行评价 - 异步生成器版本"""
         if not video_summary:
-            return
+            # 确保这是一个异步生成器，即使没有内容也不yield任何东西
+            # 这样async for循环会正常完成而不产生任何结果
+            if False:  # 永远不会执行，但确保Python识别这是生成器函数
+                yield  # pragma: no cover
+        else:
+            # 获取当前对话和人格信息
+            curr_cid = await self.context.conversation_manager.get_curr_conversation_id(event.unified_msg_origin)
+            conversation = None
+            context = []
+            if curr_cid:
+                conversation = await self.context.conversation_manager.get_conversation(event.unified_msg_origin, curr_cid)
+                if conversation:
+                    context = json.loads(conversation.history)
 
-        # 获取当前对话和人格信息
-        curr_cid = await self.context.conversation_manager.get_curr_conversation_id(event.unified_msg_origin)
-        conversation = None
-        context = []
-        if curr_cid:
-            conversation = await self.context.conversation_manager.get_conversation(event.unified_msg_origin, curr_cid)
-            if conversation:
-                context = json.loads(conversation.history)
+            # 获取当前人格设定
+            provider = self.context.provider_manager.curr_provider_inst
+            current_persona = None
+            if provider and hasattr(provider, 'personality'):
+                current_persona = provider.personality
+            elif self.context.provider_manager.selected_default_persona:
+                current_persona = self.context.provider_manager.selected_default_persona
 
-        # 获取当前人格设定
-        provider = self.context.provider_manager.curr_provider_inst
-        current_persona = None
-        if provider and hasattr(provider, 'personality'):
-            current_persona = provider.personality
-        elif self.context.provider_manager.selected_default_persona:
-            current_persona = self.context.provider_manager.selected_default_persona
+            # 构造包含人格和视频摘要的提示
+            persona_prompt = ""
+            if current_persona and hasattr(current_persona, 'prompt'):
+                persona_prompt = f"请保持你的人格设定：{current_persona.prompt}\n\n"
 
-        # 构造包含人格和视频摘要的提示
-        persona_prompt = ""
-        if current_persona and hasattr(current_persona, 'prompt'):
-            persona_prompt = f"请保持你的人格设定：{current_persona.prompt}\n\n"
+            final_prompt = f"{persona_prompt}我刚刚分析了这个{platform}视频的内容：\n\n{video_summary}\n\n请基于这个视频内容，结合你的人格特点，自然地发表你的看法或评论。不要说这是我转述给你的，请像你亲自观看了这个用户给你分享的来自{platform}的视频一样回应。"
 
-        final_prompt = f"{persona_prompt}我刚刚分析了这个{platform}视频的内容：\n\n{video_summary}\n\n请基于这个视频内容，结合你的人格特点，自然地发表你的看法或评论。不要说这是我转述给你的，请像你亲自观看了这个用户给你分享的来自{platform}的视频一样回应。"
-
-        yield event.request_llm(
-            prompt=final_prompt,
-            session_id=curr_cid,
-            contexts=context,
-            conversation=conversation
-        )
+            yield event.request_llm(
+                prompt=final_prompt,
+                session_id=curr_cid,
+                contexts=context,
+                conversation=conversation
+            )
 
     async def _process_douyin_comprehension(self, event, result, content_type: str, api_key: str, proxy_url: str):
         """处理抖音视频/图片的深度理解"""
