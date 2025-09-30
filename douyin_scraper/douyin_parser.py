@@ -63,7 +63,22 @@ class DouyinParser:
         async with httpx.AsyncClient() as client:
             response = await client.get(endpoint, headers=self.headers)
             response.raise_for_status()
-            return response.json()
+
+            # Check if response is empty
+            if not response.text:
+                raise ValueError(
+                    f"Empty response from Douyin API (aweme_id={aweme_id}). "
+                    "This may indicate rate limiting, invalid cookie, or blocked request."
+                )
+
+            try:
+                return response.json()
+            except json.JSONDecodeError as exc:
+                snippet = response.text[:200]
+                content_type = response.headers.get("Content-Type", "")
+                raise ValueError(
+                    f"Invalid JSON response from Douyin API (aweme_id={aweme_id}, content_type={content_type}, snippet={snippet})"
+                ) from exc
 
     def _process_data(self, raw_data: dict) -> dict:
         """

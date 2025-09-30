@@ -507,8 +507,26 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
         yield event.plain_result("抱歉，这个抖音链接我不能打开，请检查一下链接是否正确。")
         return
 
-    content_type = result["type"]
-    if content_type not in ["video", "image", "multi_video"]:
+    if isinstance(result, dict) and result.get("error"):
+        error_message = result.get("error", "Unknown error")
+        details = result.get("details")
+        aweme_id = result.get("aweme_id")
+        logger.error(
+            "Douyin parse failed: %s | details=%s | aweme_id=%s",
+            error_message,
+            details,
+            aweme_id,
+        )
+        message_lines = [f"抱歉，解析这个抖音链接失败：{error_message}"]
+        if aweme_id:
+            message_lines.append(f"关联作品ID：{aweme_id}")
+        if details and details != error_message:
+            message_lines.append(f"详细信息：{details}")
+        yield event.plain_result("\n".join(message_lines))
+        return
+
+    content_type = result.get("type")
+    if not content_type or content_type not in ["video", "image", "multi_video"]:
         logger.info("解析失败，请检查链接是否正确。无法判断链接内容类型。")
         yield event.plain_result("解析失败，无法识别内容类型。")
         return

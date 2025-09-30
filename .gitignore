@@ -1,0 +1,16 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Downloaded videos
+download_videos/
+
+# IDE
+.vscode/
+.idea/
+
+# Environment
+.env
+*.log
