@@ -7,9 +7,10 @@ __pycache__/
 # Downloaded videos
 download_videos/
 
-# IDE
+# IDE & Local settings
 .vscode/
 .idea/
+.claude/
 
 # Environment
 .env
