@@ -24,6 +24,7 @@ from .auto_delete import delete_old_files
 from .xhs_get import xhs_parse
 from .gemini_content import process_audio_with_gemini, process_images_with_gemini, process_video_with_gemini
 from .videos_cliper import separate_audio_video, extract_frame
+from astrbot.core.message.message_event_result import MessageChain
 
 @register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.12","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
@@ -58,9 +59,29 @@ class hybird_videos_analysis(Star):
         self.video_records = {}  # 存储视频解析记录 {video_id: {"parse_time": timestamp, "expire_time": timestamp, "bot_id": str}}
         self.video_records_lock = threading.Lock()  # 线程锁，保护共享资源
         self.max_retry_attempts = 5  # 最大重试次数
-        self.base_backoff_time = 1  # 基础退避时间（秒）
+        self.base_backoff_time = 5  # 基础退避时间（秒）
         self.max_backoff_time = 30  # 最大退避时间（秒）
         self.record_expire_time = 300  # 记录过期时间（秒）
+
+        # 外部Bot处理记录
+        self.external_handled_videos = {} # {video_id: timestamp}
+        self.external_handled_lock = threading.Lock()
+
+        self.external_handled_videos = {} # {video_id: timestamp}
+        self.external_handled_lock = threading.Lock()
+
+    async def _recall_msg(self, event: AstrMessageEvent, message_id: int):
+        """撤回消息"""
+        try:
+            if message_id and message_id != 0:
+                # 适配不同的平台适配器，这里主要针对 aiocqhttp (NapCat)
+                if hasattr(event, 'bot') and hasattr(event.bot, 'api'):
+                     await event.bot.api.call_action("delete_msg", message_id=message_id)
+                     logger.info(f"✅ 已自动撤回消息: {message_id}")
+                else:
+                    logger.warning("当前平台不支持或无法调用 delete_msg")
+        except Exception as e:
+            logger.error(f"撤回消息失败: {e}")
 
     async def _send_file_if_needed(self, file_path: str) -> str:
         """Helper function to send file through NAP server if needed"""
@@ -244,7 +265,6 @@ class hybird_videos_analysis(Star):
                     match = re.search(r'BV[a-zA-Z0-9]+', url)
                     return match.group(0) if match else None
                 elif "av" in url:
-                    match = re.search(r'av(\d+)', url)
                     return f"av{match.group(1)}" if match else None
                 else:
                     # 短链接，需要后续解析获取真实ID
@@ -256,13 +276,23 @@ class hybird_videos_analysis(Star):
                     return match.group(1)
                 # 如果无法从URL直接提取，返回None，需要在解析后获取
                 return None
+            elif platform == "xhs":
+                # 小红书ID提取
+                # 尝试从 discovery/item/ID 提取
+                match = re.search(r'discovery/item/([a-zA-Z0-9]+)', url)
+                if match:
+                    return match.group(1)
+                # 尝试从 xhslink.com/ID 提取 (作为临时ID)
+                match = re.search(r'xhslink\.com/([a-zA-Z0-9/]+)', url)
+                if match:
+                    return match.group(1).replace("/", "_") # 替换斜杠以作为合法ID
+                return None
             return None
         except Exception as e:
             logger.error(f"提取视频ID时发生错误: {e}")
             return None
 
     def _check_existing_parsing(self, video_id: str) -> Tuple[bool, Optional[Dict]]:
-        """检查视频是否已被其他bot解析"""
         with self.video_records_lock:
             if video_id in self.video_records:
                 record = self.video_records[video_id]
@@ -307,6 +337,17 @@ class hybird_videos_analysis(Star):
             for video_id in expired_keys:
                 del self.video_records[video_id]
                 logger.info(f"清理过期的视频记录: {video_id}")
+
+    def _cleanup_external_records(self) -> None:
+        """清理过期的外部Bot处理记录"""
+        with self.external_handled_lock:
+            current_time = time.time()
+            expired_keys = [
+                video_id for video_id, timestamp in self.external_handled_videos.items()
+                if current_time - timestamp > self.record_expire_time
+            ]
+            for video_id in expired_keys:
+                del self.external_handled_videos[video_id]
 
     async def _binary_exponential_backoff(self, video_id: str, bot_id: str) -> bool:
         """
@@ -648,6 +689,14 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
     # 检查是否已有其他bot发送了解析结果
     if self._detect_other_bot_response(message_str):
         logger.info("检测到其他bot已发送抖音解析结果，跳过解析")
+        
+        # 尝试提取视频ID并记录
+        video_id = self._extract_video_id(match.group(1), "douyin")
+        if video_id:
+            with self.external_handled_lock:
+                self.external_handled_videos[video_id] = time.time()
+                logger.info(f"记录外部Bot已处理抖音视频: {video_id}")
+        
         event.stop_event()  # 停止事件传播，避免其他插件继续处理
         return
 
@@ -704,6 +753,14 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
             event.stop_event()  # 停止事件传播，避免其他插件继续处理
             return
 
+        # 再次检查是否已被外部Bot处理（在等待退避期间可能发生）
+        with self.external_handled_lock:
+            if video_id in self.external_handled_videos:
+                logger.info(f"检测到外部Bot已处理视频 {video_id}，终止处理")
+                yield event.plain_result("检测到其他bot已完成处理，终止解析。")
+                event.stop_event()
+                return
+
     # --- 抖音深度理解流程 ---
     if self.douyin_video_comprehend and content_type in ["video", "multi_video", "image"]:
         if self.show_progress_messages:
@@ -741,27 +798,40 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
         is_multi_part = True
 
     try:
+        # 再次检查是否已被外部Bot处理（防止处理期间被抢答）
+        with self.external_handled_lock:
+            if video_id in self.external_handled_videos:
+                logger.info(f"检测到外部Bot已处理视频 {video_id}，终止处理")
+                yield event.plain_result("检测到其他bot已完成处理，终止解析。")
+                event.stop_event()
+                return
+
         # 处理多段内容
         if is_multi_part:
             ns = await self._process_multi_part_media(event, result, content_type)
-            yield event.chain_result([ns])
+            await event.send(MessageChain([ns]))
         else:
             # 处理单段内容
             content = await self._process_single_media(event, result, content_type)
             if content_type == "image":
                 logger.info(f"发送单段图片: {content[0]}")
-            yield event.chain_result(content)
+            
+            # 使用 event.send 发送
+            ret = await event.send(MessageChain(content))
+            
+            # 发送后再次检查是否冲突
+            with self.external_handled_lock:
+                if video_id in self.external_handled_videos:
+                    logger.info(f"发送后检测到外部Bot已处理视频 {video_id}，尝试撤回")
+                    if ret and hasattr(ret, 'message_id'):
+                        await self._recall_msg(event, ret.message_id)
+
     except Exception as e:
         logger.error(f"处理抖音媒体时发生错误: {e}")
         yield event.plain_result(f"处理媒体文件时发生错误: {str(e)}")
         return
     finally:
-        # 发送完成后，清理视频记录
-        if video_id:
-            with self.video_records_lock:
-                if video_id in self.video_records:
-                    del self.video_records[video_id]
-                    logger.info(f"抖音视频 {video_id} 解析完成，已清理记录")
+        pass
 
 @filter.event_message_type(EventMessageType.ALL, priority=10)
 async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
@@ -794,6 +864,14 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
     # 检查是否已有其他bot发送了解析结果
     if self._detect_other_bot_response(message_str):
         logger.info("检测到其他bot已发送B站解析结果，跳过解析")
+        
+        # 尝试提取视频ID并记录
+        video_id = self._extract_video_id(url, "bili")
+        if video_id:
+            with self.external_handled_lock:
+                self.external_handled_videos[video_id] = time.time()
+                logger.info(f"记录外部Bot已处理B站视频: {video_id}")
+
         event.stop_event()  # 停止事件传播，避免其他插件继续处理
         return
 
@@ -813,6 +891,14 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
             yield event.plain_result("检测到其他bot正在处理此视频，已放弃解析。")
             event.stop_event()  # 停止事件传播，避免其他插件继续处理
             return
+
+        # 再次检查是否已被外部Bot处理
+        with self.external_handled_lock:
+            if video_id in self.external_handled_videos:
+                logger.info(f"检测到外部Bot已处理视频 {video_id}，终止处理")
+                yield event.plain_result("检测到其他bot已完成处理，终止解析。")
+                event.stop_event()
+                return
 
     # --- 视频深度理解流程 ---
     if url_video_comprehend:
@@ -965,9 +1051,18 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
             logger.error(f"构建B站信息文本时出错: {e}")
             info_text = f"B站视频信息获取失败: {result.get('title', '未知视频')}"
 
+        # 再次检查是否已被外部Bot处理（防止处理期间被抢答）
+        with self.external_handled_lock:
+            if video_id in self.external_handled_videos:
+                logger.info(f"检测到外部Bot已处理视频 {video_id}，终止处理")
+                yield event.plain_result("检测到其他bot已完成处理，终止解析。")
+                event.stop_event()
+                return
+
         # 根据回复模式构建响应，视频单独发送提高稳定性
+        send_chain = []
         if reply_mode == 0: # 纯文本
-            yield event.chain_result([Comp.Plain(info_text)])
+            send_chain = [Comp.Plain(info_text)]
         elif reply_mode == 1: # 带图片
             cover_url = result.get("cover")
             if cover_url:
@@ -976,24 +1071,24 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                     ns = Nodes([])
                     ns.nodes.append(self._create_node(event, [Comp.Image.fromURL(cover_url)]))
                     ns.nodes.append(self._create_node(event, [Comp.Plain(info_text)]))
-                    yield event.chain_result([ns])
+                    send_chain = [ns]
                 else:
                     # 分别发送
-                    yield event.chain_result([Comp.Image.fromURL(cover_url)])
-                    yield event.chain_result([Comp.Plain(info_text)])
+                    await event.send(MessageChain([Comp.Image.fromURL(cover_url)]))
+                    send_chain = [Comp.Plain(info_text)]
             else:
-                yield event.chain_result([Comp.Plain("封面图片获取失败\n" + info_text)])
+                send_chain = [Comp.Plain("封面图片获取失败\n" + info_text)]
         elif reply_mode == 2: # 带视频
             if media_component:
                 if zhuanfa:
                     # 合并转发模式，但视频单独发送
-                    yield event.chain_result([Comp.Plain(info_text)])
-                    yield event.chain_result([media_component])
+                    await event.send(MessageChain([Comp.Plain(info_text)]))
+                    send_chain = [media_component]
                 else:
                     # 分别发送
-                    yield event.chain_result([media_component])
+                    send_chain = [media_component]
             else:
-                yield event.chain_result([Comp.Plain(info_text)])
+                send_chain = [Comp.Plain(info_text)]
         elif reply_mode == 3: # 完整
             cover_url = result.get("cover")
             if zhuanfa:
@@ -1002,29 +1097,43 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                     ns = Nodes([])
                     ns.nodes.append(self._create_node(event, [Comp.Image.fromURL(cover_url)]))
                     ns.nodes.append(self._create_node(event, [Comp.Plain(info_text)]))
-                    yield event.chain_result([ns])
+                    await event.send(MessageChain([ns]))
                 else:
-                    yield event.chain_result([Comp.Plain("封面图片获取失败\n" + info_text)])
+                    await event.send(MessageChain([Comp.Plain("封面图片获取失败\n" + info_text)]))
                 # 视频单独发送
-                yield event.chain_result([media_component])
+                send_chain = [media_component]
             else:
                 # 分别发送所有内容
                 if cover_url:
-                    yield event.chain_result([Comp.Image.fromURL(cover_url)])
+                    await event.send(MessageChain([Comp.Image.fromURL(cover_url)]))
                 else:
-                    yield event.chain_result([Comp.Plain("封面图片获取失败")])
-                yield event.chain_result([Comp.Plain(info_text)])
-                yield event.chain_result([media_component])
+                    await event.send(MessageChain([Comp.Plain("封面图片获取失败")]))
+                await event.send(MessageChain([Comp.Plain(info_text)]))
+                send_chain = [media_component]
         elif reply_mode == 4: # 仅视频
             if media_component:
-                yield event.chain_result([media_component])
-    
+                send_chain = [media_component]
+        
+        # 发送最终消息并检查撤回
+        if send_chain:
+            try:
+                ret = await event.send(MessageChain(send_chain))
+                
+                # 发送后再次检查是否冲突
+                with self.external_handled_lock:
+                    if video_id in self.external_handled_videos:
+                        logger.info(f"发送后检测到外部Bot已处理视频 {video_id}，尝试撤回")
+                        if ret and hasattr(ret, 'message_id'):
+                            await self._recall_msg(event, ret.message_id)
+            except Exception as e:
+                logger.error(f"发送消息或撤回失败: {e}")
+
     # 发送完成后，清理视频记录
-    if 'video_id' in locals() and video_id:
-        with self.video_records_lock:
-            if video_id in self.video_records:
-                del self.video_records[video_id]
-                logger.info(f"B站视频 {video_id} 解析完成，已清理记录")
+    # if 'video_id' in locals() and video_id:
+    #     with self.video_records_lock:
+    #         if video_id in self.video_records:
+    #             del self.video_records[video_id]
+    #             logger.info(f"B站视频 {video_id} 解析完成，已清理记录")
 
 # @filter.event_message_type(EventMessageType.ALL)
 # async def auto_parse_ks(self, event: AstrMessageEvent, *args, **kwargs):
@@ -1055,6 +1164,55 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
 
     if contains_reply:
         return
+
+    # 检查是否已有其他bot发送了解析结果
+    if self._detect_other_bot_response(message_str):
+        logger.info("检测到其他bot已发送小红书解析结果，跳过解析")
+        
+        # 尝试提取ID并记录
+        url_for_id = ""
+        if image_match:
+            url_for_id = image_match.group(1)
+        elif video_match:
+            url_for_id = video_match.group(1)
+            
+        xhs_id = self._extract_video_id(url_for_id, "xhs")
+        if xhs_id:
+            with self.external_handled_lock:
+                self.external_handled_videos[xhs_id] = time.time()
+                logger.info(f"记录外部Bot已处理小红书内容: {xhs_id}")
+        
+        event.stop_event()
+        return
+
+    # 提取ID并进行退避
+    url_for_id = ""
+    if image_match:
+        url_for_id = image_match.group(1)
+    elif video_match:
+        url_for_id = video_match.group(1)
+        
+    xhs_id = self._extract_video_id(url_for_id, "xhs")
+    
+    if xhs_id:
+        # 获取当前bot ID
+        bot_id = str(event.get_self_id())
+        
+        # 应用二进制退避算法
+        can_continue = await self._binary_exponential_backoff(xhs_id, bot_id)
+        if not can_continue:
+            # 放弃解析
+            yield event.plain_result("检测到其他bot正在处理此小红书内容，已放弃解析。")
+            event.stop_event()
+            return
+
+        # 再次检查是否已被外部Bot处理
+        with self.external_handled_lock:
+            if xhs_id in self.external_handled_videos:
+                logger.info(f"检测到外部Bot已处理小红书内容 {xhs_id}，终止处理")
+                yield event.plain_result("检测到其他bot已完成处理，终止解析。")
+                event.stop_event()
+                return
 
     # 处理图片链接
     if image_match:
@@ -1087,7 +1245,12 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
                 yield event.chain_result([Image.fromURL(image_url)])
 
         if replay_mode:
-            yield event.chain_result([ns])
+            ret = await event.send(MessageChain([ns]))
+            # 检查撤回
+            with self.external_handled_lock:
+                if xhs_id and xhs_id in self.external_handled_videos:
+                    if ret and hasattr(ret, 'message_id'):
+                        await self._recall_msg(event, ret.message_id)
 
     # 处理视频链接
     if video_match:
@@ -1141,7 +1304,12 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
                     yield event.chain_result([Image.fromURL(image_url)])
 
         if replay_mode:
-            yield event.chain_result([ns])
+            ret = await event.send(MessageChain([ns]))
+            # 检查撤回
+            with self.external_handled_lock:
+                if xhs_id and xhs_id in self.external_handled_videos:
+                    if ret and hasattr(ret, 'message_id'):
+                        await self._recall_msg(event, ret.message_id)
 
 @filter.event_message_type(EventMessageType.ALL, priority=10)
 async def auto_parse_mcmod(self, event: AstrMessageEvent, *args, **kwargs):
