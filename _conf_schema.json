@@ -100,5 +100,11 @@
         "description": "Gemini API Key",
         "type": "string",
         "default": ""
+    },
+    "debounce_time":{
+        "description": "防抖时间（单位秒）",
+        "type": "int",
+        "default": 5,
+        "hint" :"防止用户短时间内多次发送相同链接触发多次解析，默认5秒内相同链接只解析一次，设置为0则关闭防抖功能"
     }
 }
