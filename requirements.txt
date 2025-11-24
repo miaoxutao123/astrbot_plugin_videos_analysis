@@ -24,3 +24,4 @@ gmssl==3.2.2
 rich
 browser-cookie3==0.19.1
 importlib_resources==6.4.0
+cachetools
