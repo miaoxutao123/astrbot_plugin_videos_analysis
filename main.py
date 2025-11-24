@@ -9,6 +9,11 @@ import json
 import os
 import httpx
 import aiofiles
+import time
+import asyncio
+import random
+import threading
+from typing import Dict, Optional, Tuple
 
 from .douyin_scraper.douyin_parser import DouyinParser
 from .mcmod_get import mcmod_parse
@@ -48,6 +53,14 @@ class hybird_videos_analysis(Star):
         # 抖音深度理解配置
         self.douyin_video_comprehend = config.get("douyin_video_comprehend")
         self.show_progress_messages = config.get("show_progress_messages")
+        
+        # 二进制退避算法相关配置
+        self.video_records = {}  # 存储视频解析记录 {video_id: {"parse_time": timestamp, "expire_time": timestamp, "bot_id": str}}
+        self.video_records_lock = threading.Lock()  # 线程锁，保护共享资源
+        self.max_retry_attempts = 5  # 最大重试次数
+        self.base_backoff_time = 1  # 基础退避时间（秒）
+        self.max_backoff_time = 30  # 最大退避时间（秒）
+        self.record_expire_time = 300  # 记录过期时间（秒）
 
     async def _send_file_if_needed(self, file_path: str) -> str:
         """Helper function to send file through NAP server if needed"""
@@ -221,6 +234,135 @@ class hybird_videos_analysis(Star):
         """Helper function to clean up old files if delete_time is configured"""
         if self.delete_time > 0:
             delete_old_files(folder_path, self.delete_time)
+
+    def _extract_video_id(self, url: str, platform: str) -> Optional[str]:
+        """从URL中提取视频ID"""
+        try:
+            if platform == "bili":
+                # B站视频ID提取
+                if "BV" in url:
+                    match = re.search(r'BV[a-zA-Z0-9]+', url)
+                    return match.group(0) if match else None
+                elif "av" in url:
+                    match = re.search(r'av(\d+)', url)
+                    return f"av{match.group(1)}" if match else None
+                else:
+                    # 短链接，需要后续解析获取真实ID
+                    return None
+            elif platform == "douyin":
+                # 抖音视频ID提取
+                match = re.search(r'aweme_id["\s:]+["\s]?([a-zA-Z0-9]+)', url)
+                if match:
+                    return match.group(1)
+                # 如果无法从URL直接提取，返回None，需要在解析后获取
+                return None
+            return None
+        except Exception as e:
+            logger.error(f"提取视频ID时发生错误: {e}")
+            return None
+
+    def _check_existing_parsing(self, video_id: str) -> Tuple[bool, Optional[Dict]]:
+        """检查视频是否已被其他bot解析"""
+        with self.video_records_lock:
+            if video_id in self.video_records:
+                record = self.video_records[video_id]
+                current_time = time.time()
+                
+                # 检查记录是否过期
+                if current_time > record.get("expire_time", 0):
+                    # 记录已过期，删除并返回False
+                    del self.video_records[video_id]
+                    return False, None
+                
+                # 记录未过期，说明已有bot在处理或已处理
+                return True, record
+            
+            return False, None
+
+    def _record_video_parsing(self, video_id: str, bot_id: str) -> None:
+        """记录视频解析开始"""
+        with self.video_records_lock:
+            current_time = time.time()
+            self.video_records[video_id] = {
+                "parse_time": current_time,
+                "expire_time": current_time + self.record_expire_time,
+                "bot_id": bot_id
+            }
+
+    def _update_video_expire_time(self, video_id: str) -> None:
+        """更新视频记录的失效时间"""
+        with self.video_records_lock:
+            if video_id in self.video_records:
+                current_time = time.time()
+                self.video_records[video_id]["expire_time"] = current_time + self.record_expire_time
+
+    def _cleanup_expired_records(self) -> None:
+        """清理过期的视频记录"""
+        with self.video_records_lock:
+            current_time = time.time()
+            expired_keys = [
+                video_id for video_id, record in self.video_records.items()
+                if current_time > record.get("expire_time", 0)
+            ]
+            for video_id in expired_keys:
+                del self.video_records[video_id]
+                logger.info(f"清理过期的视频记录: {video_id}")
+
+    async def _binary_exponential_backoff(self, video_id: str, bot_id: str) -> bool:
+        """
+        二进制指数退避算法
+        返回True表示可以继续解析，False表示应该放弃解析
+        """
+        for attempt in range(self.max_retry_attempts):
+            # 检查是否已有其他bot完成解析
+            is_parsed, record = self._check_existing_parsing(video_id)
+            
+            if not is_parsed:
+                # 没有其他bot在处理，记录当前bot开始处理
+                self._record_video_parsing(video_id, bot_id)
+                logger.info(f"Bot {bot_id} 开始解析视频 {video_id}")
+                return True
+            
+            # 检查是否是当前bot的记录
+            if record and record.get("bot_id") == bot_id:
+                # 是当前bot的记录，更新失效时间并继续
+                self._update_video_expire_time(video_id)
+                logger.info(f"Bot {bot_id} 继续解析视频 {video_id}")
+                return True
+            
+            # 有其他bot在处理，计算退避时间
+            backoff_time = min(
+                self.base_backoff_time * (2 ** attempt) + random.uniform(0, 1),
+                self.max_backoff_time
+            )
+            
+            logger.info(f"Bot {bot_id} 检测到视频 {video_id} 正在被其他bot处理，等待 {backoff_time:.2f} 秒后重试 (尝试 {attempt + 1}/{self.max_retry_attempts})")
+            
+            # 等待退避时间
+            await asyncio.sleep(backoff_time)
+            
+            # 清理过期记录
+            self._cleanup_expired_records()
+        
+        # 超过最大重试次数，放弃解析
+        logger.warning(f"Bot {bot_id} 放弃解析视频 {video_id}，超过最大重试次数")
+        return False
+
+    def _detect_other_bot_response(self, message_content: str) -> bool:
+        """检测消息中是否包含其他bot的解析响应"""
+        # 检查是否包含"原始链接:https"等特征
+        patterns = [
+            r"原始链接\s*:\s*https?://",
+            r"原链接\s*:\s*https?://",
+            r"视频链接\s*:\s*https?://",
+            r"source\s*:\s*https?://",
+            r"🧷\s*.*https?://",
+        ]
+        
+        for pattern in patterns:
+            if re.search(pattern, message_content, re.IGNORECASE):
+                return True
+        return False
 
     async def _get_gemini_api_config(self):
         """获取Gemini API配置的辅助函数"""
@@ -481,8 +623,15 @@ class hybird_videos_analysis(Star):
             if os.path.exists(local_filename):
                 os.remove(local_filename)
                 logger.info(f"已清理临时文件: {local_filename}")
+            
+            # 清理视频记录
+            if aweme_id:
+                with self.video_records_lock:
+                    if aweme_id in self.video_records:
+                        del self.video_records[aweme_id]
+                        logger.info(f"抖音视频 {aweme_id} 深度理解完成，已清理记录")
 
-@filter.event_message_type(EventMessageType.ALL)
+@filter.event_message_type(EventMessageType.ALL, priority=10)
 async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
     """
     自动检测消息中是否包含抖音分享链接，并解析。
@@ -494,6 +643,12 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
     await self._cleanup_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/dy")
 
     if not match:
+        return
+
+    # 检查是否已有其他bot发送了解析结果
+    if self._detect_other_bot_response(message_str):
+        logger.info("检测到其他bot已发送抖音解析结果，跳过解析")
+        event.stop_event()  # 停止事件传播，避免其他插件继续处理
         return
 
     # 发送开始解析的提示
@@ -530,6 +685,24 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
         logger.info("解析失败，请检查链接是否正确。无法判断链接内容类型。")
         yield event.plain_result("解析失败，无法识别内容类型。")
         return
+
+    # 获取视频ID并应用二进制退避算法
+    video_id = result.get("aweme_id", "")
+    if not video_id:
+        # 如果无法从解析结果获取ID，尝试从URL提取
+        video_id = self._extract_video_id(match.group(1), "douyin")
+    
+    if video_id:
+        # 获取当前bot ID
+        bot_id = str(event.get_self_id())
+        
+        # 应用二进制退避算法
+        can_continue = await self._binary_exponential_backoff(video_id, bot_id)
+        if not can_continue:
+            # 放弃解析
+            yield event.plain_result("检测到其他bot正在处理此视频，已放弃解析。")
+            event.stop_event()  # 停止事件传播，避免其他插件继续处理
+            return
 
     # --- 抖音深度理解流程 ---
     if self.douyin_video_comprehend and content_type in ["video", "multi_video", "image"]:
@@ -582,8 +755,15 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
         logger.error(f"处理抖音媒体时发生错误: {e}")
         yield event.plain_result(f"处理媒体文件时发生错误: {str(e)}")
         return
+    finally:
+        # 发送完成后，清理视频记录
+        if video_id:
+            with self.video_records_lock:
+                if video_id in self.video_records:
+                    del self.video_records[video_id]
+                    logger.info(f"抖音视频 {video_id} 解析完成，已清理记录")
 
-@filter.event_message_type(EventMessageType.ALL)
+@filter.event_message_type(EventMessageType.ALL, priority=10)
 async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
     """
     自动检测消息中是否包含bili分享链接，并根据配置进行解析或深度理解。
@@ -611,8 +791,28 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
     elif match_json:
         url = match_json.group(0).replace("\\\\", "\\").replace("\\/", "/")
 
+    # 检查是否已有其他bot发送了解析结果
+    if self._detect_other_bot_response(message_str):
+        logger.info("检测到其他bot已发送B站解析结果，跳过解析")
+        event.stop_event()  # 停止事件传播，避免其他插件继续处理
+        return
+
     # 删除过期文件
     await self._cleanup_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/")
+
+    # 获取视频ID并应用二进制退避算法
+    video_id = self._extract_video_id(url, "bili")
+    if video_id:
+        # 获取当前bot ID
+        bot_id = str(event.get_self_id())
+        
+        # 应用二进制退避算法
+        can_continue = await self._binary_exponential_backoff(video_id, bot_id)
+        if not can_continue:
+            # 放弃解析
+            yield event.plain_result("检测到其他bot正在处理此视频，已放弃解析。")
+            event.stop_event()  # 停止事件传播，避免其他插件继续处理
+            return
 
     # --- 视频深度理解流程 ---
     if url_video_comprehend:
@@ -717,6 +917,13 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                 # 之前这里会把整个bili文件夹删了，现在只删除本次下载的视频
                 os.remove(video_path)
                 logger.info(f"已清理临时文件: {video_path}")
+            
+            # 5. 清理视频记录
+            if 'video_id' in locals() and video_id:
+                with self.video_records_lock:
+                    if video_id in self.video_records:
+                        del self.video_records[video_id]
+                        logger.info(f"B站视频 {video_id} 深度理解完成，已清理记录")
         return # 结束函数，不执行后续的常规解析
 
     # --- 常规视频解析流程 (如果深度理解未开启) ---
@@ -811,6 +1018,13 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
         elif reply_mode == 4: # 仅视频
             if media_component:
                 yield event.chain_result([media_component])
+    
+    # 发送完成后，清理视频记录
+    if 'video_id' in locals() and video_id:
+        with self.video_records_lock:
+            if video_id in self.video_records:
+                del self.video_records[video_id]
+                logger.info(f"B站视频 {video_id} 解析完成，已清理记录")
 
 # @filter.event_message_type(EventMessageType.ALL)
 # async def auto_parse_ks(self, event: AstrMessageEvent, *args, **kwargs):
@@ -821,7 +1035,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
 #     message_str = event.message_str
 #     match = re.search(r"(https?://v\.k\.ua\.com/[a-zA-Z0-9_\-]+(?:-[a-zA-Z0-9_\-]+)?)", message_str)
 
-@filter.event_message_type(EventMessageType.ALL)
+@filter.event_message_type(EventMessageType.ALL, priority=10)
 async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
     """
     自动检测消息中是否包含小红书分享链接，并解析。
@@ -929,7 +1143,7 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
         if replay_mode:
             yield event.chain_result([ns])
 
-@filter.event_message_type(EventMessageType.ALL)
+@filter.event_message_type(EventMessageType.ALL, priority=10)
 async def auto_parse_mcmod(self, event: AstrMessageEvent, *args, **kwargs):
     """
     自动检测消息中是否包含mcmod分享链接，并解析。
@@ -987,7 +1201,7 @@ async def auto_parse_mcmod(self, event: AstrMessageEvent, *args, **kwargs):
 
     yield event.chain_result([ns])
 
-@filter.event_message_type(EventMessageType.ALL)
+@filter.event_message_type(EventMessageType.ALL, priority=10)
 async def process_direct_video(self, event: AstrMessageEvent, *args, **kwargs):
     """
     处理用户直接发送的视频消息进行理解
