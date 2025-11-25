@@ -675,8 +675,6 @@ class hybird_videos_analysis(Star):
                         del self.video_records[aweme_id]
                         logger.info(f"抖音视频 {aweme_id} 深度理解完成，已清理记录")
 
-@filter.event_message_type(EventMessageType.ALL, priority=10)
-
     def _debounce_check(self, link: str) -> bool:
         """检查是否在防抖时间内已经处理过相同链接
 
@@ -693,6 +691,8 @@ class hybird_videos_analysis(Star):
         # 记录这个链接（TTLCache 会自动在 ttl 后过期）
         self.cache[link] = True
         return False
+
+
 @filter.event_message_type(EventMessageType.ALL)
 async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
     """
