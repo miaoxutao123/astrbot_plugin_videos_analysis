@@ -712,7 +712,7 @@ class hybird_videos_analysis(Star):
             logger.debug(f"已记录解析成功的链接: {link}")
 
     def _should_skip_parsing(self, link: str) -> bool:
-        """检查是否应该跳过解析（只检查不记录）
+        """检查是否应该跳过解析（先检查后记录）
 
         Args:
             link: 待检查的链接
@@ -725,7 +725,13 @@ class hybird_videos_analysis(Star):
         if not self.debounce_enabled or not self.cache:
             return False  # 防抖功能关闭
 
-        return link in self.cache
+        # 检查是否已在缓存中
+        if link in self.cache:
+            return True  # 在防抖时间内已处理过，跳过
+
+        # 不在缓存中，先记录这个链接避免重复处理
+        self.cache[link] = True
+        return False
 
 
 @filter.event_message_type(EventMessageType.ALL)
@@ -743,7 +749,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
     # 提取匹配到的链接
     matched_link = match.group(0)
 
-    # 检查是否应该跳过解析（只检查已成功解析的链接）
+    # 检查是否应该跳过解析（先检查后记录）
     if self._should_skip_parsing(matched_link):
         logger.info("防抖时间内已处理过相同链接，跳过解析。")
         return
@@ -929,7 +935,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
     elif match_json:
         matched_link = match_json.group(0)
 
-    # 检查是否应该跳过解析（只检查已成功解析的链接）
+    # 检查是否应该跳过解析（先检查后记录）
     if matched_link and self._should_skip_parsing(matched_link):
         logger.info("防抖时间内已处理过相同链接，跳过解析。")
         return
@@ -1258,7 +1264,7 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
     elif video_match:
         matched_link = video_match.group(1)
 
-    # 检查是否应该跳过解析（只检查已成功解析的链接）
+    # 检查是否应该跳过解析（先检查后记录）
     if matched_link and self._should_skip_parsing(matched_link):
         logger.info("防抖时间内已处理过相同链接，跳过解析。")
         return
