@@ -14,6 +14,8 @@ import asyncio
 import random
 import threading
 from typing import Dict, Optional, Tuple
+from typing import Dict
+from cachetools import TTLCache
 
 from .douyin_scraper.douyin_parser import DouyinParser
 from .mcmod_get import mcmod_parse
@@ -26,7 +28,7 @@ from .gemini_content import process_audio_with_gemini, process_images_with_gemin
 from .videos_cliper import separate_audio_video, extract_frame
 from astrbot.core.message.message_event_result import MessageChain
 
-@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.12","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
+@register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.14","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context)
@@ -50,7 +52,6 @@ class hybird_videos_analysis(Star):
         self.bili_use_login = config.get("bili_use_login")
 
         self.xhs_reply_mode = config.get("xhs_reply_mode")
-        
         # 抖音深度理解配置
         self.douyin_video_comprehend = config.get("douyin_video_comprehend")
         self.show_progress_messages = config.get("show_progress_messages")
@@ -83,6 +84,8 @@ class hybird_videos_analysis(Star):
         except Exception as e:
             logger.error(f"撤回消息失败: {e}")
 
+        self.Debounce_time = config.get("debounce_time") or 60
+        self.cache = TTLCache(maxsize=1000, ttl=self.Debounce_time)
     async def _send_file_if_needed(self, file_path: str) -> str:
         """Helper function to send file through NAP server if needed"""
         if self.nap_server_address != "localhost":
@@ -501,10 +504,10 @@ class hybird_videos_analysis(Star):
         """处理抖音视频/图片的深度理解"""
         download_dir = "data/plugins/astrbot_plugin_videos_analysis/download_videos/dy"
         os.makedirs(download_dir, exist_ok=True)
-        
+
         media_urls = result.get("media_urls", [])
         aweme_id = result.get("aweme_id", "unknown")
-        
+
         if content_type == "image":
             # 处理图片理解
             async for response in self._process_douyin_images_comprehension(event, media_urls, aweme_id, download_dir, api_key, proxy_url):
@@ -518,15 +521,15 @@ class hybird_videos_analysis(Star):
         """处理抖音图片的深度理解"""
         if self.show_progress_messages:
             yield event.plain_result(f"检测到 {len(media_urls)} 张图片，正在下载并分析...")
-        
+
         # 下载所有图片
         image_paths = []
         for i, media_url in enumerate(media_urls):
             local_filename = f"{download_dir}/{aweme_id}_{i}.jpg"
-            
+
             logger.info(f"开始下载图片 {i+1}: {media_url}")
             success = await download(media_url, local_filename, self.doyin_cookie)
-            
+
             if success and os.path.exists(local_filename):
                 image_paths.append(local_filename)
                 logger.info(f"图片 {i+1} 下载成功")
@@ -566,7 +569,7 @@ class hybird_videos_analysis(Star):
         # 处理第一个视频（抖音通常是单个视频）
         media_url = media_urls[0]
         local_filename = f"{download_dir}/{aweme_id}.mp4"
-        
+
         if self.show_progress_messages:
             yield event.plain_result("正在下载视频进行分析...")
         
@@ -673,6 +676,24 @@ class hybird_videos_analysis(Star):
                         logger.info(f"抖音视频 {aweme_id} 深度理解完成，已清理记录")
 
 @filter.event_message_type(EventMessageType.ALL, priority=10)
+
+    def _debounce_check(self, link: str) -> bool:
+        """检查是否在防抖时间内已经处理过相同链接
+
+        Returns:
+            True: 链接已处理过，应跳过
+            False: 链接未处理过，可以继续
+        """
+        if self.Debounce_time <= 0:
+            return False  # 防抖功能关闭
+
+        if link in self.cache:
+            return True  # 在防抖时间内已处理过，跳过
+
+        # 记录这个链接（TTLCache 会自动在 ttl 后过期）
+        self.cache[link] = True
+        return False
+@filter.event_message_type(EventMessageType.ALL)
 async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
     """
     自动检测消息中是否包含抖音分享链接，并解析。
@@ -680,8 +701,6 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
     cookie = self.doyin_cookie
     message_str = event.message_str
     match = re.search(r"(https?://v\.douyin\.com/[a-zA-Z0-9_\-]+(?:-[a-zA-Z0-9_\-]+)?)", message_str)
-
-    await self._cleanup_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/dy")
 
     if not match:
         return
@@ -699,6 +718,13 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
         
         event.stop_event()  # 停止事件传播，避免其他插件继续处理
         return
+
+    # 防抖检查：传入实际匹配到的链接字符串
+    if self._debounce_check(match.group(0)):
+        logger.info("防抖时间内已处理过相同链接，跳过解析。")
+        return
+
+    await self._cleanup_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/dy")
 
     # 发送开始解析的提示
     if self.show_progress_messages:
@@ -853,6 +879,14 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
     match_plain = re.search(r"(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|BV1\w{9}|av\d+)", message_str)
 
     if not (match_plain or match_json):
+        return
+
+    # 防抖检查：传入实际匹配到的链接字符串
+    if match_json and self._debounce_check(match_json.group(0)):
+        logger.info("防抖时间内已处理过相同链接，跳过解析。")
+        return
+    if match_plain and self._debounce_check(match_plain.group(0)):
+        logger.info("防抖时间内已处理过相同链接，跳过解析。")
         return
 
     url = ""
@@ -1213,6 +1247,13 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
                 yield event.plain_result("检测到其他bot已完成处理，终止解析。")
                 event.stop_event()
                 return
+    # 防抖检查：传入实际匹配到的链接字符串
+    if image_match and self._debounce_check(image_match.group(0)):
+        logger.info("防抖时间内已处理过相同链接，跳过解析。")
+        return
+    if video_match and self._debounce_check(video_match.group(0)):
+        logger.info("防抖时间内已处理过相同链接，跳过解析。")
+        return
 
     # 处理图片链接
     if image_match:

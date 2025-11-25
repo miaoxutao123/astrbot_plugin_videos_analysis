@@ -1,6 +1,6 @@
 name: astrbot_plugin_videos_analysis # 这是你的插件的唯一识别名。
 desc: 多平台视频解析 + AI智能分析 # 插件简短描述
 help: 支持抖音/B站/小红书/MCMod解析，集成Gemini AI视频理解，本地下载稳定发送 # 插件的帮助信息
-version: v0.2.13
+version: v0.2.14
 author: 喵喵 # 作者
 repo: https://github.com/miaoxutao123/astrbot_plugin_videos_analysis # 插件的仓库地址
