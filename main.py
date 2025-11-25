@@ -922,8 +922,8 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
         return
 
     # 查找Bilibili链接
-    match_json = re.search(r"https:\\\\/\\\\/b23\.tv\\\\/[a-zA-Z0-9]+", message_obj_str)
-    match_plain = re.search(r"(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|BV1\w{9}|av\d+)", message_str)
+    match_json = re.search(r"https:\\\\/\\\\/(b23\.tv|www\.bilibili\.com)\\\\/[a-zA-Z0-9/]+", message_obj_str)
+    match_plain = re.search(r"(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|https?://www\.bilibili\.com/video/BV1\w{9}|https?://www\.bilibili\.com/video/av\d+|BV1\w{9}|av\d+)", message_str)
 
     if not (match_plain or match_json):
         return
