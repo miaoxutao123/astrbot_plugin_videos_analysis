@@ -1,15 +1,13 @@
 import asyncio
+import json
 import mimetypes
 import os
 import time
 from pathlib import Path
 from urllib.parse import urlparse
-from typing import List, Optional, Union
 
 import google.generativeai as genai
 import httpx
-import json
-from google.api_core.client_options import ClientOptions
 
 # 注意：此脚本需要安装 "google-generativeai" 和 "Pillow" 库。
 # 您可以使用以下命令安装：
@@ -18,11 +16,11 @@ from google.api_core.client_options import ClientOptions
 async def send_to_gemini_async(
     api_key: str,
     prompt: str,
-    image_paths: List[Union[str, Path]] = None,
-    video_path: Optional[Union[str, Path]] = None,
-    audio_path: Optional[Union[str, Path]] = None,
+    image_paths: list[str | Path] = None,
+    video_path: str | Path | None = None,
+    audio_path: str | Path | None = None,
     model_name: str = "gemini-2.5-flash",
-    reverse_proxy_url: Optional[str] = None,
+    reverse_proxy_url: str | None = None,
 ):
     """
     异步地将多模态提示（文本、图像、视频、音频）发送到Gemini API。
@@ -39,7 +37,7 @@ async def send_to_gemini_async(
 
     Returns:
         tuple[str, float]: 包含模型生成的文本响应和请求持续时间的元组。
-        
+
     Raises:
         FileNotFoundError: 如果提供的任何文件路径不存在。
         ValueError: 如果未提供image_paths、video_path或audio_path。
@@ -53,7 +51,7 @@ async def send_to_gemini_async(
         parsed_url = urlparse(reverse_proxy_url)
         # 重新构建不带路径的端点，例如 "http://my-proxy.com:8080"
         endpoint = f"{parsed_url.scheme}://{parsed_url.netloc}"
-        
+
         # 直接将端点作为字典传递给 client_options，并强制使用 "rest" 传输
         # 这会指示客户端将所有API请求直接发送到我们的HTTP代理。
         genai.configure(
@@ -67,7 +65,7 @@ async def send_to_gemini_async(
 
     # 准备内容部分
     content_parts = [prompt]
-    
+
     # 处理图像
     if image_paths:
         for image_path in image_paths:
@@ -84,13 +82,13 @@ async def send_to_gemini_async(
         path = Path(video_path)
         if not path.exists():
             raise FileNotFoundError(f"找不到视频文件: {path}")
-        
+
         print(f"正在上传文件: {path}...")
-        
+
         # 使用 httpx 手动上传文件以控制超时
         # 注意：使用正确的上传端点 `/upload/v1beta/files`
         upload_url = f"https://generativelanguage.googleapis.com/upload/v1beta/files?key={api_key}"
-        
+
         # 如果提供了反向代理，则构建代理的上传 URL
         if reverse_proxy_url:
             parsed_proxy = urlparse(reverse_proxy_url)
@@ -106,7 +104,7 @@ async def send_to_gemini_async(
                     mime_type, _ = mimetypes.guess_type(path)
                     if mime_type is None:
                         mime_type = "application/octet-stream"
-                    
+
                     # 构造一个符合 Google API 要求的 multipart/form-data 请求
                     # Part 1: JSON metadata
                     metadata = {"file": {"display_name": file_name}}
@@ -115,15 +113,15 @@ async def send_to_gemini_async(
                         "json": (None, json.dumps(metadata), "application/json"),
                         "file": (file_name, f, mime_type),
                     }
-                    
+
                     # 设置一个较长的超时时间，例如 10 分钟 (600 秒)
                     response = await client.post(upload_url, files=files, timeout=600.0)
-                    
+
                     response.raise_for_status()
-                    
+
                     # 现在响应应该是包含文件元数据的正确JSON
                     uploaded_file_data = response.json()
-                    
+
                     # 从 "file" 键中提取元数据
                     file_info = uploaded_file_data.get("file")
                     if not file_info or "name" not in file_info:
@@ -136,7 +134,7 @@ async def send_to_gemini_async(
                 raise ConnectionError(f"文件上传期间发生网络错误: {e}")
             except Exception as e:
                 raise Exception(f"文件上传失败: {e}")
-        
+
         # 等待文件处理完成
         while video_file.state.name == "PROCESSING":
             print(".", end="", flush=True)
@@ -145,7 +143,7 @@ async def send_to_gemini_async(
 
         if video_file.state.name == "FAILED":
             raise ValueError(f"视频文件处理失败: {video_file.name}")
-            
+
         content_parts.append(video_file)
 
     # 处理音频
@@ -174,14 +172,14 @@ async def send_to_gemini_async(
     else:
         # 在默认情况下，使用异步方法
         response = await model.generate_content_async(content_parts, stream=False)
-        
+
     end_time = time.monotonic()
     duration = end_time - start_time
-    
+
     return response.text, duration
 
 
-async def process_video_with_gemini(api_key: str, prompt: str, video_path: str, reverse_proxy_url: Optional[str] = None):
+async def process_video_with_gemini(api_key: str, prompt: str, video_path: str, reverse_proxy_url: str | None = None):
     """
     使用Gemini处理单个视频和文本提示。
     """
@@ -203,7 +201,7 @@ async def process_video_with_gemini(api_key: str, prompt: str, video_path: str, 
     return None, None
 
 
-async def process_images_with_gemini(api_key: str, prompt: str, image_paths: List[str], reverse_proxy_url: Optional[str] = None):
+async def process_images_with_gemini(api_key: str, prompt: str, image_paths: list[str], reverse_proxy_url: str | None = None):
     """
     使用Gemini处理多个图像和文本提示。
     """
@@ -225,7 +223,7 @@ async def process_images_with_gemini(api_key: str, prompt: str, image_paths: Lis
     return None, None
 
 
-async def process_audio_with_gemini(api_key: str, audio_path: str, reverse_proxy_url: Optional[str] = None):
+async def process_audio_with_gemini(api_key: str, audio_path: str, reverse_proxy_url: str | None = None):
     """
     使用Gemini处理单个音频，并返回音频描述和关键时刻的时间戳。
     """
@@ -261,26 +259,26 @@ async def process_audio_with_gemini(api_key: str, audio_path: str, reverse_proxy
         )
         print(f"Gemini 响应 (原始JSON): {response_text}")
         print(f"请求耗时: {duration:.2f} 秒")
-        
+
         # 尝试解析JSON
         try:
             # 清理可能的Markdown代码块标记
             cleaned_response = response_text.strip().removeprefix("```json").removesuffix("```").strip()
             data = json.loads(cleaned_response)
-            
+
             description = data.get("description", "")
             timestamps = data.get("timestamps", [])
-            
+
             if not isinstance(description, str) or not isinstance(timestamps, list):
-                print("错误: JSON响应的格式不正确（\"description\"应为字符串，\"timestamps\"应为列表）。")
+                print('错误: JSON响应的格式不正确（"description"应为字符串，"timestamps"应为列表）。')
                 return None, None, duration
-                
+
             print(f"成功提取描述: {description}")
             print(f"成功提取时间戳: {timestamps}")
             return description, timestamps, duration
-            
+
         except json.JSONDecodeError:
-            print(f"错误: Gemini的响应不是有效的JSON格式。")
+            print("错误: Gemini的响应不是有效的JSON格式。")
             return None, None, duration
 
     except FileNotFoundError as e:
@@ -293,7 +291,7 @@ async def process_audio_with_gemini(api_key: str, audio_path: str, reverse_proxy
 # async def main():
 #     """
 #     使用新封装函数 `process_video_with_gemini`、`process_images_with_gemini` 和 `process_audio_with_gemini` 的示例。
-    
+
 #     要运行此示例：
 #     1. 在环境变量中设置 GOOGLE_API_KEY 或在下方提供。
 #     2. 确保示例视频、图像和音频文件路径正确。
@@ -316,7 +314,7 @@ async def process_audio_with_gemini(api_key: str, audio_path: str, reverse_proxy
 #     #     video_path=video_file,
 #     #     reverse_proxy_url=proxy_url
 #     # )
-        
+
 #     # # --- 示例 2: 处理图像和文本 ---
 #     # image_files = [
 #     #     "xxxxxx",
@@ -347,7 +345,7 @@ async def process_audio_with_gemini(api_key: str, audio_path: str, reverse_proxy
 #         print("\n--- 分析结果 ---")
 #         print(f"音频描述: {description}")
 #         print(f"关键帧时间戳: {timestamps}")
-        
+
 #         if timestamps:
 #             print("\n这些时间戳可用于 "videos_cliper.py" 中的 "extract_frame" 函数来提取关键帧。")
 #             # 这是一个如何使用时间戳的示例：

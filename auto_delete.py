@@ -1,16 +1,17 @@
 import os
 import time
-from typing import Optional
+
 from astrbot.api import logger
+
 
 def delete_old_files(folder_path: str, time_threshold_minutes: int) -> int:
     """
     删除指定文件夹中超过时间阈值的旧文件
-    
+
     Args:
         folder_path: 要清理的文件夹路径
         time_threshold_minutes: 时间阈值（分钟）
-        
+
     Returns:
         删除的文件数量
     """
@@ -19,7 +20,7 @@ def delete_old_files(folder_path: str, time_threshold_minutes: int) -> int:
         time_threshold_seconds = time_threshold_minutes * 60
         current_time = time.time()
         deleted_count = 0
-        
+
         for filename in os.listdir(folder_path):
             file_path = os.path.join(folder_path, filename)
             if os.path.isfile(file_path):
@@ -33,12 +34,12 @@ def delete_old_files(folder_path: str, time_threshold_minutes: int) -> int:
                         deleted_count += 1
                 except OSError as e:
                     logger.error(f"删除文件失败 {file_path}: {e}")
-        
+
         if deleted_count > 0:
             logger.info(f"清理完成，共删除 {deleted_count} 个过期文件")
-        
+
         return deleted_count
-        
+
     except Exception as e:
         logger.error(f"清理文件夹失败 {folder_path}: {e}")
         return 0

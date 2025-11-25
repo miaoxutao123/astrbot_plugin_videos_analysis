@@ -1,7 +1,9 @@
-import asyncio
 import aiohttp
-import os
-from .douyin_download import download  # 假设 download 函数也支持异步，或者你需要将其改为异步
+
+from .douyin_download import (
+    download,  # 假设 download 函数也支持异步，或者你需要将其改为异步
+)
+
 
 async def get_douyin_data(url,api_url,minimal=False):
     params = {
@@ -88,12 +90,12 @@ async def process_douyin(url,api_url):
                 for i, download_link in enumerate(data["download_links"], 1):
                     print(f"Downloading video part {i}..., url: {download_link}\n")
                     await download(download_link, filename=f"{output_path}-Part{i}.mp4") # 假设download函数也支持异步
-                    result['save_path'].append(f"{output_path}-Part{i}.mp4")
+                    result["save_path"].append(f"{output_path}-Part{i}.mp4")
             else:  # 单段视频
                 # print(data["download_links"])
                 output_path = f"{opt_path}/{data['title']}.mp4"
                 await download(data["download_links"][0], filename=output_path) # 假设download函数也支持异步
-                result['save_path'].append(output_path)
+                result["save_path"].append(output_path)
         if data["type"] == "image":
             result["type"] = "image"
             result["count"] = data["count"]
@@ -103,12 +105,12 @@ async def process_douyin(url,api_url):
                 output_path = f"{opt_path}/{data['title']}"
                 for i, download_link in enumerate(data["download_links"], 1):
                     await download(download_link, filename=f"{output_path}-Part{i}.jpg") # 假设download函数也支持异步
-                    result['save_path'].append(f"{output_path}-Part{i}.jpg")
+                    result["save_path"].append(f"{output_path}-Part{i}.jpg")
             else:
                 # print(data["download_links"])
                 output_path = f"{opt_path}/{data['title']}.jpg"
                 await download(data["download_links"][0], filename=output_path) # 假设download函数也支持异步
-                result['save_path'].append(output_path)
+                result["save_path"].append(output_path)
         return result
     return None
 

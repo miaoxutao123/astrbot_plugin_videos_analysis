@@ -1,5 +1,5 @@
-import json
 import asyncio
+
 import aiohttp
 
 api = "https://api.kxzjoker.cn/api/jiexi_video?url="
@@ -9,7 +9,7 @@ async def fetch(session, url):
         print(f"Status: {response.status}")  # 输出 HTTP 状态码
         raw_content = await response.text()  # 获取响应的原始内容
         print(f"Raw Response: {raw_content}")  # 输出原始内容
-        
+
         # 检查 Content-Type 是否为 JSON
         if "application/json" in response.headers.get("Content-Type", ""):
             return await response.json()
