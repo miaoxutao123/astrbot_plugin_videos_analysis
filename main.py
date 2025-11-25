@@ -510,14 +510,16 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
     cookie = self.doyin_cookie
     message_str = event.message_str
     match = re.search(r"(https?://v\.douyin\.com/[a-zA-Z0-9_\-]+(?:-[a-zA-Z0-9_\-]+)?)", message_str)
-    if self._debounce_check(match):
+
+    if not match:
+        return
+
+    # 防抖检查：传入实际匹配到的链接字符串
+    if self._debounce_check(match.group(0)):
         logger.info("防抖时间内已处理过相同链接，跳过解析。")
         return
 
     await self._cleanup_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/dy")
-
-    if not match:
-        return
 
     # 发送开始解析的提示
     if self.show_progress_messages:
@@ -624,10 +626,16 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
     # 查找Bilibili链接
     match_json = re.search(r"https:\\\\/\\\\/b23\.tv\\\\/[a-zA-Z0-9]+", message_obj_str)
     match_plain = re.search(r"(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|BV1\w{9}|av\d+)", message_str)
-    if self._debounce_check(match_json) or self._debounce_check(match_plain):
+
+    if not (match_plain or match_json):
+        return
+
+    # 防抖检查：传入实际匹配到的链接字符串
+    if match_json and self._debounce_check(match_json.group(0)):
         logger.info("防抖时间内已处理过相同链接，跳过解析。")
         return
-    if not (match_plain or match_json):
+    if match_plain and self._debounce_check(match_plain.group(0)):
+        logger.info("防抖时间内已处理过相同链接，跳过解析。")
         return
 
     url = ""
@@ -863,10 +871,16 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
     image_match = re.search(images_pattern, message_obj_str) or re.search(images_pattern, message_str)
     video_match = re.search(video_pattern, message_obj_str) or re.search(video_pattern, message_str)
     contains_reply = re.search(r"reply", message_obj_str)
-    if self._debounce_check(image_match) or self._debounce_check(video_match):
+
+    if contains_reply:
+        return
+
+    # 防抖检查：传入实际匹配到的链接字符串
+    if image_match and self._debounce_check(image_match.group(0)):
         logger.info("防抖时间内已处理过相同链接，跳过解析。")
         return
-    if contains_reply:
+    if video_match and self._debounce_check(video_match.group(0)):
+        logger.info("防抖时间内已处理过相同链接，跳过解析。")
         return
 
     # 处理图片链接
