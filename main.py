@@ -68,8 +68,9 @@ class hybird_videos_analysis(Star):
         self.external_handled_videos = {} # {video_id: timestamp}
         self.external_handled_lock = threading.Lock()
 
-        self.external_handled_videos = {} # {video_id: timestamp}
-        self.external_handled_lock = threading.Lock()
+        # 防抖功能配置
+        self.Debounce_time = config.get("debounce_time") or 60
+        self.cache = TTLCache(maxsize=1000, ttl=self.Debounce_time)
 
     async def _recall_msg(self, event: AstrMessageEvent, message_id: int):
         """撤回消息"""
@@ -84,8 +85,6 @@ class hybird_videos_analysis(Star):
         except Exception as e:
             logger.error(f"撤回消息失败: {e}")
 
-        self.Debounce_time = config.get("debounce_time") or 60
-        self.cache = TTLCache(maxsize=1000, ttl=self.Debounce_time)
     async def _send_file_if_needed(self, file_path: str) -> str:
         """Helper function to send file through NAP server if needed"""
         if self.nap_server_address != "localhost":
