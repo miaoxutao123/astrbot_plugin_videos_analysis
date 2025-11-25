@@ -942,7 +942,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
 
     url = ""
     if match_plain:
-        url = match_plain.group(1)
+        url = match_plain.group(0)  # 修复：使用group(0)获取完整匹配
     elif match_json:
         url = match_json.group(0).replace("\\\\", "\\").replace("\\/", "/")
 
