@@ -39,6 +39,7 @@ CONFIG = {
 REG_B23 = re.compile(r"(b23\.tv|bili2233\.cn)\/[\w]+")
 REG_BV = re.compile(r"BV1\w{9}")
 REG_AV = re.compile(r"av\d+", re.I)
+REG_FULL_URL = re.compile(r"https?://www\.bilibili\.com/video/(BV1\w{9}|av\d+)")
 
 # AV转BV算法参数·
 AV2BV_TABLE = "fZodR9XQDSUm21yCkr6zBqiveYah8bt4xsWpHnJE7jL5VG3guMTKNPAwcF"
@@ -648,6 +649,17 @@ async def process_bili_video(url, download_flag=True, quality=80, use_login=True
     try:
         if REG_B23.search(url):
             video_info = await parse_b23(REG_B23.search(url).group())
+        elif REG_FULL_URL.search(url):
+            # 处理完整的B站URL
+            match = REG_FULL_URL.search(url)
+            video_id = match.group(1) if match else ""
+            if REG_BV.search(video_id):
+                video_info = await parse_video(video_id)
+            elif REG_AV.search(video_id):
+                bvid = av2bv(video_id)
+                video_info = await parse_video(bvid) if bvid else None
+            else:
+                video_info = None
         elif REG_BV.search(url):
             video_info = await parse_video(REG_BV.search(url).group())
         elif REG_AV.search(url):
