@@ -1,7 +1,6 @@
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import List, Optional
 
 import aiohttp
 from bs4 import BeautifulSoup
@@ -34,10 +33,10 @@ class ModInfo:
     """模组/整合包信息数据类"""
 
     name: str
-    categories: List[str]
-    icon_url: Optional[str]
-    description_images: List[str]
-    description: Optional[str]
+    categories: list[str]
+    icon_url: str | None
+    description_images: list[str]
+    description: str | None
 
 
 class MCModSpider:
@@ -49,7 +48,7 @@ class MCModSpider:
 
     async def get_page(
         self, session: aiohttp.ClientSession, url: str
-    ) -> Optional[BeautifulSoup]:
+    ) -> BeautifulSoup | None:
         """异步获取页面内容并解析"""
         try:
             async with session.get(url, headers=self.headers, ssl=False) as response:
@@ -60,7 +59,7 @@ class MCModSpider:
             logger.error(f"获取页面失败: {url}, 错误: {str(e)}")
             return None
 
-    async def get_mod_info(self, url: str) -> Optional[ModInfo]:
+    async def get_mod_info(self, url: str) -> ModInfo | None:
         """异步获取模组/整合包信息"""
         async with aiohttp.ClientSession() as session:
             soup = await self.get_page(session, url)

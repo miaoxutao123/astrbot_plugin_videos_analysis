@@ -37,41 +37,37 @@ import os
 import random
 import re
 import time
-import urllib
 from pathlib import Path
-from typing import Union
-from urllib.parse import urlencode, quote
+from urllib.parse import quote
 
 # import execjs
 import httpx
 import qrcode
 import yaml
 
-from .xbogus import XBogus as XB
-from .abogus import ABogus as AB
-
 from ...utils.api_exceptions import (
-    APIError,
     APIConnectionError,
-    APIResponseError,
-    APIUnavailableError,
-    APIUnauthorizedError,
     APINotFoundError,
+    APIResponseError,
+    APIUnauthorizedError,
+    APIUnavailableError,
 )
 from ...utils.logger import logger
 from ...utils.utils import (
+    extract_valid_urls,
     gen_random_str,
     get_timestamp,
-    extract_valid_urls,
     split_filename,
 )
+from .abogus import ABogus as AB
+from .xbogus import XBogus as XB
 
 # 配置文件路径
 # Read the configuration file
 path = os.path.abspath(os.path.dirname(__file__))
 
 # 读取配置文件
-with open(f"{path}/config.yaml", "r", encoding="utf-8") as f:
+with open(f"{path}/config.yaml", encoding="utf-8") as f:
     config = yaml.safe_load(f)
 
 
@@ -116,7 +112,7 @@ class TokenManager:
 
                 msToken = str(httpx.Cookies(response.cookies).get("msToken"))
                 if len(msToken) not in [120, 128]:
-                    raise APIResponseError("响应内容：{0}， Douyin msToken API 的响应内容不符合要求。".format(msToken))
+                    raise APIResponseError(f"响应内容：{msToken}， Douyin msToken API 的响应内容不符合要求。")
 
                 return msToken
 
@@ -146,7 +142,7 @@ class TokenManager:
 
             except Exception as e:
                 # 返回虚假的msToken (Return a fake msToken)
-                logger.error("请求Douyin msToken API时发生错误：{0}".format(e))
+                logger.error(f"请求Douyin msToken API时发生错误：{e}")
                 logger.info("将使用本地生成的虚假msToken参数，以继续请求。")
                 return cls.gen_false_msToken()
 
@@ -191,9 +187,7 @@ class TokenManager:
                 elif e.response.status_code == 404:
                     raise APINotFoundError("ttwid无法找到API端点")
                 else:
-                    raise APIResponseError("链接：{0}，状态码 {1}：{2} ".format(
-                        e.response.url, e.response.status_code, e.response.text
-                    )
+                    raise APIResponseError(f"链接：{e.response.url}，状态码 {e.response.status_code}：{e.response.text} "
                     )
 
 
@@ -241,7 +235,7 @@ class BogusManager:
         try:
             final_endpoint = XB(user_agent).getXBogus(endpoint)
         except Exception as e:
-            raise RuntimeError("生成X-Bogus失败: {0})".format(e))
+            raise RuntimeError(f"生成X-Bogus失败: {e})")
 
         return final_endpoint[0]
 
@@ -256,7 +250,7 @@ class BogusManager:
         try:
             xb_value = XB(user_agent).getXBogus(param_str)
         except Exception as e:
-            raise RuntimeError("生成X-Bogus失败: {0})".format(e))
+            raise RuntimeError(f"生成X-Bogus失败: {e})")
 
         # 检查base_endpoint是否已有查询参数 (Check if base_endpoint already has query parameters)
         separator = "&" if "?" in base_endpoint else "?"
@@ -299,9 +293,9 @@ class BogusManager:
         try:
             ab_value = AB().get_value(params, )
         except Exception as e:
-            raise RuntimeError("生成A-Bogus失败: {0})".format(e))
+            raise RuntimeError(f"生成A-Bogus失败: {e})")
 
-        return quote(ab_value, safe='')
+        return quote(ab_value, safe="")
 
 
 class SecUserIdFetcher:
@@ -329,7 +323,7 @@ class SecUserIdFetcher:
 
         if url is None:
             raise (
-                APINotFoundError("输入的URL不合法。类名：{0}".format(cls.__name__))
+                APINotFoundError(f"输入的URL不合法。类名：{cls.__name__}")
             )
 
         pattern = (
@@ -351,28 +345,26 @@ class SecUserIdFetcher:
                         return match.group(1)
                     else:
                         raise APIResponseError(
-                            "未在响应的地址中找到sec_user_id，检查链接是否为用户主页类名：{0}"
-                            .format(cls.__name__)
+                            f"未在响应的地址中找到sec_user_id，检查链接是否为用户主页类名：{cls.__name__}"
+
                         )
 
                 elif response.status_code == 401:
-                    raise APIUnauthorizedError("未授权的请求。类名：{0}".format(cls.__name__)
+                    raise APIUnauthorizedError(f"未授权的请求。类名：{cls.__name__}"
                                                )
                 elif response.status_code == 404:
-                    raise APINotFoundError("未找到API端点。类名：{0}".format(cls.__name__)
+                    raise APINotFoundError(f"未找到API端点。类名：{cls.__name__}"
                                            )
                 elif response.status_code == 503:
-                    raise APIUnavailableError("API服务不可用。类名：{0}".format(cls.__name__)
+                    raise APIUnavailableError(f"API服务不可用。类名：{cls.__name__}"
                                               )
                 else:
-                    raise APIResponseError("链接：{0}，状态码 {1}：{2} ".format(
-                        response.url, response.status_code, response.text
-                    )
+                    raise APIResponseError(f"链接：{response.url}，状态码 {response.status_code}：{response.text} "
                     )
 
         except httpx.RequestError as exc:
-            raise APIConnectionError("请求端点失败，请检查当前网络环境。 链接：{0}，代理：{1}，异常类名：{2}，异常详细信息：{3}"
-                                     .format(url, TokenManager.proxies, cls.__name__, exc)
+            raise APIConnectionError(f"请求端点失败，请检查当前网络环境。 链接：{url}，代理：{TokenManager.proxies}，异常类名：{cls.__name__}，异常详细信息：{exc}"
+
                                      )
 
     @classmethod
@@ -395,7 +387,7 @@ class SecUserIdFetcher:
 
         if urls == []:
             raise (
-                APINotFoundError("输入的URL List不合法。类名：{0}".format(cls.__name__)
+                APINotFoundError(f"输入的URL List不合法。类名：{cls.__name__}"
                                  )
             )
 
@@ -479,7 +471,7 @@ class AwemeIdFetcher:
 
         if urls == []:
             raise (
-                APINotFoundError("输入的URL List不合法。类名：{0}".format(cls.__name__)
+                APINotFoundError(f"输入的URL List不合法。类名：{cls.__name__}"
                                  )
             )
 
@@ -523,7 +515,7 @@ class WebCastIdFetcher:
 
         if url is None:
             raise (
-                APINotFoundError("输入的URL不合法。类名：{0}".format(cls.__name__))
+                APINotFoundError(f"输入的URL不合法。类名：{cls.__name__}")
             )
         try:
             # 重定向到完整链接
@@ -556,14 +548,12 @@ class WebCastIdFetcher:
 
         except httpx.RequestError as exc:
             # 捕获所有与 httpx 请求相关的异常情况 (Captures all httpx request-related exceptions)
-            raise APIConnectionError("请求端点失败，请检查当前网络环境。 链接：{0}，代理：{1}，异常类名：{2}，异常详细信息：{3}"
-                                     .format(url, TokenManager.proxies, cls.__name__, exc)
+            raise APIConnectionError(f"请求端点失败，请检查当前网络环境。 链接：{url}，代理：{TokenManager.proxies}，异常类名：{cls.__name__}，异常详细信息：{exc}"
+
                                      )
 
         except httpx.HTTPStatusError as e:
-            raise APIResponseError("链接：{0}，状态码 {1}：{2} ".format(
-                e.response.url, e.response.status_code, e.response.text
-            )
+            raise APIResponseError(f"链接：{e.response.url}，状态码 {e.response.status_code}：{e.response.text} "
             )
 
     @classmethod
@@ -586,7 +576,7 @@ class WebCastIdFetcher:
 
         if urls == []:
             raise (
-                APINotFoundError("输入的URL List不合法。类名：{0}".format(cls.__name__)
+                APINotFoundError(f"输入的URL List不合法。类名：{cls.__name__}"
                                  )
             )
 
@@ -645,10 +635,10 @@ def format_file_name(
     try:
         return naming_template.format(**fields)
     except KeyError as e:
-        raise KeyError("文件名模板字段 {0} 不存在，请检查".format(e))
+        raise KeyError(f"文件名模板字段 {e} 不存在，请检查")
 
 
-def create_user_folder(kwargs: dict, nickname: Union[str, int]) -> Path:
+def create_user_folder(kwargs: dict, nickname: str | int) -> Path:
     """
     根据提供的配置文件和昵称，创建对应的保存目录。
     (Create the corresponding save directory according to the provided conf file and nickname.)
@@ -757,7 +747,7 @@ def show_qrcode(qrcode_url: str, show_image: bool = False) -> None:
         qr.print_ascii(invert=True)
 
 
-def json_2_lrc(data: Union[str, list, dict]) -> str:
+def json_2_lrc(data: str | list | dict) -> str:
     """
     从抖音原声json格式歌词生成lrc格式歌词
     (Generate lrc lyrics format from Douyin original json lyrics format)
@@ -779,9 +769,9 @@ def json_2_lrc(data: Union[str, list, dict]) -> str:
             time_str = f"{minutes:02}:{seconds:02}.{milliseconds:03}"
             lrc_lines.append(f"[{time_str}] {text}")
     except KeyError as e:
-        raise KeyError("歌词数据字段错误：{0}".format(e))
+        raise KeyError(f"歌词数据字段错误：{e}")
     except RuntimeError as e:
-        raise RuntimeError("生成歌词文件失败：{0}，请检查歌词 `data` 内容".format(e))
+        raise RuntimeError(f"生成歌词文件失败：{e}，请检查歌词 `data` 内容")
     except TypeError as e:
-        raise TypeError("歌词数据类型错误：{0}".format(e))
+        raise TypeError(f"歌词数据类型错误：{e}")
     return "\n".join(lrc_lines)

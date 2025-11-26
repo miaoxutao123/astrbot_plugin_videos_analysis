@@ -15,20 +15,18 @@ Changes Made:
 1. Changed the ua_code to compatible with the current config file User-Agent string in https://github.com/Evil0ctal/Douyin_TikTok_Download_API/blob/main/crawlers/douyin/web/config.yaml
 """
 
-from random import choice
-from random import randint
-from random import random
+from random import choice, randint, random
 from re import compile
 from time import time
-from urllib.parse import urlencode
-from urllib.parse import quote
-from gmssl import sm3, func
+from urllib.parse import quote, urlencode
+
+from gmssl import func, sm3
 
 __all__ = ["ABogus", ]
 
 
 class ABogus:
-    __filter = compile(r'%([0-9A-F]{2})')
+    __filter = compile(r"%([0-9A-F]{2})")
     __arguments = [0, 1, 14]
     __ua_key = "\u0000\u0001\u000e"
     __end_string = "cus"
@@ -596,7 +594,7 @@ class ABogus:
             t = (s[i] + s[j]) % 256
             cipher.append(chr(s[t] ^ ord(plaintext[k])))
 
-        return ''.join(cipher)
+        return "".join(cipher)
 
     def get_value(self,
                   url_params: dict | str,
@@ -630,6 +628,6 @@ if __name__ == "__main__":
     print(f"URL参数: {url_params}")
     a_bogus = bogus.get_value(url_params, )
     # 使用url编码a_bogus
-    a_bogus = quote(a_bogus, safe='')
+    a_bogus = quote(a_bogus, safe="")
     print(a_bogus)
     print(USERAGENT)

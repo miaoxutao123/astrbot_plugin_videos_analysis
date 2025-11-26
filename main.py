@@ -1,32 +1,36 @@
-from astrbot.api.all import *
-from astrbot.api.message_components import Node, Plain, Image, Video, Nodes
-from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api import logger
-import astrbot.api.message_components as Comp
-
-import re
+import asyncio
 import json
 import os
-import httpx
-import aiofiles
-import time
-import asyncio
 import random
+import re
 import threading
-from typing import Dict, Optional, Tuple
-from typing import Dict
+import time
+
+import aiofiles
+import httpx
 from cachetools import TTLCache
 
-from .douyin_scraper.douyin_parser import DouyinParser
-from .mcmod_get import mcmod_parse
-from .file_send_server import send_file
+import astrbot.api.message_components as Comp
+from astrbot.api import logger
+from astrbot.api.all import *
+from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.message_components import Image, Node, Nodes, Plain, Video
+from astrbot.core.message.message_event_result import MessageChain
+
+from .auto_delete import delete_old_files
 from .bili_get import process_bili_video
 from .douyin_download import download
-from .auto_delete import delete_old_files
+from .douyin_scraper.douyin_parser import DouyinParser
+from .file_send_server import send_file
+from .gemini_content import (
+    process_audio_with_gemini,
+    process_images_with_gemini,
+    process_video_with_gemini,
+)
+from .mcmod_get import mcmod_parse
+from .videos_cliper import extract_frame, separate_audio_video
 from .xhs_get import xhs_parse
-from .gemini_content import process_audio_with_gemini, process_images_with_gemini, process_video_with_gemini
-from .videos_cliper import separate_audio_video, extract_frame
-from astrbot.core.message.message_event_result import MessageChain
+
 
 @register("hybird_videos_analysis", "喵喵", "可以解析抖音和bili视频", "0.2.14","https://github.com/miaoxutao123/astrbot_plugin_videos_analysis")
 class hybird_videos_analysis(Star):
@@ -55,7 +59,7 @@ class hybird_videos_analysis(Star):
         # 抖音深度理解配置
         self.douyin_video_comprehend = config.get("douyin_video_comprehend")
         self.show_progress_messages = config.get("show_progress_messages")
-        
+
         # 二进制退避算法相关配置
         self.video_records = {}  # 存储视频解析记录 {video_id: {"parse_time": timestamp, "expire_time": timestamp, "bot_id": str}}
         self.video_records_lock = threading.Lock()  # 线程锁，保护共享资源
@@ -69,15 +73,19 @@ class hybird_videos_analysis(Star):
         self.external_handled_lock = threading.Lock()
 
         # 防抖功能配置
-        self.Debounce_time = config.get("debounce_time") or 60
-        self.cache = TTLCache(maxsize=1000, ttl=self.Debounce_time)
+        self.debounce_time = config.get("debounce_time", 5)  # 使用默认值5，与配置文件保持一致
+        self.debounce_enabled = self.debounce_time > 0  # 明确的开关控制
+        if self.debounce_enabled:
+            self.cache = TTLCache(maxsize=1000, ttl=self.debounce_time)
+        else:
+            self.cache = None  # 禁用时不创建缓存
 
     async def _recall_msg(self, event: AstrMessageEvent, message_id: int):
         """撤回消息"""
         try:
             if message_id and message_id != 0:
                 # 适配不同的平台适配器，这里主要针对 aiocqhttp (NapCat)
-                if hasattr(event, 'bot') and hasattr(event.bot, 'api'):
+                if hasattr(event, "bot") and hasattr(event.bot, "api"):
                      await event.bot.api.call_action("delete_msg", message_id=message_id)
                      logger.info(f"✅ 已自动撤回消息: {message_id}")
                 else:
@@ -191,7 +199,7 @@ class hybird_videos_analysis(Star):
                 else:
                     # 图片下载失败，尝试直接发送URL
                     try:
-                        logger.warning(f"图片本地下载失败，尝试直接发送URL")
+                        logger.warning("图片本地下载失败，尝试直接发送URL")
                         return [Comp.Image.fromURL(media_url)]
                     except Exception as url_error:
                         logger.error(f"图片下载失败，文件不存在或下载失败: {local_filename}, URL发送也失败: {url_error}")
@@ -218,7 +226,7 @@ class hybird_videos_analysis(Star):
                 else:
                     # 视频下载失败，尝试直接发送URL
                     try:
-                        logger.warning(f"视频本地下载失败，尝试直接发送URL")
+                        logger.warning("视频本地下载失败，尝试直接发送URL")
                         return [Comp.Video.fromURL(media_url)]
                     except Exception as url_error:
                         logger.error(f"视频下载失败，文件不存在: {local_filename}, URL发送也失败: {url_error}")
@@ -258,13 +266,13 @@ class hybird_videos_analysis(Star):
         if self.delete_time > 0:
             delete_old_files(folder_path, self.delete_time)
 
-    def _extract_video_id(self, url: str, platform: str) -> Optional[str]:
+    def _extract_video_id(self, url: str, platform: str) -> str | None:
         """从URL中提取视频ID"""
         try:
             if platform == "bili":
                 # B站视频ID提取
                 if "BV" in url:
-                    match = re.search(r'BV[a-zA-Z0-9]+', url)
+                    match = re.search(r"BV[a-zA-Z0-9]+", url)
                     return match.group(0) if match else None
                 elif "av" in url:
                     return f"av{match.group(1)}" if match else None
@@ -281,11 +289,11 @@ class hybird_videos_analysis(Star):
             elif platform == "xhs":
                 # 小红书ID提取
                 # 尝试从 discovery/item/ID 提取
-                match = re.search(r'discovery/item/([a-zA-Z0-9]+)', url)
+                match = re.search(r"discovery/item/([a-zA-Z0-9]+)", url)
                 if match:
                     return match.group(1)
                 # 尝试从 xhslink.com/ID 提取 (作为临时ID)
-                match = re.search(r'xhslink\.com/([a-zA-Z0-9/]+)', url)
+                match = re.search(r"xhslink\.com/([a-zA-Z0-9/]+)", url)
                 if match:
                     return match.group(1).replace("/", "_") # 替换斜杠以作为合法ID
                 return None
@@ -294,21 +302,21 @@ class hybird_videos_analysis(Star):
             logger.error(f"提取视频ID时发生错误: {e}")
             return None
 
-    def _check_existing_parsing(self, video_id: str) -> Tuple[bool, Optional[Dict]]:
+    def _check_existing_parsing(self, video_id: str) -> tuple[bool, dict | None]:
         with self.video_records_lock:
             if video_id in self.video_records:
                 record = self.video_records[video_id]
                 current_time = time.time()
-                
+
                 # 检查记录是否过期
                 if current_time > record.get("expire_time", 0):
                     # 记录已过期，删除并返回False
                     del self.video_records[video_id]
                     return False, None
-                
+
                 # 记录未过期，说明已有bot在处理或已处理
                 return True, record
-            
+
             return False, None
 
     def _record_video_parsing(self, video_id: str, bot_id: str) -> None:
@@ -359,34 +367,34 @@ class hybird_videos_analysis(Star):
         for attempt in range(self.max_retry_attempts):
             # 检查是否已有其他bot完成解析
             is_parsed, record = self._check_existing_parsing(video_id)
-            
+
             if not is_parsed:
                 # 没有其他bot在处理，记录当前bot开始处理
                 self._record_video_parsing(video_id, bot_id)
                 logger.info(f"Bot {bot_id} 开始解析视频 {video_id}")
                 return True
-            
+
             # 检查是否是当前bot的记录
             if record and record.get("bot_id") == bot_id:
                 # 是当前bot的记录，更新失效时间并继续
                 self._update_video_expire_time(video_id)
                 logger.info(f"Bot {bot_id} 继续解析视频 {video_id}")
                 return True
-            
+
             # 有其他bot在处理，计算退避时间
             backoff_time = min(
                 self.base_backoff_time * (2 ** attempt) + random.uniform(0, 1),
                 self.max_backoff_time
             )
-            
+
             logger.info(f"Bot {bot_id} 检测到视频 {video_id} 正在被其他bot处理，等待 {backoff_time:.2f} 秒后重试 (尝试 {attempt + 1}/{self.max_retry_attempts})")
-            
+
             # 等待退避时间
             await asyncio.sleep(backoff_time)
-            
+
             # 清理过期记录
             self._cleanup_expired_records()
-        
+
         # 超过最大重试次数，放弃解析
         logger.warning(f"Bot {bot_id} 放弃解析视频 {video_id}，超过最大重试次数")
         return False
@@ -401,7 +409,7 @@ class hybird_videos_analysis(Star):
             r"source\s*:\s*https?://",
             r"🧷\s*.*https?://",
         ]
-        
+
         for pattern in patterns:
             if re.search(pattern, message_content, re.IGNORECASE):
                 return True
@@ -470,14 +478,14 @@ class hybird_videos_analysis(Star):
             # 获取当前人格设定
             provider = self.context.provider_manager.curr_provider_inst
             current_persona = None
-            if provider and hasattr(provider, 'personality'):
+            if provider and hasattr(provider, "personality"):
                 current_persona = provider.personality
             elif self.context.provider_manager.selected_default_persona:
                 current_persona = self.context.provider_manager.selected_default_persona
 
             # 构造包含人格和视频摘要的提示
             persona_prompt = ""
-            if current_persona and hasattr(current_persona, 'prompt'):
+            if current_persona and hasattr(current_persona, "prompt"):
                 persona_prompt = f"请保持你的人格设定：{current_persona.prompt}\n\n"
 
             final_prompt = f"{persona_prompt}我刚刚分析了这个{platform}视频的内容：\n\n{video_summary}\n\n请基于这个视频内容，结合你的人格特点，自然地发表你的看法或评论。不要说这是我转述给你的，请像你亲自观看了这个用户给你分享的来自{platform}的视频一样回应。"
@@ -489,9 +497,9 @@ class hybird_videos_analysis(Star):
                 contexts=context,
                 conversation=conversation
             )
-            
+
             # 检查是否是async generator
-            if hasattr(llm_result, '__aiter__'):
+            if hasattr(llm_result, "__aiter__"):
                 # 是async generator，逐个yield结果
                 async for result in llm_result:
                     yield result
@@ -534,31 +542,31 @@ class hybird_videos_analysis(Star):
                 logger.info(f"图片 {i+1} 下载成功")
             else:
                 logger.warning(f"图片 {i+1} 下载失败")
-        
+
         if not image_paths:
             yield event.plain_result("抱歉，无法下载图片进行分析。")
             return
-        
+
         # 使用Gemini分析图片
         try:
             if self.show_progress_messages:
                 yield event.plain_result("正在使用AI分析图片内容...")
-            
+
             prompt = "请详细描述这些图片的内容，包括场景、人物、物品、文字信息和传达的核心信息。如果是多张图片，请分别描述每张图片的内容。"
             image_response = await process_images_with_gemini(api_key, prompt, image_paths, proxy_url)
-            
+
             if image_response and image_response[0]:
                 # 发送分析后的图片
                 for i, image_path in enumerate(image_paths):
                     nap_file_path = await self._send_file_if_needed(image_path)
                     yield event.chain_result([Comp.Image.fromFileSystem(nap_file_path)])
-                
+
                 # 发送AI分析结果
                 async for response in self._send_llm_response(event, image_response[0], "抖音"):
                     yield response
             else:
                 yield event.plain_result("抱歉，我暂时无法理解这些图片的内容。")
-                
+
         except Exception as e:
             logger.error(f"处理抖音图片理解时发生错误: {e}")
             yield event.plain_result("抱歉，分析图片时出现了问题。")
@@ -571,37 +579,37 @@ class hybird_videos_analysis(Star):
 
         if self.show_progress_messages:
             yield event.plain_result("正在下载视频进行分析...")
-        
+
         logger.info(f"开始下载视频: {media_url}")
         await download(media_url, local_filename, self.doyin_cookie)
-        
+
         if not os.path.exists(local_filename):
             yield event.plain_result("抱歉，无法下载视频进行分析。")
             return
-        
+
         try:
             # 检查文件大小并选择策略
             video_size_mb = os.path.getsize(local_filename) / (1024 * 1024)
             video_summary = ""
-            
+
             if video_size_mb > 30:
                 # --- 大视频处理流程 (音频+关键帧) ---
                 if self.show_progress_messages:
                     yield event.plain_result(f"视频大小为 {video_size_mb:.2f}MB，采用音频+关键帧模式进行分析...")
-                
+
                 # a. 分离音视频
                 separated_files = await separate_audio_video(local_filename)
                 if not separated_files:
                     yield event.plain_result("抱歉，我无法分离这个视频的音频和视频。")
                     return
                 audio_path, video_only_path = separated_files
-                
+
                 # b. 分析音频获取描述和时间戳
                 description, timestamps, _ = await process_audio_with_gemini(api_key, audio_path, proxy_url)
                 if not description or not timestamps:
                     yield event.plain_result("抱歉，我无法分析这个视频的音频内容。")
                     return
-                
+
                 # c. 提取关键帧并记录时间戳
                 image_paths = []
                 ts_and_paths = []
@@ -610,7 +618,7 @@ class hybird_videos_analysis(Star):
                     if frame_path:
                         image_paths.append(frame_path)
                         ts_and_paths.append((ts, frame_path))
-                
+
                 if not image_paths:
                     # 如果没有提取到关键帧，仅使用音频描述
                     video_summary = description
@@ -619,7 +627,7 @@ class hybird_videos_analysis(Star):
                     prompt = f"这是关于一个抖音视频的摘要和一些从该视频中提取的关键帧。视频摘要如下：\n\n{description}\n\n请结合摘要和这些关键帧，对整个视频内容进行一个全面、生动的总结。"
                     summary_tuple = await process_images_with_gemini(api_key, prompt, image_paths, proxy_url)
                     video_summary = summary_tuple[0] if summary_tuple else "无法生成最终摘要。"
-                
+
                 # 发送关键帧和时间戳给用户
                 if ts_and_paths:
                     key_frames_nodes = Nodes([])
@@ -632,32 +640,32 @@ class hybird_videos_analysis(Star):
                         ]
                         key_frames_nodes.nodes.append(self._create_node(event, node_content))
                     yield event.chain_result([key_frames_nodes])
-                    
+
             else:
                 # --- 小视频处理流程 (直接上传) ---
                 if self.show_progress_messages:
                     yield event.plain_result(f"视频大小为 {video_size_mb:.2f}MB，直接上传视频进行分析...")
-                
+
                 video_prompt = "请详细描述这个抖音视频的内容，包括场景、人物、动作、音乐、文字信息和传达的核心信息。"
                 video_response = await process_video_with_gemini(api_key, video_prompt, local_filename, proxy_url)
                 video_summary = video_response[0] if video_response and video_response[0] else "抱歉，我暂时无法理解这个视频内容。"
-            
+
             # 发送原视频
             nap_file_path = await self._send_file_if_needed(local_filename)
             file_size_mb = os.path.getsize(local_filename) / (1024 * 1024)
-            
+
             if file_size_mb > self.max_video_size:
                 yield event.chain_result([Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))])
             else:
                 yield event.chain_result([Comp.Video.fromFileSystem(nap_file_path)])
-            
+
             # 发送AI分析结果
             if video_summary:
                 async for response in self._send_llm_response(event, video_summary, "抖音"):
                     yield response
             else:
                 yield event.plain_result("抱歉，我无法理解这个视频的内容。")
-                
+
         except Exception as e:
             logger.error(f"处理抖音视频理解时发生错误: {e}")
             yield event.plain_result("抱歉，分析视频时出现了问题。")
@@ -666,7 +674,7 @@ class hybird_videos_analysis(Star):
             if os.path.exists(local_filename):
                 os.remove(local_filename)
                 logger.info(f"已清理临时文件: {local_filename}")
-            
+
             # 清理视频记录
             if aweme_id:
                 with self.video_records_lock:
@@ -681,13 +689,47 @@ class hybird_videos_analysis(Star):
             True: 链接已处理过，应跳过
             False: 链接未处理过，可以继续
         """
-        if self.Debounce_time <= 0:
+        # 检查防抖开关
+        if not self.debounce_enabled or not self.cache:
             return False  # 防抖功能关闭
 
         if link in self.cache:
             return True  # 在防抖时间内已处理过，跳过
 
         # 记录这个链接（TTLCache 会自动在 ttl 后过期）
+        self.cache[link] = True
+        return False
+
+    def _record_parsed_link(self, link: str) -> None:
+        """记录成功解析的链接进行防抖
+
+        Args:
+            link: 成功解析的链接
+        """
+        # 只在防抖开启时记录
+        if self.debounce_enabled and self.cache:
+            self.cache[link] = True
+            logger.debug(f"已记录解析成功的链接: {link}")
+
+    def _should_skip_parsing(self, link: str) -> bool:
+        """检查是否应该跳过解析（先检查后记录）
+
+        Args:
+            link: 待检查的链接
+
+        Returns:
+            True: 应该跳过解析
+            False: 可以继续解析
+        """
+        # 检查防抖开关
+        if not self.debounce_enabled or not self.cache:
+            return False  # 防抖功能关闭
+
+        # 检查是否已在缓存中
+        if link in self.cache:
+            return True  # 在防抖时间内已处理过，跳过
+
+        # 不在缓存中，先记录这个链接避免重复处理
         self.cache[link] = True
         return False
 
@@ -704,23 +746,26 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
     if not match:
         return
 
+    # 提取匹配到的链接
+    matched_link = match.group(0)
+
+    # 检查是否应该跳过解析（先检查后记录）
+    if self._should_skip_parsing(matched_link):
+        logger.info("防抖时间内已处理过相同链接，跳过解析。")
+        return
+
     # 检查是否已有其他bot发送了解析结果
     if self._detect_other_bot_response(message_str):
         logger.info("检测到其他bot已发送抖音解析结果，跳过解析")
-        
+
         # 尝试提取视频ID并记录
         video_id = self._extract_video_id(match.group(1), "douyin")
         if video_id:
             with self.external_handled_lock:
                 self.external_handled_videos[video_id] = time.time()
                 logger.info(f"记录外部Bot已处理抖音视频: {video_id}")
-        
-        event.stop_event()  # 停止事件传播，避免其他插件继续处理
-        return
 
-    # 防抖检查：传入实际匹配到的链接字符串
-    if self._debounce_check(match.group(0)):
-        logger.info("防抖时间内已处理过相同链接，跳过解析。")
+        event.stop_event()  # 停止事件传播，避免其他插件继续处理
         return
 
     await self._cleanup_old_files("data/plugins/astrbot_plugin_videos_analysis/download_videos/dy")
@@ -760,16 +805,19 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
         yield event.plain_result("解析失败，无法识别内容类型。")
         return
 
+    # 解析成功，记录链接进行防抖
+    self._record_parsed_link(matched_link)
+
     # 获取视频ID并应用二进制退避算法
     video_id = result.get("aweme_id", "")
     if not video_id:
         # 如果无法从解析结果获取ID，尝试从URL提取
         video_id = self._extract_video_id(match.group(1), "douyin")
-    
+
     if video_id:
         # 获取当前bot ID
         bot_id = str(event.get_self_id())
-        
+
         # 应用二进制退避算法
         can_continue = await self._binary_exponential_backoff(video_id, bot_id)
         if not can_continue:
@@ -793,7 +841,7 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
 
         # 获取Gemini API配置
         api_key, proxy_url = await self._get_gemini_api_config()
-        
+
         # 如果最终都没有配置，则提示用户
         if not api_key:
             yield event.plain_result("抱歉，我需要Gemini API才能理解视频，但是没有找到相关配置。\n请在框架中配置Gemini Provider或在插件配置中提供gemini_api_key。")
@@ -840,15 +888,15 @@ async def auto_parse_dy(self, event: AstrMessageEvent, *args, **kwargs):
             content = await self._process_single_media(event, result, content_type)
             if content_type == "image":
                 logger.info(f"发送单段图片: {content[0]}")
-            
+
             # 使用 event.send 发送
             ret = await event.send(MessageChain(content))
-            
+
             # 发送后再次检查是否冲突
             with self.external_handled_lock:
                 if video_id in self.external_handled_videos:
                     logger.info(f"发送后检测到外部Bot已处理视频 {video_id}，尝试撤回")
-                    if ret and hasattr(ret, 'message_id'):
+                    if ret and hasattr(ret, "message_id"):
                         await self._recall_msg(event, ret.message_id)
 
     except Exception as e:
@@ -874,30 +922,34 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
         return
 
     # 查找Bilibili链接
-    match_json = re.search(r"https:\\\\/\\\\/b23\.tv\\\\/[a-zA-Z0-9]+", message_obj_str)
-    match_plain = re.search(r"(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|BV1\w{9}|av\d+)", message_str)
+    match_json = re.search(r"https:\\\\/\\\\/(b23\.tv|www\.bilibili\.com)\\\\/[a-zA-Z0-9/]+", message_obj_str)
+    match_plain = re.search(r"(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|https?://www\.bilibili\.com/video/BV1\w{9}|https?://www\.bilibili\.com/video/av\d+|BV1\w{9}|av\d+)", message_str)
 
     if not (match_plain or match_json):
         return
 
-    # 防抖检查：传入实际匹配到的链接字符串
-    if match_json and self._debounce_check(match_json.group(0)):
-        logger.info("防抖时间内已处理过相同链接，跳过解析。")
-        return
-    if match_plain and self._debounce_check(match_plain.group(0)):
+    # 提取匹配到的链接
+    matched_link = ""
+    if match_plain:
+        matched_link = match_plain.group(1)
+    elif match_json:
+        matched_link = match_json.group(0)
+
+    # 检查是否应该跳过解析（先检查后记录）
+    if matched_link and self._should_skip_parsing(matched_link):
         logger.info("防抖时间内已处理过相同链接，跳过解析。")
         return
 
     url = ""
     if match_plain:
-        url = match_plain.group(1)
+        url = match_plain.group(0)  # 修复：使用group(0)获取完整匹配
     elif match_json:
         url = match_json.group(0).replace("\\\\", "\\").replace("\\/", "/")
 
     # 检查是否已有其他bot发送了解析结果
     if self._detect_other_bot_response(message_str):
         logger.info("检测到其他bot已发送B站解析结果，跳过解析")
-        
+
         # 尝试提取视频ID并记录
         video_id = self._extract_video_id(url, "bili")
         if video_id:
@@ -916,7 +968,7 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
     if video_id:
         # 获取当前bot ID
         bot_id = str(event.get_self_id())
-        
+
         # 应用二进制退避算法
         can_continue = await self._binary_exponential_backoff(video_id, bot_id)
         if not can_continue:
@@ -935,6 +987,9 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
 
     # --- 视频深度理解流程 ---
     if url_video_comprehend:
+        # 解析成功，记录链接进行防抖
+        self._record_parsed_link(matched_link)
+
         if self.show_progress_messages:
             yield event.plain_result("我看到了一个B站视频链接，让我来仔细分析一下内容，请稍等一下...")
 
@@ -1036,9 +1091,9 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
                 # 之前这里会把整个bili文件夹删了，现在只删除本次下载的视频
                 os.remove(video_path)
                 logger.info(f"已清理临时文件: {video_path}")
-            
+
             # 5. 清理视频记录
-            if 'video_id' in locals() and video_id:
+            if "video_id" in locals() and video_id:
                 with self.video_records_lock:
                     if video_id in self.video_records:
                         del self.video_records[video_id]
@@ -1056,6 +1111,10 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
     result = await process_bili_video(url, download_flag=videos_download, quality=qulity, use_login=use_login, event=None)
 
     if result:
+        # 解析成功，记录链接进行防抖
+        if matched_link:
+            self._record_parsed_link(matched_link)
+
         file_path = result.get("video_path")
         media_component = None
         if file_path and os.path.exists(file_path):
@@ -1146,17 +1205,17 @@ async def auto_parse_bili(self, event: AstrMessageEvent, *args, **kwargs):
         elif reply_mode == 4: # 仅视频
             if media_component:
                 send_chain = [media_component]
-        
+
         # 发送最终消息并检查撤回
         if send_chain:
             try:
                 ret = await event.send(MessageChain(send_chain))
-                
+
                 # 发送后再次检查是否冲突
                 with self.external_handled_lock:
                     if video_id in self.external_handled_videos:
                         logger.info(f"发送后检测到外部Bot已处理视频 {video_id}，尝试撤回")
-                        if ret and hasattr(ret, 'message_id'):
+                        if ret and hasattr(ret, "message_id"):
                             await self._recall_msg(event, ret.message_id)
             except Exception as e:
                 logger.error(f"发送消息或撤回失败: {e}")
@@ -1195,26 +1254,38 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
     video_match = re.search(video_pattern, message_obj_str) or re.search(video_pattern, message_str)
     contains_reply = re.search(r"reply", message_obj_str)
 
-    if contains_reply:
+    if contains_reply or (not image_match and not video_match):
+        return
+
+    # 提取匹配到的链接
+    matched_link = ""
+    if image_match:
+        matched_link = image_match.group(1)
+    elif video_match:
+        matched_link = video_match.group(1)
+
+    # 检查是否应该跳过解析（先检查后记录）
+    if matched_link and self._should_skip_parsing(matched_link):
+        logger.info("防抖时间内已处理过相同链接，跳过解析。")
         return
 
     # 检查是否已有其他bot发送了解析结果
     if self._detect_other_bot_response(message_str):
         logger.info("检测到其他bot已发送小红书解析结果，跳过解析")
-        
+
         # 尝试提取ID并记录
         url_for_id = ""
         if image_match:
             url_for_id = image_match.group(1)
         elif video_match:
             url_for_id = video_match.group(1)
-            
+
         xhs_id = self._extract_video_id(url_for_id, "xhs")
         if xhs_id:
             with self.external_handled_lock:
                 self.external_handled_videos[xhs_id] = time.time()
                 logger.info(f"记录外部Bot已处理小红书内容: {xhs_id}")
-        
+
         event.stop_event()
         return
 
@@ -1224,13 +1295,13 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
         url_for_id = image_match.group(1)
     elif video_match:
         url_for_id = video_match.group(1)
-        
+
     xhs_id = self._extract_video_id(url_for_id, "xhs")
-    
+
     if xhs_id:
         # 获取当前bot ID
         bot_id = str(event.get_self_id())
-        
+
         # 应用二进制退避算法
         can_continue = await self._binary_exponential_backoff(xhs_id, bot_id)
         if not can_continue:
@@ -1246,13 +1317,6 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
                 yield event.plain_result("检测到其他bot已完成处理，终止解析。")
                 event.stop_event()
                 return
-    # 防抖检查：传入实际匹配到的链接字符串
-    if image_match and self._debounce_check(image_match.group(0)):
-        logger.info("防抖时间内已处理过相同链接，跳过解析。")
-        return
-    if video_match and self._debounce_check(video_match.group(0)):
-        logger.info("防抖时间内已处理过相同链接，跳过解析。")
-        return
 
     # 处理图片链接
     if image_match:
@@ -1261,6 +1325,9 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
             logger.error(f"小红书图片解析失败: {result.get('error', '未知错误') if result else '返回结果为空'}")
             yield event.plain_result("小红书链接解析失败，请检查链接是否正确")
             return
+
+        # 解析成功，记录链接进行防抖
+        self._record_parsed_link(matched_link)
 
         ns = Nodes([]) if replay_mode else None
         title = result.get("title", "小红书内容")  # 提供默认标题
@@ -1289,7 +1356,7 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
             # 检查撤回
             with self.external_handled_lock:
                 if xhs_id and xhs_id in self.external_handled_videos:
-                    if ret and hasattr(ret, 'message_id'):
+                    if ret and hasattr(ret, "message_id"):
                         await self._recall_msg(event, ret.message_id)
 
     # 处理视频链接
@@ -1299,6 +1366,9 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
             logger.error(f"小红书视频解析失败: {result.get('error', '未知错误') if result else '返回结果为空'}")
             yield event.plain_result("小红书链接解析失败，请检查链接是否正确")
             return
+
+        # 解析成功，记录链接进行防抖
+        self._record_parsed_link(matched_link)
 
         ns = Nodes([]) if replay_mode else None
         title = result.get("title", "小红书内容")  # 提供默认标题
@@ -1348,7 +1418,7 @@ async def auto_parse_xhs(self, event: AstrMessageEvent, *args, **kwargs):
             # 检查撤回
             with self.external_handled_lock:
                 if xhs_id and xhs_id in self.external_handled_videos:
-                    if ret and hasattr(ret, 'message_id'):
+                    if ret and hasattr(ret, "message_id"):
                         await self._recall_msg(event, ret.message_id)
 
 @filter.event_message_type(EventMessageType.ALL, priority=10)
@@ -1419,23 +1489,21 @@ async def process_direct_video(self, event: AstrMessageEvent, *args, **kwargs):
         return
 
     # 检查消息是否包含视频
-    if not event.message_obj or not hasattr(event.message_obj, 'message'):
+    if not event.message_obj or not hasattr(event.message_obj, "message"):
         return
 
     # 查找视频消息
     video_url = None
     video_filename = None
-    video_size = None
 
     # 从raw_message中提取视频信息
     raw_message = event.message_obj.raw_message
-    if 'message' in raw_message:
-        for msg_item in raw_message['message']:
-            if msg_item.get('type') == 'video':
-                video_data = msg_item.get('data', {})
-                video_url = video_data.get('url')
-                video_filename = video_data.get('file', 'unknown.mp4')
-                video_size = video_data.get('file_size')
+    if "message" in raw_message:
+        for msg_item in raw_message["message"]:
+            if msg_item.get("type") == "video":
+                video_data = msg_item.get("data", {})
+                video_url = video_data.get("url")
+                video_filename = video_data.get("file", "unknown.mp4")
                 break
 
     if not video_url:
@@ -1582,14 +1650,14 @@ async def process_direct_video(self, event: AstrMessageEvent, *args, **kwargs):
             # 获取当前人格设定
             provider = self.context.provider_manager.curr_provider_inst
             current_persona = None
-            if provider and hasattr(provider, 'personality'):
+            if provider and hasattr(provider, "personality"):
                 current_persona = provider.personality
             elif self.context.provider_manager.selected_default_persona:
                 current_persona = self.context.provider_manager.selected_default_persona
 
             # 构造包含人格和视频摘要的提示
             persona_prompt = ""
-            if current_persona and hasattr(current_persona, 'prompt'):
+            if current_persona and hasattr(current_persona, "prompt"):
                 persona_prompt = f"请保持你的人格设定：{current_persona.prompt}\n\n"
 
             final_prompt = f"{persona_prompt}我刚刚分析了这个B站视频的内容：\n\n{video_summary}\n\n请基于这个视频内容，结合你的人格特点，自然地发表你的看法或评论。不要说这是我转述给你的，请像你亲自观看了这个用户给你分享的视频一样回应。"
@@ -1601,9 +1669,9 @@ async def process_direct_video(self, event: AstrMessageEvent, *args, **kwargs):
                 contexts=context,
                 conversation=conversation
             )
-            
+
             # 检查是否是async generator
-            if hasattr(llm_result, '__aiter__'):
+            if hasattr(llm_result, "__aiter__"):
                 # 是async generator，逐个yield结果
                 async for result in llm_result:
                     yield result

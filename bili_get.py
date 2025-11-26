@@ -1,17 +1,16 @@
 import asyncio
-import aiohttp
-import re
-import os
-import aiofiles
-import json
-import time
-import qrcode
-from PIL import Image
 import base64
+import json
+import os
+import re
 from io import BytesIO
 from urllib.parse import unquote  # 添加这一行导入unquote函数
+
+import aiofiles
+import aiohttp
+import qrcode
+
 from astrbot.api import logger
-import requests
 
 # 添加Cookie相关配置
 COOKIE_FILE = "data/plugins/astrbot_plugin_videos_analysis/bili_cookies.json"
@@ -37,12 +36,13 @@ CONFIG = {
 }
 
 # 正则表达式
-REG_B23 = re.compile(r'(b23\.tv|bili2233\.cn)\/[\w]+')
-REG_BV = re.compile(r'BV1\w{9}')
-REG_AV = re.compile(r'av\d+', re.I)
+REG_B23 = re.compile(r"(b23\.tv|bili2233\.cn)\/[\w]+")
+REG_BV = re.compile(r"BV1\w{9}")
+REG_AV = re.compile(r"av\d+", re.I)
+REG_FULL_URL = re.compile(r"https?://www\.bilibili\.com/video/(BV1\w{9}|av\d+)")
 
 # AV转BV算法参数·
-AV2BV_TABLE = 'fZodR9XQDSUm21yCkr6zBqiveYah8bt4xsWpHnJE7jL5VG3guMTKNPAwcF'
+AV2BV_TABLE = "fZodR9XQDSUm21yCkr6zBqiveYah8bt4xsWpHnJE7jL5VG3guMTKNPAwcF"
 AV2BV_TR = {c: i for i, c in enumerate(AV2BV_TABLE)}
 AV2BV_S = [11, 10, 3, 8, 4, 6]
 AV2BV_XOR = 177451812
@@ -60,27 +60,27 @@ def format_number(num):
 
 def av2bv(av):
     """AV号转BV号"""
-    av_num = re.search(r'\d+', av)
+    av_num = re.search(r"\d+", av)
     if not av_num:
         return None
 
     try:
         x = (int(av_num.group()) ^ AV2BV_XOR) + AV2BV_ADD
-    except:
+    except Exception:
         return None
 
-    r = list('BV1 0 4 1 7  ')
+    r = list("BV1 0 4 1 7  ")
     for i in range(6):
         idx = (x // (58**i)) % 58
         r[AV2BV_S[i]] = AV2BV_TABLE[idx]
 
-    return ''.join(r).replace(' ', '0')
+    return "".join(r).replace(" ", "0")
 
 async def bili_request(url, return_json=True):
     """发送B站API请求"""
     if not url or not isinstance(url, str):
         return {"code": -400, "message": "Invalid URL"}
-        
+
     headers = {
         "referer": "https://www.bilibili.com/",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
@@ -91,7 +91,7 @@ async def bili_request(url, return_json=True):
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url, headers=headers) as response:
                 response.raise_for_status()
-                
+
                 if return_json:
                     try:
                         data = await response.json()
@@ -108,19 +108,19 @@ async def bili_request(url, return_json=True):
         return {"code": -400, "message": f"Network error: {str(e)}"}
     except asyncio.TimeoutError:
         return {"code": -400, "message": "Request timeout"}
-    
+
 # 添加检查Cookie是否有效的函数
 
 async def check_cookie_valid():
     """检查Cookie是否有效"""
     global COOKIE_VALID
-    
+
     # 强制重新检查Cookie有效性
     COOKIE_VALID = None
-    
+
     # 增加调试输出
     # log_callback("[DEBUG] 开始执行Cookie有效性检查")
-    
+
     cookies = await load_cookies()
     # log_callback(f"[DEBUG] 加载的Cookie: {cookies}")
     if not cookies:
@@ -129,11 +129,11 @@ async def check_cookie_valid():
 
     # 严格检查Cookie格式
     required_fields = {
-        "SESSDATA": lambda v: len(v) > 30 and ',' in v,
+        "SESSDATA": lambda v: len(v) > 30 and "," in v,
         "bili_jct": lambda v: len(v) == 32,
         "DedeUserID": lambda v: v.isdigit()
     }
-    
+
     for field, validator in required_fields.items():
         if field not in cookies or not validator(str(cookies[field])):
             log_callback(f"[DEBUG] Cookie字段验证失败: {field} = {cookies.get(field)}")
@@ -141,7 +141,7 @@ async def check_cookie_valid():
 
     # 使用新的验证API
     url = "https://api.bilibili.com/x/member/web/account"
-    
+
     # 增强请求头
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -154,20 +154,20 @@ async def check_cookie_valid():
         async with aiohttp.ClientSession() as session:
             # 添加超时和重试逻辑
             timeout = aiohttp.ClientTimeout(total=10)
-            
+
             async with session.get(url, headers=headers, timeout=timeout) as response:
                 # 详细响应分析
                 print(f"[DEBUG] 验证响应状态: {response.status}")
                 print(f"[DEBUG] 响应头: {dict(response.headers)}")
-                
+
                 data = await response.json()
                 print(f"[DEBUG] 验证API响应: {data}")
-                
+
                 # 修复这里：确保类型一致再比较
                 if data.get("code") == 0:
                     api_mid = str(data.get("data", {}).get("mid", ""))
                     cookie_mid = str(cookies["DedeUserID"])
-                    
+
                     if api_mid == cookie_mid:
                         print(f"√ Cookie验证通过，用户名: {data['data']['uname']}")
                         COOKIE_VALID = True
@@ -176,9 +176,9 @@ async def check_cookie_valid():
                         print(f"× Cookie验证失败: 用户ID不匹配 (API: {api_mid}, Cookie: {cookie_mid})")
                 else:
                     print(f"× Cookie验证失败: API返回错误 ({data.get('message')})")
-                
+
                 return False
-                
+
     except Exception as e:
         print(f"Cookie验证异常: {str(e)}")
         return False
@@ -253,18 +253,18 @@ async def get_video_download_url_by_bvid(bvid, quality=16):
     if not video_info:
         log_callback("解析视频信息失败")
         return None
-    
+
     aid = video_info["aid"]
     cid = video_info["cid"]
-    
+
     # 使用无Cookie的API获取视频链接
     api_url = f"https://api.bilibili.com/x/player/playurl?avid={aid}&cid={cid}&qn={quality}&type=mp4&platform=html5"
     data = await bili_request(api_url)
-    
+
     if data.get("code") != 0:
         log_callback(f"获取视频地址失败: {data.get('message')}")
         return None
-    
+
     # 获取视频URL
     try:
         video_url = data["data"]["durl"][0]["url"]
@@ -272,7 +272,7 @@ async def get_video_download_url_by_bvid(bvid, quality=16):
     except (KeyError, IndexError) as e:
         log_callback(f"解析视频URL失败: {str(e)}")
         return None
-        
+
 
 
 # 添加缺失的Cookie相关函数
@@ -292,9 +292,9 @@ async def load_cookies():
     if not os.path.exists(COOKIE_FILE):
         log_callback(f"Cookie文件不存在: {COOKIE_FILE}")
         return None
-    
+
     try:
-        async with aiofiles.open(COOKIE_FILE, "r", encoding="utf-8") as f:
+        async with aiofiles.open(COOKIE_FILE, encoding="utf-8") as f:
             content = await f.read()
             if not content.strip():
                 log_callback("Cookie文件为空")
@@ -312,15 +312,15 @@ async def generate_qrcode():
     """生成B站登录二维码（新版API）"""
     url = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
     data = await bili_request(url)
-    
+
     if data.get("code") != 0:
         print(f"获取二维码失败: {data.get('message')}")
         return None
-    
+
     qr_data = data["data"]
     qr_url = qr_data["url"]
     qrcode_key = qr_data["qrcode_key"]
-    
+
     # 生成二维码图片
     qr = qrcode.QRCode(
         version=1,
@@ -330,15 +330,15 @@ async def generate_qrcode():
     )
     qr.add_data(qr_url)
     qr.make(fit=True)
-    
+
     # 修复这里：使用qr对象的make_image方法，而不是直接调用qrcode.make_image
     img = qr.make_image(fill_color="black", back_color="white")
-    
+
     # 转换为base64以便显示
     buffered = BytesIO()
     img.save(buffered, format="PNG")
     img_str = base64.b64encode(buffered.getvalue()).decode()
-    
+
     return {
         "qrcode_key": qrcode_key,
         "image_base64": img_str,
@@ -351,7 +351,7 @@ async def check_login_status(qrcode_key):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
     }
-    
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers) as response:
@@ -362,25 +362,26 @@ async def check_login_status(qrcode_key):
         return {"code": -1, "message": str(e)}
 
 import logging
+
 logger = logging.getLogger(__name__)
 
 async def bili_login(event=None):
     """B站扫码登录流程（新版API）
-    
+
     参数:
         event: 消息事件对象，用于发送提醒消息
     """
     log_callback("正在生成B站登录二维码...")
     qr_data = await generate_qrcode()
-    
+
     if not qr_data:
         return None
-    
+
     log_callback("\n请使用B站APP扫描以下二维码登录:")
-    
+
     # 获取qrcode_key - 修复变量名
     qrcode_key = qr_data["qrcode_key"]
-    
+
     # 重新创建二维码用于终端显示
     qr = qrcode.QRCode(
         version=1,
@@ -391,7 +392,7 @@ async def bili_login(event=None):
     # 使用原始二维码数据中的URL
     qr.add_data(qr_data["url"])
     qr.make(fit=True)
-    
+
     # 获取二维码矩阵并在终端中打印
     matrix = qr.get_matrix()
     qr_text = "\n======= B站登录二维码 =======\n"
@@ -404,15 +405,15 @@ async def bili_login(event=None):
                 line += "  "  # 空白
         qr_text += line + "\n"
     qr_text += "==========================\n"
-    
+
     # 使用print直接输出到控制台，确保二维码能正常显示
     print(qr_text)
-    
+
     # 同时使用logger记录
     from astrbot.api import logger
     logger.info("B站登录二维码已显示在控制台")
     logger.info(qr_text)
-    
+
 
     # 保存二维码图片到指定路径
     image_dir = "data/plugins/astrbot_plugin_videos_analysis/image"
@@ -427,10 +428,10 @@ async def bili_login(event=None):
     logger.info(f"二维码图片已保存到: {image_path}")
     logger.info("如果无法扫描，可复制下方base64码用在线工具解析:")
     logger.info(f"data:image/png;base64,{qr_data['image_base64'][:50]}...")
-    
+
     # 创建一个异步任务来检查登录状态
     login_task = asyncio.create_task(check_login_status_loop(qrcode_key))
-    
+
     # 返回登录任务，调用方可以使用await等待任务完成
     return login_task
 
@@ -441,13 +442,13 @@ async def check_login_status_loop(qrcode_key):
     for _ in range(40):  # 最多等待90秒
         await asyncio.sleep(1)
         status = await check_login_status(qrcode_key)
-        
+
         if status.get("code") == 0:
             data = status.get("data", {})
             # 0: 扫码登录成功, -1: 未扫码, -2: 二维码已过期, -4: 未确认, -5: 已扫码未确认
             if data.get("code") == 0:
                 log_callback("\n登录成功!")
-                
+
                 try:
                     # 优先从URL参数获取Cookie
                     url = data.get("url", "")
@@ -466,32 +467,32 @@ async def check_login_status_loop(qrcode_key):
                                 ]
                                 if key in useful_keys:
                                     cookies[key] = unquote(value)
-                        
+
                         # 验证提取的Cookie是否完整
                         if not cookies.get("SESSDATA") or not cookies.get("DedeUserID"):
                             raise ValueError("获取的Cookie格式异常")
-                        
+
                         log_callback(f"获取到的Cookie: {cookies}")
-                        
+
                         await save_cookies_dict(cookies)
                         return cookies
                     else:
                         raise ValueError("URL格式异常，无法提取参数")
-                    
+
                 except Exception as e:
                     log_callback(f"登录异常: {str(e)}")
                     log_callback(f"原始响应数据: {data}")
                     return None
-            
+
             elif data.get("code") == -2:
                 log_callback("\n二维码已过期，请重新获取")
                 return None
-            
+
             elif data.get("code") == -4 or data.get("code") == -5:
                 log_callback("请在手机上确认登录")
-            
+
         # log_callback(".")  # 移除 end 和 flush 参数
-    
+
     log_callback("\n登录超时，请重试")
     return None
 
@@ -499,16 +500,16 @@ async def get_video_download_url_with_cookie(bvid, quality=80, event=None):
     """使用Cookie获取高清视频下载链接"""
     # 检查Cookie是否有效
     is_valid = await check_cookie_valid()
-    
+
     if not is_valid:
         log_callback("Cookie无效或不存在，尝试登录...")
         login_result = await bili_login(event)
         cookies = await login_result
-        
+
         if not cookies:
             log_callback("登录失败，将使用默认画质")
             return await get_video_download_url_by_bvid(bvid, 16)
-        
+
         is_valid = await check_cookie_valid()
         if not is_valid:
             log_callback("登录后Cookie仍然无效，将使用默认画质")
@@ -516,16 +517,16 @@ async def get_video_download_url_with_cookie(bvid, quality=80, event=None):
     else:
         cookies = await load_cookies()
         log_callback("使用已有的有效Cookie")
-    
+
     # 获取视频信息
     video_info = await parse_video(bvid)
     if not video_info:
         log_callback("解析视频信息失败")
         return None
-    
+
     aid = video_info["aid"]
     cid = video_info["cid"]
-    
+
     # 使用Cookie请求高清视频
     api_url = f"https://api.bilibili.com/x/player/playurl?avid={aid}&cid={cid}&qn={quality}&fnval=16&fourk=1"
     headers = {
@@ -533,17 +534,17 @@ async def get_video_download_url_with_cookie(bvid, quality=80, event=None):
         "Referer": "https://www.bilibili.com/",
         "Cookie": "; ".join([f"{k}={v}" for k, v in cookies.items()])
     }
-    
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(api_url, headers=headers) as response:
                 response.raise_for_status()
                 data = await response.json()
-                
+
                 if data.get("code") != 0:
                     log_callback(f"获取视频地址失败: {data.get('message')}")
                     return await get_video_download_url_by_bvid(bvid, 16)
-                
+
                 # 获取视频和音频的URL
                 video_url = data["data"]["dash"]["video"][0]["baseUrl"]
                 audio_url = data["data"]["dash"]["audio"][0]["baseUrl"]
@@ -559,7 +560,7 @@ async def download_file(url, file_path, headers):
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers, timeout=timeout) as response:
                 response.raise_for_status()
-                total_size = int(response.headers.get('Content-Length', 0))
+                total_size = int(response.headers.get("Content-Length", 0))
                 downloaded_size = 0
                 last_reported_progress = -1
 
@@ -630,7 +631,7 @@ async def merge_audio_and_video(audio_file, video_file, output_file):
 
 async def process_bili_video(url, download_flag=True, quality=80, use_login=True, event=None):
     """主处理函数
-    
+
     参数:
         url: B站视频链接
         download_flag: 是否下载视频
@@ -641,13 +642,24 @@ async def process_bili_video(url, download_flag=True, quality=80, use_login=True
     if not url or not isinstance(url, str):
         log_callback("无效的URL参数")
         return None
-        
+
     video_info = None
-    
+
     # 判断链接类型并解析
     try:
         if REG_B23.search(url):
             video_info = await parse_b23(REG_B23.search(url).group())
+        elif REG_FULL_URL.search(url):
+            # 处理完整的B站URL
+            match = REG_FULL_URL.search(url)
+            video_id = match.group(1) if match else ""
+            if REG_BV.search(video_id):
+                video_info = await parse_video(video_id)
+            elif REG_AV.search(video_id):
+                bvid = av2bv(video_id)
+                video_info = await parse_video(bvid) if bvid else None
+            else:
+                video_info = None
         elif REG_BV.search(url):
             video_info = await parse_video(REG_BV.search(url).group())
         elif REG_AV.search(url):
@@ -667,7 +679,7 @@ async def process_bili_video(url, download_flag=True, quality=80, use_login=True
     # 安全获取统计信息
     stats = video_info.get("stats", {})
     bvid = video_info.get("bvid")
-    
+
     if not bvid:
         log_callback("无法获取视频BV号")
         return None
@@ -695,7 +707,7 @@ async def process_bili_video(url, download_flag=True, quality=80, use_login=True
     if use_login:
         # 先检查Cookie是否有效
         is_valid = await check_cookie_valid()
-        
+
         # 如果Cookie无效，尝试登录
         if not is_valid:
             log_callback("Cookie无效或不存在，尝试登录...")
@@ -703,14 +715,14 @@ async def process_bili_video(url, download_flag=True, quality=80, use_login=True
             login_result = await bili_login(event)
             # 因为bili_login返回的是一个任务，所以需要再次await
             cookies = await login_result
-            
+
             if cookies:
                 log_callback("登录成功，重新检查Cookie有效性")
                 is_valid = await check_cookie_valid()
             else:
                 log_callback("登录失败或超时")
                 is_valid = False
-        
+
         # 根据Cookie有效性决定使用哪种方式获取视频链接
         if is_valid:
             log_callback("使用登录状态获取视频链接")
@@ -721,12 +733,12 @@ async def process_bili_video(url, download_flag=True, quality=80, use_login=True
     else:
         log_callback("根据设置，强制使用无登录方式获取视频")
         direct_url = await get_video_download_url_by_bvid(video_info["bvid"], min(quality, 64))  # 无登录模式下最高支持720P
-    
+
     # 下载视频
     if CONFIG["VIDEO"]["send_video"]:
         if download_flag:
             print("\n开始下载视频...")
-            
+
             # 根据use_login参数决定使用哪种方式下载视频
             if use_login:
                 filename = await download_video_with_cookie(
