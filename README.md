@@ -5,7 +5,9 @@
 ![访问次数](https://count.getloli.com/@astrbot_plugin_videos_analysis?name=astrbot_plugin_videos_analysis&theme=3d-num&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto)
 
 </div>
-#由于增加功能时操作不当，导致插件目前bug较多，故归档处理，并准备重构。
+# 由于增加功能时操作不当，导致插件目前bug较多，故归档处理，并准备重构。
+
+
 一个功能强大的 AstrBot 插件，支持多平台视频内容解析、下载和 AI 智能分析。
 
 ## ✨ 主要功能
