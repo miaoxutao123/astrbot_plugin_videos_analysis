@@ -9,87 +9,75 @@
         "type": "int",
         "default": 3658
     },
-    "douyin_api_url":{
-        "description": "抖音API地址（已弃用）",
-        "type": "string",
-        "default": "https://douyin.wtf/api/hybrid/video_data",
-        "hint": "如需部署私有解析服务以提高解析速度请访问此库：https://github.com/Evil0ctal/Douyin_TikTok_Download_API"
-    },
-    "doyin_cookie":{
+    "doyin_cookie": {
         "description": "抖音cookie",
         "type": "string",
-        "default": "passport_csrf_token=REDACTED; passport_csrf_token_default=REDACTED; ttwid=REDACTED; bd_ticket_guard_client_web_domain=2; enter_pc_once=1; UIFID_TEMP=REDACTED; hevc_supported=true; IsDouyinActive=true; home_can_add_dy_2_desktop=%220%22; dy_swidth=2560; dy_sheight=1440; stream_recommend_feed_params=REDACTED; fpk1=REDACTED; fpk2=REDACTED; strategyABtestKey=REDACTED; volume_info=REDACTED; stream_player_status_params=REDACTED; xgplayer_user_id=REDACTED; s_v_web_id=REDACTED; odin_tt=REDACTED; __security_mc_1_s_sdk_crypt_sdk=43b5ab78-4435-a0f5; download_guide=REDACTED; passport_mfa_token=REDACTED; d_ticket=REDACTED; passport_assist_user=REDACTED; n_mh=REDACTED; sid_guard=REDACTED; uid_tt=REDACTED; uid_tt_ss=REDACTED; sid_tt=REDACTED; sessionid=REDACTED; sessionid_ss=REDACTED; session_tlb_tag=sttt%7C17%7CKUVbaImKSM3qkCkSIL5Kdv________-w8K1ByDUfNhJx9CG_m8SKhFib3YuLELd2-H0gdrI_EY0%3D; is_staff_user=false; sid_ucp_v1=REDACTED; ssid_ucp_v1=REDACTED; login_time=REDACTED; _bd_ticket_crypt_cookie=REDACTED; __security_mc_1_s_sdk_sign_data_key_web_protect=a8ac2d39-4554-834d; __security_mc_1_s_sdk_cert_key=99d08a3f-49d0-b41d; __security_server_data_status=1; is_dash_user=1; publish_badge_show_info=REDACTED; UIFID=REDACTED; SelfTabRedDotControl=%5B%5D; vdg_s=1; __ac_nonce=REDACTED; __ac_signature=REDACTED; douyin.com; xg_device_score=REDACTED; device_web_cpu_core=20; device_web_memory_size=-1; architecture=amd64; biz_trace_id=REDACTED; bd_ticket_guard_client_data=REDACTED; WallpaperGuide=REDACTED",
+        "default": "",
         "hint": "插件已将https://github.com/Evil0ctal/Douyin_TikTok_Download_API的解析部分集成入内，觉得好用一定要去给原项目点个star，若解析失败请更新cookie"
     },
-    "delete_time":{
+    "delete_time": {
         "description": "删除文件时间（单位分钟）",
         "type": "int",
         "default": 60
     },
-    "max_video_size":{
+    "max_video_size": {
         "description": "最大视频大小（单位MB）（预留，还未完全实现）",
         "type": "int",
         "default": 200
     },
-    "bili_quality":{
+    "bili_quality": {
         "description": "B站视频清晰度",
         "type": "int",
-        "default":32,
-        "hint" :"16: 360P|32: 480P|64: 720P|80: 1080P|112: 1080P+（高码率）|120: 4K"
+        "default": 32,
+        "hint": "16: 360P|32: 480P|64: 720P|80: 1080P|112: 1080P+（高码率）|120: 4K"
     },
-    "bili_reply_mode":{
+    "bili_reply_mode": {
         "description": "回复模式",
         "type": "int",
         "default": 3,
-        "hint" :"0: 纯文本回复|1: 图片|2: 视频|3: 图片+视频|4: 纯视频回复"
+        "hint": "0: 纯文本回复|1: 图片|2: 视频|3: 图片+视频|4: 纯视频回复"
     },
-    "bili_url_mode":{
+    "bili_url_mode": {
         "description": "是否生成直链",
         "type": "bool",
         "default": true,
-        "hint" :"是否在哔哩哔哩视频解析时生成直链，默认生成直链"
+        "hint": "是否在哔哩哔哩视频解析时生成直链，默认生成直链"
     },
-    "Merge_and_forward":{
+    "Merge_and_forward": {
         "description": "是否合并转发",
         "type": "bool",
         "default": false,
-        "hint" :"是否在转发视频时合并视频和图片，默认不合并"
+        "hint": "是否在转发视频时合并视频和图片，默认不合并"
     },
     "bili_use_login": {
-          "description": "是否使用登录状态下载B站视频",
-          "hint": "启用后将尝试使用登录状态下载高清视频，禁用则强制使用无登录方式",
-          "type": "bool",
-          "default": false
-    },
-    "xhs_reply_mode":{
-        "description": "小红书是否开启合并转发",
+        "description": "是否使用登录状态下载B站视频",
+        "hint": "启用后将尝试使用登录状态下载高清视频，禁用则强制使用无登录方式",
         "type": "bool",
-        "default": true,
-        "hint" :"默认合并"
+        "default": false
     },
-    "douyin_video_comprehend":{
+    "douyin_video_comprehend": {
         "description": "抖音视频深度理解功能是否开启",
         "type": "bool",
         "default": false,
         "hint": "实验性功能，会消耗大量token，默认关闭，开启后会将抖音视频和图片使用Gemini进行深度分析"
     },
-    "show_progress_messages":{
+    "show_progress_messages": {
         "description": "是否显示进度提示信息",
         "type": "bool",
         "default": true,
         "hint": "是否显示类似'正在理解视频内容，请稍后...'的进度提示信息"
     },
-    "url_video_comprehend":{
+    "url_video_comprehend": {
         "description": "分享链接视频分析功能是否开启",
         "type": "bool",
         "default": false,
-        "hint": "实验性功能，会消耗大量token，默认关闭，开启后会将视频使用两种方式交给llm分析，如果是Gemini的话将上传视频到Gemini api或file api直接分析，若是其他多模态模型会使用一个简单的flow把视频拆分为多张图片和字幕实现视频理解功能"
+        "hint": "实验性功能，会消耗大量token，默认关闭，开启后会将视频使用Gemini进行深度分析"
     },
-    "upload_video_comprehend":{
+    "upload_video_comprehend": {
         "description": "读取你发送的视频到llm进行分析",
         "type": "bool",
         "default": false,
-        "hint": "实验性功能（暂时还未实现），会消耗大量token，默认关闭，会读取你发的所有视频到llm，可能会导致未知bug，开启后将上传你发送给bot的视频到llm进行分析，若使用Gemini则会上传到Gemini api或file api，若使用其他模型则会使用一个简单的flow把视频拆分为多张图片和字幕实现视频理解功能"
+        "hint": "实验性功能，会消耗大量token，默认关闭，会读取你发的所有视频到llm进行分析"
     },
     "gemini_base_url": {
         "description": "Gemini API 基础地址,反代地址也填写到这里",
@@ -100,11 +88,5 @@
         "description": "Gemini API Key",
         "type": "string",
         "default": ""
-    },
-    "debounce_time":{
-        "description": "防抖时间（单位秒）",
-        "type": "int",
-        "default": 5,
-        "hint" :"防止用户短时间内多次发送相同链接触发多次解析，默认5秒内相同链接只解析一次，设置为0则关闭防抖功能"
     }
 }
