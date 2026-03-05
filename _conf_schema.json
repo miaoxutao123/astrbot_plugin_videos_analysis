@@ -9,87 +9,75 @@
         "type": "int",
         "default": 3658
     },
-    "douyin_api_url":{
-        "description": "抖音API地址（已弃用）",
-        "type": "string",
-        "default": "https://douyin.wtf/api/hybrid/video_data",
-        "hint": "如需部署私有解析服务以提高解析速度请访问此库：https://github.com/Evil0ctal/Douyin_TikTok_Download_API"
-    },
-    "doyin_cookie":{
+    "doyin_cookie": {
         "description": "抖音cookie",
         "type": "string",
-        "default": "passport_csrf_token=34c03e4b75b7621b16fa1d02fbff4138; passport_csrf_token_default=34c03e4b75b7621b16fa1d02fbff4138; ttwid=1%7C7iJRehNQVuBAsuqhWPBbfKDpr16-VAW7mTyzI2rK_WQ%7C1755565986%7C16c33adc0ae4d3f3bdc462e0539e7e494d70b3e3d37d4af2e8e8f5b8cbce6779; bd_ticket_guard_client_web_domain=2; enter_pc_once=1; UIFID_TEMP=25fbca946115c5de1a71a2f3ab2554e0f974c22280bf68dee7a40800d5de48828e8fa047c34d1c1fa6368e83e8a708864f0aaa1b8b546dd8b0700db02108b0719baf96c9e384a96c4c9fb97727cfb815; hevc_supported=true; IsDouyinActive=true; home_can_add_dy_2_desktop=%220%22; dy_swidth=2560; dy_sheight=1440; stream_recommend_feed_params=%22%7B%5C%22cookie_enabled%5C%22%3Atrue%2C%5C%22screen_width%5C%22%3A2560%2C%5C%22screen_height%5C%22%3A1440%2C%5C%22browser_online%5C%22%3Atrue%2C%5C%22cpu_core_num%5C%22%3A20%2C%5C%22device_memory%5C%22%3A0%2C%5C%22downlink%5C%22%3A%5C%22%5C%22%2C%5C%22effective_type%5C%22%3A%5C%22%5C%22%2C%5C%22round_trip_time%5C%22%3A0%7D%22; fpk1=U2FsdGVkX1/DMUp5kDCB8UwyTPBhF2z0Sq8+QOnpIkjy0M2/dK6SfnC41KN8weSfFhBLhBg8tcrTwQ+Mwcm7Bg==; fpk2=72c62ac3761e65106bdcc23caec06ba2; strategyABtestKey=%221755565980.268%22; volume_info=%7B%22isUserMute%22%3Afalse%2C%22isMute%22%3Atrue%2C%22volume%22%3A0.5%7D; stream_player_status_params=%22%7B%5C%22is_auto_play%5C%22%3A0%2C%5C%22is_full_screen%5C%22%3A0%2C%5C%22is_full_webscreen%5C%22%3A0%2C%5C%22is_mute%5C%22%3A1%2C%5C%22is_speed%5C%22%3A1%2C%5C%22is_visible%5C%22%3A1%7D%22; xgplayer_user_id=534136793350; s_v_web_id=verify_meapqnn2_rVTujbZO_Qb6T_4XPe_8kKk_hW60QbRGBR6T; odin_tt=e261bdd16913632ab644e7bf7f6e1e7856a09bf617b1314ff3c968b9fb1611951c908ece90766ce9a4927d0bc3a44a172cb7612fb97fbd3f2fcb719a18542148; __security_mc_1_s_sdk_crypt_sdk=43b5ab78-4435-a0f5; download_guide=%221%2F20250814%2F0%22; passport_mfa_token=CjcuoOtIpi7fcrpxQtuRxB2x72YsVo%2BwatzBYj%2F4Wffc3vLAWCvGnlARCMVZigog8jNTiT0U0f1mGkoKPAAAAAAAAAAAAABPWRTVYiB4iI%2FWdh4RzqXoNtxceQyaJhdwYuJDqFqMXIt2F6MLKK4ySkYRIG%2FbGqSoNBCZs%2FkNGPax0WwgAiIBA4G%2BPGc%3D; d_ticket=b27dcd263ad670d628e5bc6ee64ced91f192a; passport_assist_user=CkEO3n_PzPoyK1KVaOtm9IVMj_eGEMj4EVVKHlc6Qe8cEQtFnPaux8LIZHBwpRxR6-JgiEU34Mjs3HT6HcM5VJU6FhpKCjwAAAAAAAAAAAAAT1mZQNQCXyC2wknK37Gv-Xa8z5ScvhIlKQTHlzTb2Huh7AQCf291Idd_l5AFRVtxejQQ47L5DRiJr9ZUIAEiAQOMmXx-; n_mh=Y1x7kdpJo4k2DGKfk4rgVX984YWA2SL4gmt7WFVBi9w; sid_guard=29455b68898a48cdea90291220be4a76%7C1755134549%7C5184000%7CMon%2C+13-Oct-2025+01%3A22%3A29+GMT; uid_tt=51aedabeb11d770fbdd2308eca027a29; uid_tt_ss=51aedabeb11d770fbdd2308eca027a29; sid_tt=29455b68898a48cdea90291220be4a76; sessionid=29455b68898a48cdea90291220be4a76; sessionid_ss=29455b68898a48cdea90291220be4a76; session_tlb_tag=sttt%7C17%7CKUVbaImKSM3qkCkSIL5Kdv________-w8K1ByDUfNhJx9CG_m8SKhFib3YuLELd2-H0gdrI_EY0%3D; is_staff_user=false; sid_ucp_v1=1.0.0-KDI3YTJiYTM5YzEyNDVkMzc0Y2U5YzQ4YjdhNzg2NTJmZjA1NTk5ZDEKIQiJ2bCfgs3GBBDV9PTEBhjvMSAMMNX9iKwGOAdA9AdIBBoCbHEiIDI5NDU1YjY4ODk4YTQ4Y2RlYTkwMjkxMjIwYmU0YTc2; ssid_ucp_v1=1.0.0-KDI3YTJiYTM5YzEyNDVkMzc0Y2U5YzQ4YjdhNzg2NTJmZjA1NTk5ZDEKIQiJ2bCfgs3GBBDV9PTEBhjvMSAMMNX9iKwGOAdA9AdIBBoCbHEiIDI5NDU1YjY4ODk4YTQ4Y2RlYTkwMjkxMjIwYmU0YTc2; login_time=1755134549773; _bd_ticket_crypt_cookie=0493c18d6e45ca9f60b3f105d9f6f9c4; __security_mc_1_s_sdk_sign_data_key_web_protect=a8ac2d39-4554-834d; __security_mc_1_s_sdk_cert_key=99d08a3f-49d0-b41d; __security_server_data_status=1; is_dash_user=1; publish_badge_show_info=%220%2C0%2C0%2C1755134550208%22; UIFID=25fbca946115c5de1a71a2f3ab2554e0f974c22280bf68dee7a40800d5de48828e8fa047c34d1c1fa6368e83e8a708869442cb23cdb83619abe8b49ed8a470117b6bbc2159220195dc6f0e5d6c68686440c5af8f6e54bb105e60a9e244c9da22defb260f1d6b54135dea12a178056801f9e9a5724526e2ca050807c437bb98cb234c524fff8cf248d8f87e4af6a4ee432f1f9c2f82836f593d76134390925c6e; SelfTabRedDotControl=%5B%5D; vdg_s=1; __ac_nonce=068a3cf9a00c87b6f3c41; __ac_signature=_02B4Z6wo00f01oX7kwwAAIDCyNqqpL3ii6KFypeAAMnpbb; douyin.com; xg_device_score=8.304698506183575; device_web_cpu_core=20; device_web_memory_size=-1; architecture=amd64; biz_trace_id=88637849; bd_ticket_guard_client_data=eyJiZC10aWNrZXQtZ3VhcmQtdmVyc2lvbiI6MiwiYmQtdGlja2V0LWd1YXJkLWl0ZXJhdGlvbi12ZXJzaW9uIjoxLCJiZC10aWNrZXQtZ3VhcmQtcmVlLXB1YmxpYy1rZXkiOiJCTE56TWY0Y2NJd2dpVkl1WXI3WW5wdk40N3NYNzczNWlGUmtiRGhQL2tnUkhxdkNjR0pTZ0VvVi9rQSsxdXdpR3FwMDJwbElQRWZ4QTBSaUU3M2QwTVk9IiwiYmQtdGlja2V0LWd1YXJkLXdlYi12ZXJzaW9uIjoyfQ%3D%3D; WallpaperGuide=%7B%22showTime%22%3A0%2C%22closeTime%22%3A0%2C%22showCount%22%3A0%2C%22cursor1%22%3A10%2C%22cursor2%22%3A2%7D",
+        "default": "",
         "hint": "插件已将https://github.com/Evil0ctal/Douyin_TikTok_Download_API的解析部分集成入内，觉得好用一定要去给原项目点个star，若解析失败请更新cookie"
     },
-    "delete_time":{
+    "delete_time": {
         "description": "删除文件时间（单位分钟）",
         "type": "int",
         "default": 60
     },
-    "max_video_size":{
+    "max_video_size": {
         "description": "最大视频大小（单位MB）（预留，还未完全实现）",
         "type": "int",
         "default": 200
     },
-    "bili_quality":{
+    "bili_quality": {
         "description": "B站视频清晰度",
         "type": "int",
-        "default":32,
-        "hint" :"16: 360P|32: 480P|64: 720P|80: 1080P|112: 1080P+（高码率）|120: 4K"
+        "default": 32,
+        "hint": "16: 360P|32: 480P|64: 720P|80: 1080P|112: 1080P+（高码率）|120: 4K"
     },
-    "bili_reply_mode":{
+    "bili_reply_mode": {
         "description": "回复模式",
         "type": "int",
         "default": 3,
-        "hint" :"0: 纯文本回复|1: 图片|2: 视频|3: 图片+视频|4: 纯视频回复"
+        "hint": "0: 纯文本回复|1: 图片|2: 视频|3: 图片+视频|4: 纯视频回复"
     },
-    "bili_url_mode":{
+    "bili_url_mode": {
         "description": "是否生成直链",
         "type": "bool",
         "default": true,
-        "hint" :"是否在哔哩哔哩视频解析时生成直链，默认生成直链"
+        "hint": "是否在哔哩哔哩视频解析时生成直链，默认生成直链"
     },
-    "Merge_and_forward":{
+    "Merge_and_forward": {
         "description": "是否合并转发",
         "type": "bool",
         "default": false,
-        "hint" :"是否在转发视频时合并视频和图片，默认不合并"
+        "hint": "是否在转发视频时合并视频和图片，默认不合并"
     },
     "bili_use_login": {
-          "description": "是否使用登录状态下载B站视频",
-          "hint": "启用后将尝试使用登录状态下载高清视频，禁用则强制使用无登录方式",
-          "type": "bool",
-          "default": false
-    },
-    "xhs_reply_mode":{
-        "description": "小红书是否开启合并转发",
+        "description": "是否使用登录状态下载B站视频",
+        "hint": "启用后将尝试使用登录状态下载高清视频，禁用则强制使用无登录方式",
         "type": "bool",
-        "default": true,
-        "hint" :"默认合并"
+        "default": false
     },
-    "douyin_video_comprehend":{
+    "douyin_video_comprehend": {
         "description": "抖音视频深度理解功能是否开启",
         "type": "bool",
         "default": false,
         "hint": "实验性功能，会消耗大量token，默认关闭，开启后会将抖音视频和图片使用Gemini进行深度分析"
     },
-    "show_progress_messages":{
+    "show_progress_messages": {
         "description": "是否显示进度提示信息",
         "type": "bool",
         "default": true,
         "hint": "是否显示类似'正在理解视频内容，请稍后...'的进度提示信息"
     },
-    "url_video_comprehend":{
+    "url_video_comprehend": {
         "description": "分享链接视频分析功能是否开启",
         "type": "bool",
         "default": false,
-        "hint": "实验性功能，会消耗大量token，默认关闭，开启后会将视频使用两种方式交给llm分析，如果是Gemini的话将上传视频到Gemini api或file api直接分析，若是其他多模态模型会使用一个简单的flow把视频拆分为多张图片和字幕实现视频理解功能"
+        "hint": "实验性功能，会消耗大量token，默认关闭，开启后会将视频使用Gemini进行深度分析"
     },
-    "upload_video_comprehend":{
+    "upload_video_comprehend": {
         "description": "读取你发送的视频到llm进行分析",
         "type": "bool",
         "default": false,
-        "hint": "实验性功能（暂时还未实现），会消耗大量token，默认关闭，会读取你发的所有视频到llm，可能会导致未知bug，开启后将上传你发送给bot的视频到llm进行分析，若使用Gemini则会上传到Gemini api或file api，若使用其他模型则会使用一个简单的flow把视频拆分为多张图片和字幕实现视频理解功能"
+        "hint": "实验性功能，会消耗大量token，默认关闭，会读取你发的所有视频到llm进行分析"
     },
     "gemini_base_url": {
         "description": "Gemini API 基础地址,反代地址也填写到这里",
@@ -100,11 +88,5 @@
         "description": "Gemini API Key",
         "type": "string",
         "default": ""
-    },
-    "debounce_time":{
-        "description": "防抖时间（单位秒）",
-        "type": "int",
-        "default": 5,
-        "hint" :"防止用户短时间内多次发送相同链接触发多次解析，默认5秒内相同链接只解析一次，设置为0则关闭防抖功能"
     }
 }
