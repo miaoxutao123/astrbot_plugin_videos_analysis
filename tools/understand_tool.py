@@ -27,6 +27,7 @@ from ..services.douyin_service import download as douyin_download
 from ..services.bilibili_service import process_bili_video
 from ..douyin_scraper.douyin_parser import DouyinParser
 from ..utils.config_helper import (
+    DOWNLOAD_DIR_DY,
     DOWNLOAD_DIR_DIRECT,
     get_gemini_api_config_with_fallback,
 )
@@ -107,9 +108,8 @@ async def handle_understand_video(plugin, video_source: str, prompt: str = None)
                 return {"error": f"该链接不是视频类型（类型: {result.get('type')})"}
 
             media_url = result["media_urls"][0]
-            download_dir = "data/plugins/astrbot_plugin_videos_analysis/download_videos/dy"
-            os.makedirs(download_dir, exist_ok=True)
-            video_path = f"{download_dir}/{result.get('aweme_id', uuid.uuid4().hex[:8])}.mp4"
+            os.makedirs(DOWNLOAD_DIR_DY, exist_ok=True)
+            video_path = f"{DOWNLOAD_DIR_DY}/{result.get('aweme_id', uuid.uuid4().hex[:8])}.mp4"
             await douyin_download(media_url, video_path, cookie)
             temp_file = True
 
@@ -121,7 +121,7 @@ async def handle_understand_video(plugin, video_source: str, prompt: str = None)
             platform = "B站"
             result = await process_bili_video(
                 video_source, download_flag=True,
-                quality=plugin.bili_quality, use_login=plugin.bili_use_login, event=None,
+                quality=16, use_login=plugin.bili_use_login, event=None,
             )
             if not result or not result.get("video_path"):
                 return {"error": "B站视频下载失败"}
@@ -140,9 +140,11 @@ async def handle_understand_video(plugin, video_source: str, prompt: str = None)
         # ==================== 2. 分析视频 ====================
         analysis_prompt = prompt or "请详细描述这个视频的内容，包括场景、人物、动作、对话和传达的核心信息。请使用中文回答。"
         result_parts = []
+        method = getattr(plugin, "video_understand_method", "local_asr")
 
-        # 尝试 MiMo 分析
-        if plugin.mimo_api_key:
+        # 根据配置的 video_understand_method 选择分析路径
+        if method == "mimo" and plugin.mimo_api_key:
+            # MiMo 优先
             try:
                 logger.info("使用 MiMo 模型分析视频...")
                 mimo_result = await analyze_video_with_mimo(
@@ -163,7 +165,7 @@ async def handle_understand_video(plugin, video_source: str, prompt: str = None)
             except Exception as e:
                 logger.warning(f"MiMo 分析失败，回退到 Gemini: {e}")
 
-        # Gemini 分析
+        # Gemini 分析（默认回退 或 method 不是 mimo）
         api_key, proxy_url = await get_gemini_api_config_with_fallback(
             plugin.context, plugin.gemini_api_key, plugin.gemini_base_url,
         )
@@ -186,7 +188,7 @@ async def handle_understand_video(plugin, video_source: str, prompt: str = None)
             except Exception as e:
                 logger.warning(f"Gemini 分析失败: {e}")
 
-        # 本地 ASR 回退
+        # 本地 ASR 回退（method == "local_asr" 或其他方法均失败）
         try:
             logger.info("使用本地 ASR + 抽帧分析视频...")
             asr_result = await local_asr_analyze_video(video_path)
