@@ -10,10 +10,10 @@
         "default": 3658
     },
     "doyin_cookie": {
-        "description": "抖音cookie",
+        "description": "抖音cookie（支持扫码登录自动管理）",
         "type": "string",
         "default": "",
-        "hint": "插件已将https://github.com/Evil0ctal/Douyin_TikTok_Download_API的解析部分集成入内，觉得好用一定要去给原项目点个star，若解析失败请更新cookie"
+        "hint": "推荐使用 /dy_login 指令扫码登录自动获取。也可手动填入，扫码获取的cookie优先级更高。"
     },
     "delete_time": {
         "description": "删除文件时间（单位分钟）",
@@ -88,5 +88,47 @@
         "description": "Gemini API Key",
         "type": "string",
         "default": ""
+    },
+    "private_auto_comprehend": {
+        "description": "私聊是否自动理解视频内容",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后，私聊中发送视频链接会自动使用AI分析内容，无需额外指令"
+    },
+    "auto_parse_enabled": {
+        "description": "自动解析开关（被动检测消息中的视频链接）",
+        "type": "bool",
+        "default": false,
+        "hint": "关闭后不再自动检测消息中的视频链接，可通过AI对话调用解析工具。默认关闭。"
+    },
+    "douyin_proxy": {
+        "description": "抖音请求代理地址（用于绕过反爬）",
+        "type": "string",
+        "default": "",
+        "hint": "如 http://127.0.0.1:7890 ，留空则直连。AstrBot启动时会清除系统代理，需在此手动配置。"
+    },
+    "video_understand_method": {
+        "description": "视频理解方式",
+        "type": "string",
+        "default": "local_asr",
+        "hint": "local_asr: 本地ASR+抽帧（需funasr）| mimo: 使用MiMo多模态大模型原生理解视频（推荐，需配置mimo_api_key）"
+    },
+    "mimo_model": {
+        "description": "MiMo 模型ID",
+        "type": "string",
+        "default": "mimo-v2-omni",
+        "hint": "小米官方平台用 mimo-v2-omni | OpenRouter用 xiaomi/mimo-v2-omni"
+    },
+    "mimo_api_base": {
+        "description": "MiMo API 基础地址",
+        "type": "string",
+        "default": "https://api.xiaomimimo.com/v1",
+        "hint": "小米官方: https://api.xiaomimimo.com/v1 | OpenRouter: https://openrouter.ai/api/v1"
+    },
+    "mimo_api_key": {
+        "description": "MiMo API Key",
+        "type": "string",
+        "default": "",
+        "hint": "小米官方平台注册获取: https://platform.xiaomimimo.com/#/console/api-keys | 或填入OpenRouter API key"
     }
 }

@@ -103,7 +103,7 @@ class TokenManager:
         }
 
         transport = httpx.HTTPTransport(retries=5)
-        with httpx.Client(transport=transport, proxies=cls.proxies) as client:
+        with httpx.Client(transport=transport, proxy=None) as client:
             try:
                 response = client.post(
                     cls.token_conf["url"], content=payload, headers=headers
@@ -335,7 +335,7 @@ class SecUserIdFetcher:
         try:
             transport = httpx.AsyncHTTPTransport(retries=5)
             async with httpx.AsyncClient(
-                    transport=transport, proxies=TokenManager.proxies, timeout=10
+                    transport=transport, proxy=TokenManager.proxies.get("https://") or TokenManager.proxies.get("http://"), timeout=10
             ) as client:
                 response = await client.get(url, follow_redirects=True)
                 # 444一般为Nginx拦截，不返回状态 (444 is generally intercepted by Nginx and does not return status)
@@ -403,12 +403,13 @@ class AwemeIdFetcher:
     _DOUYIN_DISCOVER_URL_PATTERN = re.compile(r"modal_id=([0-9]+)")
 
     @classmethod
-    async def get_aweme_id(cls, url: str) -> str:
+    async def get_aweme_id(cls, url: str, proxy: str = None) -> str:
         """
         从单个url中获取aweme_id (Get aweme_id from a single url)
 
         Args:
             url (str): 输入的url (Input url)
+            proxy (str): 可选的代理地址，覆盖 TokenManager 默认代理
 
         Returns:
             str: 匹配到的aweme_id (Matched aweme_id)
@@ -417,10 +418,13 @@ class AwemeIdFetcher:
         if not isinstance(url, str):
             raise TypeError("参数必须是字符串类型")
 
+        # 使用传入的代理或默认代理
+        effective_proxy = proxy if proxy is not None else (TokenManager.proxies.get("https://") or TokenManager.proxies.get("http://"))
+
         # 重定向到完整链接
         transport = httpx.AsyncHTTPTransport(retries=5)
         async with httpx.AsyncClient(
-                transport=transport, proxy=None, timeout=10
+                transport=transport, proxy=effective_proxy, timeout=30
         ) as client:
             try:
                 response = await client.get(url, follow_redirects=True)
@@ -521,7 +525,7 @@ class WebCastIdFetcher:
             # 重定向到完整链接
             transport = httpx.AsyncHTTPTransport(retries=5)
             async with httpx.AsyncClient(
-                    transport=transport, proxies=TokenManager.proxies, timeout=10
+                    transport=transport, proxy=TokenManager.proxies.get("https://") or TokenManager.proxies.get("http://"), timeout=10
             ) as client:
                 response = await client.get(url, follow_redirects=True)
                 response.raise_for_status()

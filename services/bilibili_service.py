@@ -4,36 +4,26 @@ import json
 import os
 import re
 from io import BytesIO
-from urllib.parse import unquote  # 添加这一行导入unquote函数
+from urllib.parse import unquote
 
 import aiofiles
 import aiohttp
+import httpx
 import qrcode
 
 from astrbot.api import logger
 
-# 添加Cookie相关配置
-COOKIE_FILE = "data/plugins/astrbot_plugin_videos_analysis/bili_cookies.json"
+# 统一使用 astrbot logger，避免 print 和 log_callback
+log_callback = logger.info
+
+# 路径常量
+PLUGIN_DATA_DIR = "data/plugins/astrbot_plugin_videos_analysis"
+COOKIE_FILE = f"{PLUGIN_DATA_DIR}/bili_cookies.json"
+BILI_DOWNLOAD_DIR = f"{PLUGIN_DATA_DIR}/download_videos/bili"
 os.makedirs(os.path.dirname(COOKIE_FILE), exist_ok=True)
 
-
-log_callback = logger.info  # 默认使用 logger.info 作为回调
-# 在文件顶部添加全局变量
+# Cookie有效性缓存
 COOKIE_VALID = None
-
-def set_log_callback(callback):
-    """设置日志回调函数"""
-    global log_callback
-    log_callback = callback
-
-# 配置参数
-CONFIG = {
-    "VIDEO": {
-        "enable": True,
-        "send_link": False,
-        "send_video": True
-    }
-}
 
 # 正则表达式
 REG_B23 = re.compile(r"(b23\.tv|bili2233\.cn)\/[\w]+")
@@ -157,11 +147,10 @@ async def check_cookie_valid():
 
             async with session.get(url, headers=headers, timeout=timeout) as response:
                 # 详细响应分析
-                print(f"[DEBUG] 验证响应状态: {response.status}")
-                print(f"[DEBUG] 响应头: {dict(response.headers)}")
+                logger.debug(f"验证响应状态: {response.status}")
 
                 data = await response.json()
-                print(f"[DEBUG] 验证API响应: {data}")
+                logger.debug(f"验证API响应: {data}")
 
                 # 修复这里：确保类型一致再比较
                 if data.get("code") == 0:
@@ -169,18 +158,18 @@ async def check_cookie_valid():
                     cookie_mid = str(cookies["DedeUserID"])
 
                     if api_mid == cookie_mid:
-                        print(f"√ Cookie验证通过，用户名: {data['data']['uname']}")
+                        log_callback(f"Cookie验证通过，用户名: {data['data']['uname']}")
                         COOKIE_VALID = True
                         return True
                     else:
-                        print(f"× Cookie验证失败: 用户ID不匹配 (API: {api_mid}, Cookie: {cookie_mid})")
+                        log_callback(f"Cookie验证失败: 用户ID不匹配 (API: {api_mid}, Cookie: {cookie_mid})")
                 else:
-                    print(f"× Cookie验证失败: API返回错误 ({data.get('message')})")
+                    log_callback(f"Cookie验证失败: API返回错误 ({data.get('message')})")
 
                 return False
 
     except Exception as e:
-        print(f"Cookie验证异常: {str(e)}")
+        log_callback(f"Cookie验证异常: {str(e)}")
         return False
 
 
@@ -239,7 +228,7 @@ async def download_video(aid, cid, bvid, quality=16):
     if isinstance(video_data, dict):
         return None
 
-    filename = f"data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/{bvid}.mp4"
+    filename = f"{BILI_DOWNLOAD_DIR}/{bvid}.mp4"
     os.makedirs(os.path.dirname(filename), exist_ok=True)
     async with aiofiles.open(filename, "wb") as f:
         await f.write(video_data)
@@ -309,12 +298,21 @@ async def load_cookies():
         return None
 
 async def generate_qrcode():
-    """生成B站登录二维码（新版API）"""
+    """生成B站登录二维码（新版API，使用httpx）"""
     url = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
-    data = await bili_request(url)
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+            })
+            data = resp.json()
+    except Exception as e:
+        log_callback(f"获取二维码网络请求失败: {e}")
+        return None
 
     if data.get("code") != 0:
-        print(f"获取二维码失败: {data.get('message')}")
+        log_callback(f"获取二维码失败: {data.get('message')}")
         return None
 
     qr_data = data["data"]
@@ -331,10 +329,9 @@ async def generate_qrcode():
     qr.add_data(qr_url)
     qr.make(fit=True)
 
-    # 修复这里：使用qr对象的make_image方法，而不是直接调用qrcode.make_image
     img = qr.make_image(fill_color="black", back_color="white")
 
-    # 转换为base64以便显示
+    # 转换为base64
     buffered = BytesIO()
     img.save(buffered, format="PNG")
     img_str = base64.b64encode(buffered.getvalue()).decode()
@@ -346,24 +343,20 @@ async def generate_qrcode():
     }
 
 async def check_login_status(qrcode_key):
-    """检查登录状态（新版API）"""
+    """检查登录状态（新版API，使用httpx）"""
     url = f"https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key={qrcode_key}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
     }
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=headers) as response:
-                result = await response.json()
-                return result
-    except aiohttp.ClientError as e:
-        print(f"检查登录状态失败: {str(e)}")
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(url, headers=headers)
+            result = response.json()
+            return result
+    except Exception as e:
+        log_callback(f"检查登录状态失败: {str(e)}")
         return {"code": -1, "message": str(e)}
-
-import logging
-
-logger = logging.getLogger(__name__)
 
 async def bili_login(event=None):
     """B站扫码登录流程（新版API）
@@ -407,12 +400,10 @@ async def bili_login(event=None):
     qr_text += "==========================\n"
 
     # 使用print直接输出到控制台，确保二维码能正常显示
-    print(qr_text)
+    logger.info(qr_text)
 
     # 同时使用logger记录
-    from astrbot.api import logger
     logger.info("B站登录二维码已显示在控制台")
-    logger.info(qr_text)
 
 
     # 保存二维码图片到指定路径
@@ -423,8 +414,7 @@ async def bili_login(event=None):
         f.write(base64.b64decode(qr_data["image_base64"]))
     # logger.info(f"二维码图片已保存到: {image_path}")
 
-    # 提供备用显示方式
-    print(f"\n如果上方二维码显示异常，请查看二维码文件: {image_path}")
+    log_callback(f"\n如果上方二维码显示异常，请查看二维码文件: {image_path}")
     logger.info(f"二维码图片已保存到: {image_path}")
     logger.info("如果无法扫描，可复制下方base64码用在线工具解析:")
     logger.info(f"data:image/png;base64,{qr_data['image_base64'][:50]}...")
@@ -581,7 +571,7 @@ async def download_file(url, file_path, headers):
 async def download_video_with_cookie(aid, cid, bvid, quality=80, event=None):
     """使用Cookie下载高清视频并合成音视频"""
     # 检查是否已存在合成后的文件
-    output_file = f"data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/{bvid}_output.mp4"
+    output_file = f"{BILI_DOWNLOAD_DIR}/{bvid}_output.mp4"
     if os.path.exists(output_file):
         log_callback(f"视频已存在，跳过下载和合成：{output_file}")
         return output_file
@@ -599,8 +589,8 @@ async def download_video_with_cookie(aid, cid, bvid, quality=80, event=None):
     }
 
     # 下载视频和音频
-    video_file = f"data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/{bvid}_video.mp4"
-    audio_file = f"data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/{bvid}_audio.mp3"
+    video_file = f"{BILI_DOWNLOAD_DIR}/{bvid}_video.mp4"
+    audio_file = f"{BILI_DOWNLOAD_DIR}/{bvid}_audio.mp3"
 
     os.makedirs(os.path.dirname(video_file), exist_ok=True)
 
@@ -625,8 +615,12 @@ async def download_video_with_cookie(aid, cid, bvid, quality=80, event=None):
 
 async def merge_audio_and_video(audio_file, video_file, output_file):
     """异步合成音视频"""
-    cmd = f'ffmpeg -i "{audio_file}" -i "{video_file}" -acodec copy -vcodec copy "{output_file}"'
-    process = await asyncio.create_subprocess_shell(cmd)
+    process = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-i", audio_file, "-i", video_file,
+        "-acodec", "copy", "-vcodec", "copy", output_file,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
     await process.communicate()
 
 async def process_bili_video(url, download_flag=True, quality=80, use_login=True, event=None):
@@ -685,7 +679,7 @@ async def process_bili_video(url, download_flag=True, quality=80, use_login=True
         return None
 
     # 检查本地是否已存在相同 bvid 的视频文件
-    video_file = f"data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/{bvid}_output.mp4"
+    video_file = f"{BILI_DOWNLOAD_DIR}/{bvid}_output.mp4"
     if os.path.exists(video_file):
         log_callback(f"本地已存在视频文件：{video_file}，跳过下载")
         return {
@@ -735,59 +729,58 @@ async def process_bili_video(url, download_flag=True, quality=80, use_login=True
         direct_url = await get_video_download_url_by_bvid(video_info["bvid"], min(quality, 64))  # 无登录模式下最高支持720P
 
     # 下载视频
-    if CONFIG["VIDEO"]["send_video"]:
-        if download_flag:
-            print("\n开始下载视频...")
+    if download_flag:
+        log_callback("开始下载视频...")
 
-            # 根据use_login参数决定使用哪种方式下载视频
-            if use_login:
-                filename = await download_video_with_cookie(
-                    video_info["aid"],
-                    video_info["cid"],
-                    video_info["bvid"],
-                    quality,
-                    event
-                )
-            else:
-                print("根据设置，强制使用无登录方式下载视频")
-                filename = await download_video(
-                    video_info["aid"],
-                    video_info["cid"],
-                    video_info["bvid"],
-                    min(quality, 64)  # 无登录模式下最高支持720P
-                )
-
-            if filename:
-                print(f"视频已保存为：{filename}")
-            else:
-                print("下载视频失败")
-            return {
-                "direct_url": direct_url,
-                "title": video_info["title"],
-                "cover": video_info["cover"],
-                "duration": video_info["duration"],
-                "stats": video_info["stats"],
-                "video_path": filename,
-                "view_count": stats["view"],
-                "like_count": stats["like"],
-                "danmaku_count": stats["danmaku"],
-                "coin_count": stats["coin"],
-                "favorite_count": stats["favorite"],
-                "bvid": video_info["bvid"],
-            }
+        # 根据use_login参数决定使用哪种方式下载视频
+        if use_login:
+            filename = await download_video_with_cookie(
+                video_info["aid"],
+                video_info["cid"],
+                video_info["bvid"],
+                quality,
+                event
+            )
         else:
-            return {
-                "direct_url": direct_url,
-                "title": video_info["title"],
-                "cover": video_info["cover"],
-                "duration": video_info["duration"],
-                "stats": video_info["stats"],
-                "video_path": None,
-                "view_count": stats["view"],
-                "like_count": stats["like"],
-                "danmaku_count": stats["danmaku"],
-                "coin_count": stats["coin"],
-                "favorite_count": stats["favorite"],
-                "bvid": video_info["bvid"],
-            }
+            log_callback("根据设置，强制使用无登录方式下载视频")
+            filename = await download_video(
+                video_info["aid"],
+                video_info["cid"],
+                video_info["bvid"],
+                min(quality, 64)  # 无登录模式下最高支持720P
+            )
+
+        if filename:
+            log_callback(f"视频已保存为：{filename}")
+        else:
+            log_callback("下载视频失败")
+        return {
+            "direct_url": direct_url,
+            "title": video_info["title"],
+            "cover": video_info["cover"],
+            "duration": video_info["duration"],
+            "stats": video_info["stats"],
+            "video_path": filename,
+            "view_count": stats["view"],
+            "like_count": stats["like"],
+            "danmaku_count": stats["danmaku"],
+            "coin_count": stats["coin"],
+            "favorite_count": stats["favorite"],
+            "bvid": video_info["bvid"],
+        }
+    else:
+        return {
+            "direct_url": direct_url,
+            "title": video_info["title"],
+            "cover": video_info["cover"],
+            "duration": video_info["duration"],
+            "stats": video_info["stats"],
+            "video_path": None,
+            "view_count": stats["view"],
+            "like_count": stats["like"],
+            "danmaku_count": stats["danmaku"],
+            "coin_count": stats["coin"],
+            "favorite_count": stats["favorite"],
+            "bvid": video_info["bvid"],
+        }
 

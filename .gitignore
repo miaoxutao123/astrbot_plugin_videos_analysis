@@ -1,17 +1,9 @@
-# Python cache
 __pycache__/
-*.py[cod]
-*$py.class
 *.pyc
-
-# Downloaded videos
+*.pyo
 download_videos/
-
-# IDE & Local settings
-.vscode/
-.idea/
-.claude/
-
-# Environment
-.env
-*.log
+douyin_cookies.json
+bili_cookies.json
+*.egg-info/
+.serena/
+image/

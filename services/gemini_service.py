@@ -9,9 +9,7 @@ from urllib.parse import urlparse
 import google.generativeai as genai
 import httpx
 
-# 注意：此脚本需要安装 "google-generativeai" 和 "Pillow" 库。
-# 您可以使用以下命令安装：
-# pip install google-generativeai pillow
+from astrbot.api import logger
 
 async def send_to_gemini_async(
     api_key: str,
@@ -83,7 +81,7 @@ async def send_to_gemini_async(
         if not path.exists():
             raise FileNotFoundError(f"找不到视频文件: {path}")
 
-        print(f"正在上传文件: {path}...")
+        logger.info(f"正在上传文件: {path}...")
 
         # 使用 httpx 手动上传文件以控制超时
         # 注意：使用正确的上传端点 `/upload/v1beta/files`
@@ -137,7 +135,7 @@ async def send_to_gemini_async(
 
         # 等待文件处理完成
         while video_file.state.name == "PROCESSING":
-            print(".", end="", flush=True)
+            logger.info("视频文件处理中...")
             await asyncio.sleep(5)
             video_file = genai.get_file(name=video_file.name)
 
@@ -184,20 +182,19 @@ async def process_video_with_gemini(api_key: str, prompt: str, video_path: str, 
     使用Gemini处理单个视频和文本提示。
     """
     try:
-        print(f"\n--- 正在处理视频: {video_path} ---")
+        logger.info(f"正在处理视频: {video_path}")
         response_text, duration = await send_to_gemini_async(
             api_key=api_key,
             prompt=prompt,
             video_path=video_path,
             reverse_proxy_url=reverse_proxy_url
         )
-        print(f"Gemini 响应: {response_text}")
-        print(f"请求耗时: {duration:.2f} 秒")
+        logger.info(f"Gemini 响应完成，请求耗时: {duration:.2f} 秒")
         return response_text, duration
     except FileNotFoundError as e:
-        print(f"错误: {e}。请确保视频文件存在。")
+        logger.error(f"错误: {e}。请确保视频文件存在。")
     except Exception as e:
-        print(f"处理视频时发生意外错误: {e}")
+        logger.error(f"处理视频时发生意外错误: {e}")
     return None, None
 
 
@@ -206,20 +203,19 @@ async def process_images_with_gemini(api_key: str, prompt: str, image_paths: lis
     使用Gemini处理多个图像和文本提示。
     """
     try:
-        print(f"\n--- 正在处理图像: {', '.join(image_paths)} ---")
+        logger.info(f"正在处理图像: {', '.join(image_paths)}")
         response_text, duration = await send_to_gemini_async(
             api_key=api_key,
             prompt=prompt,
             image_paths=image_paths,
             reverse_proxy_url=reverse_proxy_url
         )
-        print(f"Gemini 响应: {response_text}")
-        print(f"请求耗时: {duration:.2f} 秒")
+        logger.info(f"Gemini 响应完成，请求耗时: {duration:.2f} 秒")
         return response_text, duration
     except FileNotFoundError as e:
-        print(f"错误: {e}。请确保所有图像文件都存在。")
+        logger.error(f"错误: {e}。请确保所有图像文件都存在。")
     except Exception as e:
-        print(f"处理图像时发生意外错误: {e}")
+        logger.error(f"处理图像时发生意外错误: {e}")
     return None, None
 
 
@@ -250,15 +246,15 @@ async def process_audio_with_gemini(api_key: str, audio_path: str, reverse_proxy
     现在，请分析提供的音频，并按上述JSON格式返回你的分析结果。
     """
     try:
-        print(f"\n--- 正在处理音频以提取描述和时间戳: {audio_path} ---")
+        logger.info(f"正在处理音频以提取描述和时间戳: {audio_path}")
         response_text, duration = await send_to_gemini_async(
             api_key=api_key,
             prompt=prompt,
             audio_path=audio_path,
             reverse_proxy_url=reverse_proxy_url
         )
-        print(f"Gemini 响应 (原始JSON): {response_text}")
-        print(f"请求耗时: {duration:.2f} 秒")
+        logger.debug(f"Gemini 响应 (原始JSON): {response_text}")
+        logger.info(f"请求耗时: {duration:.2f} 秒")
 
         # 尝试解析JSON
         try:
@@ -270,21 +266,21 @@ async def process_audio_with_gemini(api_key: str, audio_path: str, reverse_proxy
             timestamps = data.get("timestamps", [])
 
             if not isinstance(description, str) or not isinstance(timestamps, list):
-                print('错误: JSON响应的格式不正确（"description"应为字符串，"timestamps"应为列表）。')
+                logger.error('JSON响应的格式不正确（"description"应为字符串，"timestamps"应为列表）。')
                 return None, None, duration
 
-            print(f"成功提取描述: {description}")
-            print(f"成功提取时间戳: {timestamps}")
+            logger.info(f"成功提取描述: {description[:100]}...")
+            logger.info(f"成功提取时间戳: {timestamps}")
             return description, timestamps, duration
 
         except json.JSONDecodeError:
-            print("错误: Gemini的响应不是有效的JSON格式。")
+            logger.error("Gemini的响应不是有效的JSON格式。")
             return None, None, duration
 
     except FileNotFoundError as e:
-        print(f"错误: {e}。请确保音频文件存在。")
+        logger.error(f"错误: {e}。请确保音频文件存在。")
     except Exception as e:
-        print(f"处理音频时发生意外错误: {e}")
+        logger.error(f"处理音频时发生意外错误: {e}")
     return None, None, None
 
 
