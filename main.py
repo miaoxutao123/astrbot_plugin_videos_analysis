@@ -36,16 +36,16 @@ class hybird_videos_analysis(Star):
         self.nap_server_address = config.get("nap_server_address", "localhost")
         self.nap_server_port = config.get("nap_server_port", 3658)
         self.delete_time = config.get("delete_time", 60)
-        self.max_video_size = config.get("max_video_size", 100)
+        self.max_video_size = config.get("max_video_size", 200)
 
         # 被动解析开关（默认关闭）
         self.auto_parse_enabled = config.get("auto_parse_enabled", False)
 
         # B站配置
-        self.bili_quality = config.get("bili_quality", 64)
+        self.bili_quality = config.get("bili_quality", 32)
         self.bili_reply_mode = config.get("bili_reply_mode", 3)
-        self.bili_url_mode = config.get("bili_url_mode", False)
-        self.Merge_and_forward = config.get("Merge_and_forward", True)
+        self.bili_url_mode = config.get("bili_url_mode", True)
+        self.Merge_and_forward = config.get("Merge_and_forward", False)
         self.bili_use_login = config.get("bili_use_login", False)
 
         # 抖音配置
@@ -59,20 +59,22 @@ class hybird_videos_analysis(Star):
         self.private_auto_comprehend = config.get("private_auto_comprehend", True)
         self.gemini_api_key = config.get("gemini_api_key", "")
         self.gemini_base_url = config.get("gemini_base_url", "")
+        self.video_understand_method = config.get("video_understand_method", "local_asr")
 
         # MiMo 配置
         self.mimo_api_base = config.get("mimo_api_base", "https://api.xiaomimimo.com/v1")
         self.mimo_api_key = config.get("mimo_api_key", "")
         self.mimo_model = config.get("mimo_model", "mimo-v2-omni")
 
-        # 抖音 cookie 状态
+        # 抖音 cookie 状态（优先级：扫码 > 文件 > 配置）
+        self._douyin_cookie_from_config = config.get("doyin_cookie", "")
         self._douyin_cookie_from_file = None
         self._douyin_cookie_from_scan = None
 
     @property
     def effective_douyin_cookie(self) -> str:
-        """优先使用扫码登录的cookie，其次文件cookie"""
-        return self._douyin_cookie_from_scan or self._douyin_cookie_from_file or ""
+        """优先级：扫码cookie > 文件cookie > 配置cookie"""
+        return self._douyin_cookie_from_scan or self._douyin_cookie_from_file or self._douyin_cookie_from_config or ""
 
     async def initialize(self):
         """初始化：加载持久化cookie"""

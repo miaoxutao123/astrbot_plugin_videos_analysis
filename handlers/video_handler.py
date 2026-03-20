@@ -216,7 +216,7 @@ async def handle_comprehend_video_command(plugin, event):
     elif re.search(r"(b23\.tv|bilibili\.com|BV1\w{9})", url):
         if plugin.show_progress_messages:
             yield event.plain_result("正在下载B站视频并分析内容...")
-        download_result = await process_bili_video(url, download_flag=True, quality=plugin.bili_quality, use_login=False, event=None)
+        download_result = await process_bili_video(url, download_flag=True, quality=16, use_login=plugin.bili_use_login, event=None)
         if not download_result or not download_result.get("video_path"):
             yield event.plain_result("B站视频下载失败。")
             return

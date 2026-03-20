@@ -58,7 +58,7 @@ async def handle_bilibili_parse(plugin, event):
 
         video_path = None
         try:
-            download_result = await process_bili_video(url, download_flag=True, quality=plugin.bili_quality, use_login=False, event=None)
+            download_result = await process_bili_video(url, download_flag=True, quality=16, use_login=plugin.bili_use_login, event=None)
             if not download_result or not download_result.get("video_path"):
                 yield event.plain_result("抱歉，我无法下载这个视频。")
                 return
@@ -92,7 +92,7 @@ async def handle_bilibili_parse(plugin, event):
         if file_path and os.path.exists(file_path):
             nap_file_path = await send_file(file_path, HOST=plugin.nap_server_address, PORT=plugin.nap_server_port) if plugin.nap_server_address != "localhost" else file_path
             file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-            if file_size_mb > 100:
+            if file_size_mb > plugin.max_video_size:
                 media_component = Comp.File(file=nap_file_path, name=os.path.basename(nap_file_path))
             else:
                 media_component = Comp.Video.fromFileSystem(path=nap_file_path)
@@ -152,14 +152,14 @@ async def handle_bilibili_parse(plugin, event):
                     await event.send(MessageChain([ns]))
                 else:
                     await event.send(MessageChain([Comp.Plain("封面图片获取失败\n" + info_text)]))
-                send_chain = [media_component]
+                send_chain = [media_component] if media_component else [Comp.Plain(info_text)]
             else:
                 if cover_url:
                     await event.send(MessageChain([Comp.Image.fromURL(cover_url)]))
                 else:
                     await event.send(MessageChain([Comp.Plain("封面图片获取失败")]))
                 await event.send(MessageChain([Comp.Plain(info_text)]))
-                send_chain = [media_component]
+                send_chain = [media_component] if media_component else []
         elif reply_mode == 4:
             if media_component:
                 send_chain = [media_component]
