@@ -1,318 +1,195 @@
-# AstrBot 视频解析插件
+# AstrBot 视频解析与 AI 理解插件
 
 <div align="center">
 
 ![访问次数](https://count.getloli.com/@astrbot_plugin_videos_analysis?name=astrbot_plugin_videos_analysis&theme=3d-num&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto)
 
 </div>
-# 由于增加功能时操作不当，导致插件目前bug较多，故归档处理，并准备重构。
 
-
-一个功能强大的 AstrBot 插件，支持多平台视频内容解析、下载和 AI 智能分析。
+一个功能强大的 AstrBot 插件，支持多平台视频内容解析、下载和 AI 智能分析。Agent 可主动调用视频解析与理解工具。
 
 ## ✨ 主要功能
 
-### 📱 多平台视频解析
-- **抖音（TikTok）**：图片、视频、多段视频无水印解析下载
+### 📱 多平台视频解析（被动解析，默认关闭）
+- **抖音（Douyin）**：图片、视频、多段视频无水印解析下载
 - **哔哩哔哩（Bilibili）**：视频解析、高清下载（支持登录获取高画质）
-- **小红书（XiaoHongShu）**：图片、视频内容解析
 - **MC百科（MCMod）**：模组和整合包信息解析
 
+> 被动解析需在配置中开启 `auto_parse_enabled`，群聊中发送链接即自动触发。
+
 ### 🤖 AI 视频理解
-- **Gemini AI 集成**：智能视频内容分析
-- **多平台支持**：
-  - **抖音深度理解**：支持抖音视频和图片的AI分析
-  - **B站深度理解**：支持B站视频的智能解析
-  - **用户视频分析**：支持分析用户直接发送的视频文件
-- **多种分析模式**：
+- **多模型支持**：
+  - **Gemini**：智能视频内容分析（推荐，支持直接上传视频）
+  - **MiMo**：小米多模态模型（支持官方API / OpenRouter）
+  - **本地 ASR**：FunASR 语音识别 + 智能抽帧（离线方案）
+- **智能分析策略**：
   - 小视频（≤30MB）：直接上传 Gemini 分析
   - 大视频（>30MB）：音频转录 + 关键帧提取 + 综合分析
-  - 图片内容：多图片批量分析和描述
-- **智能配置检测**：自动使用框架 Gemini 配置或插件独立配置
+  - 图片内容：多图片批量 AI 分析
 - **个性化回应**：结合人格设定提供自然回复
-- **进度提示控制**：可配置是否显示分析进度信息
 
-### 🔧 技术特性
-- **本地文件下载**：所有媒体先下载到本地再发送，稳定可靠
-- **智能文件管理**：
-  - 根据文件大小自动选择发送方式（视频/文件）
-  - 自动清理过期文件（可配置清理时间）
-  - 避免重复下载
-- **NAP 服务器支持**：支持通过 NAP 服务器进行文件传输
-- **错误容错处理**：完善的异常处理和重试机制
-- **FFmpeg 集成**：音视频分离、关键帧提取等高级处理
+### 🔧 Agent 主动调用工具
 
-### 📊 用户体验
-- **实时进度提示**：解析和下载进度实时反馈
-- **合并转发支持**：多文件内容支持合并发送
-- **多种回复模式**：纯文本、图片、视频等多种回复格式
-- **关键时刻展示**：大视频分析时展示关键帧和时间戳
+插件注册了两个 LLM Tool，供 Agent 主动调用：
+
+| 工具名 | 功能 | 支持输入 |
+|--------|------|----------|
+| `parse_video_link` | 解析视频链接，返回标题、封面、直链等信息 | 抖音链接、B站链接 |
+| `understand_video` | 深度理解视频内容 | 抖音/B站链接、HTTP直链、本地路径 |
+
+> Agent 可以先用 `parse_video_link` 获取视频直链，再用 `understand_video` 理解直链视频内容。
+
+### 🔑 登录管理
+- **抖音**：QR码扫码登录（Playwright）/ 手动粘贴 Cookie
+- **B站**：QR码扫码登录
+- Cookie 自动持久化，支持有效性检查
 
 ## 🚀 安装使用
 
 ### 安装方式
-直接在 AstrBot 插件市场搜索并安装 `astrbot_plugin_videos_analysis`
+在 AstrBot 插件市场搜索 `astrbot_plugin_videos_analysis` 安装。
 
 ### 依赖要求
-- **FFmpeg**：用于视频处理（音视频分离、关键帧提取等）
-- **Python 3.8+**：基础运行环境
-- **必要的 Python 包**：
-  - `aiohttp>=3.8.0` - 异步HTTP请求
-  - `httpx>=0.24.0` - 现代HTTP客户端
-  - `aiofiles>=0.8.0` - 异步文件操作
-  - `google-generativeai` - Gemini AI 支持
-  - `Pillow>=9.0.0` - 图像处理
-  - `PyYAML==6.0.1` - 配置文件解析
-  - 其他依赖详见 [`requirements.txt`](requirements.txt)
+- **Python 3.10+**
+- **FFmpeg**：用于音视频分离、关键帧提取
+- Python 依赖详见 [`requirements.txt`](requirements.txt)
 
-### 基础使用
+### 快速开始
 1. 安装插件后重启 AstrBot
-2. 发送支持的平台分享链接即可自动解析
-3. 如需使用 AI 视频理解功能，请配置 Gemini API
-
-### 高级功能配置
-
-#### AI 视频理解配置
-1. **使用框架 Gemini 配置**（推荐）：
-   - 在 AstrBot 框架中配置 Gemini Provider
-   - 插件会自动检测并使用框架配置
-   
-2. **使用插件独立配置**：
-   - 在插件配置中填写 `gemini_api_key`
-   - 可选配置 `gemini_base_url` 用于反代
-
-#### Bilibili 高级功能
-- **高清下载**：开启 `bili_use_login` 选项，扫码登录获取高画质视频
-- **回复模式**：根据需要选择纯文本、图片、视频或组合模式
-- **合并转发**：开启 `Merge_and_forward` 实现内容合并发送
-
-#### 文件传输配置
-- **本地部署**：保持 `nap_server_address` 为 `localhost`
-- **跨服务器**：配置 NAP 服务器地址和端口实现文件传输
+2. 配置 Gemini API（框架 Provider 或插件配置）
+3. 可选：开启 `auto_parse_enabled` 启用被动解析
+4. Agent 可直接调用 `parse_video_link` / `understand_video` 工具
 
 ## ⚙️ 配置选项
 
 ### 基础配置
-| 配置项 | 描述 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `nap_server_address` | NAP 服务器地址 | localhost | 若与服务器在同一服务器上请填写localhost |
-| `nap_server_port` | NAP 服务器端口 | 3658 | 在同一服务器上可以不填 |
-| `delete_time` | 文件清理时间（分钟） | 60 | 自动清理下载文件的时间间隔 |
-| `max_video_size` | 视频大小限制（MB） | 200 | 超过此大小的视频将以文件形式发送 |
+| 配置项 | 描述 | 默认值 |
+|--------|------|--------|
+| `auto_parse_enabled` | 被动解析开关 | `false` |
+| `nap_server_address` | NAP 服务器地址 | `localhost` |
+| `nap_server_port` | NAP 服务器端口 | `3658` |
+| `delete_time` | 文件清理时间（分钟） | `60` |
+| `max_video_size` | 视频大小限制（MB） | `100` |
 
-### 哔哩哔哩配置
-| 配置项 | 描述 | 默认值 | 可选值 |
-|--------|------|--------|--------|
-| `bili_quality` | B站视频清晰度 | 32 | 16(360P), 32(480P), 64(720P), 80(1080P), 112(1080P+), 120(4K) |
-| `bili_reply_mode` | B站回复模式 | 3 | 0(纯文本), 1(图片), 2(视频), 3(图片+视频), 4(纯视频) |
-| `bili_url_mode` | 是否生成直链 | true | 是否在解析时生成视频直链 |
-| `bili_use_login` | 是否使用登录状态 | false | 启用后可下载高清视频 |
-| `Merge_and_forward` | 是否合并转发 | false | 是否将视频和图片合并发送 |
+### AI 视频理解
+| 配置项 | 描述 | 默认值 |
+|--------|------|--------|
+| `gemini_api_key` | Gemini API 密钥 | `""` |
+| `gemini_base_url` | Gemini 反代地址 | `""` |
+| `mimo_api_key` | MiMo API 密钥 | `""` |
+| `mimo_api_base` | MiMo API 地址 | `https://api.xiaomimimo.com/v1` |
+| `mimo_model` | MiMo 模型 | `mimo-v2-omni` |
+| `url_video_comprehend` | 链接视频自动理解 | `false` |
+| `upload_video_comprehend` | 用户视频注入上下文 | `false` |
+| `private_auto_comprehend` | 私聊自动理解 | `true` |
 
-### 小红书配置
-| 配置项 | 描述 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `xhs_reply_mode` | 小红书合并转发 | true | 是否开启合并转发模式 |
+### 哔哩哔哩
+| 配置项 | 描述 | 默认值 |
+|--------|------|--------|
+| `bili_quality` | 视频清晰度 | `64`（720P） |
+| `bili_reply_mode` | 回复模式 | `3`（图片+视频） |
+| `bili_url_mode` | 显示直链 | `false` |
+| `bili_use_login` | 使用登录状态 | `false` |
+| `Merge_and_forward` | 合并转发 | `true` |
 
-### AI 视频理解配置
-| 配置项 | 描述 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `url_video_comprehend` | 链接视频分析功能 | false | 实验性功能，会消耗大量token |
-| `upload_video_comprehend` | 用户视频分析功能 | false | 分析用户发送的视频（暂未完全实现） |
-| `gemini_api_key` | Gemini API密钥 | "" | 用于视频理解功能 |
-| `gemini_base_url` | Gemini API 基础地址 | https://generative-api.google.com/v1alpha2 | 支持反代地址 |
-
-### 抖音配置
-| 配置项 | 描述 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `doyin_cookie` | 抖音Cookie | 预设值 | 解析失败时请更新cookie |
-| `douyin_video_comprehend` | 抖音深度理解功能 | false | 实验性功能，会消耗大量token |
-
-### 进度提示配置
-| 配置项 | 描述 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `show_progress_messages` | 显示进度提示信息 | true | 是否显示"正在理解视频内容，请稍后..."等提示 |
+### 抖音
+| 配置项 | 描述 | 默认值 |
+|--------|------|--------|
+| `douyin_video_comprehend` | 深度理解功能 | `false` |
+| `show_progress_messages` | 显示进度提示 | `true` |
+| `douyin_proxy` | 代理地址 | `""` |
 
 ## 🎯 使用示例
 
-### 抖音视频解析（基础模式）
+### 被动解析（需开启 auto_parse_enabled）
 ```
 用户：https://v.douyin.com/xxxxxx/
 Bot：正在解析抖音链接...
-Bot：正在下载媒体文件...
 Bot：[发送无水印视频]
-```
 
-### 抖音视频深度理解
-```
-用户：https://v.douyin.com/xxxxxx/
-Bot：正在解析抖音链接...
-Bot：我看到了一个抖音视频链接，让我来仔细分析一下内容，请稍等一下...
-Bot：正在下载视频进行分析...
-Bot：视频大小为 15.8MB，直接上传视频进行分析...
-Bot：[发送无水印视频]
-Bot：[AI分析回复] 这个抖音视频展示了一个很有趣的生活小技巧，视频中的主角通过简单的方法解决了日常问题...我觉得这种创意很实用，值得学习！
-```
-
-### 抖音图片深度理解
-```
-用户：https://v.douyin.com/xxxxxx/ (图片作品)
-Bot：正在解析抖音链接...
-Bot：我看到了一个抖音视频链接，让我来仔细分析一下内容，请稍等一下...
-Bot：检测到 3 张图片，正在下载并分析...
-Bot：正在使用AI分析图片内容...
-Bot：[发送第1张图片]
-Bot：[发送第2张图片]
-Bot：[发送第3张图片]
-Bot：[AI分析回复] 这组图片记录了一个美食制作过程，从准备食材到最终成品，每个步骤都很详细...看起来很美味，让我也想尝试制作一下！
-```
-
-### 抖音图片解析（基础模式）
-```
-用户：https://v.douyin.com/xxxxxx/ (图片作品)
-Bot：正在解析抖音链接...
-Bot：检测到 3 个文件，正在下载...
-Bot：[发送多张无水印图片]
-```
-
-### B站视频解析（基础模式）
-```
 用户：https://www.bilibili.com/video/BVxxxxxxx
-Bot：📜 视频标题：【技术分享】如何使用AstrBot
-     👀 观看次数：12345
-     👍 点赞次数：567
-     💰 投币次数：89
-     📂 收藏次数：123
-     💬 弹幕量：456
-     ⏳ 视频时长：10分30秒
-     🎥 视频直链：https://...
-     🧷 原始链接：https://www.bilibili.com/video/BVxxxxxxx
-Bot：[发送封面图片]
-Bot：[发送视频文件]
+Bot：📜 视频标题：xxx  👀 12345  👍 567 ...
+Bot：[发送封面+视频]
 ```
 
-### AI 视频理解（小视频）
+### Agent 工具调用
 ```
-用户：https://www.bilibili.com/video/BVxxxxxxx
-Bot：我看到了一个B站视频链接，让我来仔细分析一下内容，请稍等一下...
-Bot：视频大小为 25.2MB，直接上传视频进行分析...
-Bot：[AI分析回复] 这个视频讲述了关于人工智能的发展历程，从早期的图灵测试到现在的大语言模型...我觉得这个观点很有趣，特别是关于AI伦理的讨论部分...
+用户：帮我解析一下这个视频 https://b23.tv/xxx
+Agent → parse_video_link("https://b23.tv/xxx")
+Bot：这个B站视频标题是"xxx"，时长10分30秒，播放量12345次...
+
+用户：分析一下这个视频讲了什么
+Agent → understand_video("https://v.douyin.com/xxx")
+Bot：这个视频展示了...（AI详细分析）
 ```
 
-### AI 视频理解（大视频）
+### 管理员命令
 ```
-用户：https://www.bilibili.com/video/BVxxxxxxx
-Bot：我看到了一个B站视频链接，让我来仔细分析一下内容，请稍等一下...
-Bot：视频大小为 85.6MB，采用音频+关键帧模式进行分析...
-Bot：以下是视频的关键时刻：
-     [关键帧图片1] 时间点: 00:02:15
-     [关键帧图片2] 时间点: 00:05:30
-     [关键帧图片3] 时间点: 00:08:45
-Bot：[AI综合分析回复] 通过分析这个视频的音频内容和关键画面，我发现这是一个关于...的教程视频。在2分15秒时展示了核心概念，5分30秒进行了实际演示...
+/bili_login    → B站扫码登录
+/dy_login      → 抖音扫码登录
+/dy_cookie xxx → 手动设置抖音cookie
+/理解视频 URL   → 主动触发视频AI理解
 ```
 
-### 小红书内容解析
-```
-用户：https://xhslink.com/xxxxxx
-Bot：[小红书标题]
-Bot：[发送图片1]
-Bot：[发送图片2]
-Bot：[发送图片3]
-```
+## 📁 项目结构
 
-### MC百科解析
 ```
-用户：https://www.mcmod.cn/class/1234.html
-Bot：📦 [模组名称]
-     [模组图标]
-     🏷️ 分类: 科技/工具
-     📝 描述: 这是一个功能强大的科技模组...
-     [描述图片]
-```
-
-### 用户视频分析
-```
-用户：[直接发送视频文件]
-Bot：收到了你的视频，让我来看看里面都有什么内容...
-Bot：视频大小为 15.8MB，直接上传视频进行分析...
-Bot：[AI分析回复] 我看到你分享了一个很有趣的视频，里面展示了...这让我想到了...
+astrbot_plugin_videos_analysis/
+├── main.py              # 入口（配置 + @filter 代理）
+├── handlers/            # 消息处理器
+│   ├── douyin_handler   # 抖音被动解析
+│   ├── bilibili_handler # B站被动解析
+│   ├── mcmod_handler    # MC百科解析
+│   ├── video_handler    # 视频分析 + 直链注入
+│   └── admin_handler    # 管理命令
+├── tools/               # LLM Agent 工具
+│   ├── parse_tool       # parse_video_link
+│   └── understand_tool  # understand_video
+├── services/            # 平台服务层
+│   ├── bilibili_service # B站解析下载
+│   ├── douyin_service   # 抖音下载
+│   ├── mcmod_service    # MC百科
+│   ├── gemini_service   # Gemini API
+│   ├── mimo_service     # MiMo 多模态
+│   └── video_analysis   # 本地 ASR + 抽帧
+├── utils/               # 工具函数
+│   ├── file_utils       # 文件发送 + 清理
+│   ├── media_utils      # FFmpeg 封装
+│   └── config_helper    # 配置辅助
+├── douyin_scraper/      # 抖音爬虫
+└── douyin_login.py      # 抖音登录
 ```
 
 ## 🙏 特别鸣谢
 
-本项目的抖音解析功能基于以下开源项目：
-
 **[Douyin_TikTok_Download_API](https://github.com/Evil0ctal/Douyin_TikTok_Download_API)**
 - 提供了完整的抖音视频解析方案
-- 贡献了核心的加密算法和请求处理逻辑
-- 感谢 [@Evil0ctal](https://github.com/Evil0ctal) 及所有贡献者的辛勤工作
-
-如果觉得本插件好用，请考虑为原项目点个 ⭐ Star！
+- 感谢 [@Evil0ctal](https://github.com/Evil0ctal) 及所有贡献者
 
 ## 🔄 更新日志
 
-### v0.2.13 (当前版本)
-- ✅ **添加 .gitignore 文件**：忽略 `__pycache__` 和 `download_videos` 目录，保持仓库清洁
-- ✅ **清理缓存文件**：从版本控制中移除所有 Python 缓存文件
-- ✅ **增强错误处理**：改进抖音解析的错误处理和响应验证机制
-- ✅ **优化文件管理**：自动忽略不必要的下载文件和缓存
+### v0.3.0（当前版本）
+- 🔄 **模块化重构**：`main.py` 从 1349 行精简到 189 行
+- 📦 **新架构**：拆分为 `handlers/` `tools/` `services/` `utils/` 四个包
+- 🤖 **Agent 工具增强**：`understand_video` 支持 HTTP 直链视频
+- 🔌 **MiMo 模型集成**：新增小米多模态视频理解
+- 🔑 **抖音登录重构**：Playwright 全代理扫码 + Cookie 手动粘贴
+- 🧹 **清理**：移除小红书解析、无用依赖（`browser-cookie3`、`asyncio`）
 
-### v0.2.10
-- ✅ **新增抖音深度理解功能**：支持抖音视频和图片的AI智能分析
-- ✅ **新增进度提示控制**：可配置是否显示"正在理解内容，请稍后..."等提示信息
-- ✅ **优化代码结构**：重构Gemini API配置获取逻辑，提高代码复用性
-- ✅ **统一LLM响应处理**：使用统一的辅助函数处理AI分析结果
-- ✅ **完善配置选项**：新增 `douyin_video_comprehend` 和 `show_progress_messages` 配置项
-
-### v0.2.9
-- ✅ 完善用户视频分析功能
-- ✅ 优化大视频处理流程（音频+关键帧模式）
-- ✅ 改进 Gemini API 配置检测逻辑
-- ✅ 增强关键帧提取和时间戳展示
-- ✅ 优化文件清理和错误处理机制
-
-### v0.2.8
-- ✅ 修复抖音视频下载 403 错误
-- ✅ 优化下载重试机制和错误处理
-- ✅ 改进 Cookie 处理和请求头配置
-- ✅ 增强本地文件发送稳定性
-
-### 历史版本
-- ✅ 集成 Gemini AI 视频理解
-- ✅ 支持多平台内容解析
-- ✅ 添加文件自动清理功能
-- ✅ 实现本地下载发送模式
-- ✅ 集成抖音解析核心算法
-- ✅ 支持多种视频质量和回复模式
-
-## 📋 已知问题 & 计划
-
-### 已知问题
-- 部分抖音混合作品（图片+视频）可能解析失败
-- QQ 对视频大小和时长有限制，过大视频会发送失败
-- 用户视频分析功能仍在完善中
-- 某些平台的 Cookie 可能需要定期更新
-
-### 开发计划
-- [ ] 完善用户视频分析功能
-- [ ] 支持更多视频平台（YouTube、Instagram 等）
-- [ ] 优化大文件处理性能和内存使用
-- [ ] 增加视频转码功能
-- [ ] 支持批量下载和处理
-- [ ] 添加更多 AI 模型支持（除 Gemini 外）
-- [ ] 改进抖音 Cookie 自动更新机制
+### v0.2.x
+- Gemini AI 视频理解集成
+- 抖音/B站/MC百科被动解析
+- 本地 ASR + 关键帧分析
+- 多种回复模式和合并转发
 
 ## 🤝 贡献
 
-欢迎提交 Issue 和 Pull Request！
-
 - Bug 报告：[提交 Issue](https://github.com/miaoxutao123/astrbot_plugin_videos_analysis/issues)
-- 功能建议：[讨论区](https://github.com/miaoxutao123/astrbot_plugin_videos_analysis/discussions)
 - 代码贡献：Fork 项目并提交 PR
 
 ## 📄 许可证
 
-本项目基于 [GNU Affero General Public License v3.0](LICENSE) 开源许可证。
+[GNU Affero General Public License v3.0](LICENSE)
 
 ---
 
