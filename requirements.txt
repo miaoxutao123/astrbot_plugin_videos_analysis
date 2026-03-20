@@ -17,9 +17,14 @@ google-generativeai
 PyYAML==6.0.1
 lxml
 beautifulsoup4
+pydantic
 
 # 安全
 gmssl==3.2.2
+
+# 抖音爬虫依赖
+browser-cookie3==0.19.1
+importlib_resources==6.4.0
 
 # 其他
 rich
