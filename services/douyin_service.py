@@ -5,7 +5,9 @@ import re
 import aiofiles
 import aiohttp
 
-from .douyin_scraper.cookie_extractor import extract_and_format_cookies
+from astrbot.api import logger
+
+from ..douyin_scraper.cookie_extractor import extract_and_format_cookies
 
 
 def clean_cookie(cookie):
@@ -54,7 +56,7 @@ async def get_location_from_url(url, cookie=None):
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, headers=headers, allow_redirects=False) as response:
-                if response.status == 302 or response.status == 301:
+                if response.status in (301, 302):
                     location = response.headers.get("location")
                     return {"url": url, "location": location}
                 else:
@@ -70,9 +72,12 @@ async def download_douyin_image(url, filename, cookie=None):
         url (str): 抖音图片URL
         filename (str): 保存文件名
         cookie (str): 可选的Cookie
+
+    Returns:
+        bool: 下载是否成功
     """
     if os.path.exists(filename):
-        print(f"File '{filename}' already exists. Skipping download.")
+        logger.info(f"文件已存在，跳过下载: {filename}")
         return True
 
     max_retries = 5
@@ -128,9 +133,11 @@ async def download_douyin_image(url, filename, cookie=None):
         }
     ]
 
+    strategy_names = ["桌面端", "iPhone", "Android", "抖音APP", "爬虫"]
+
     for attempt in range(max_retries):
         current_headers = retry_strategies[attempt % len(retry_strategies)].copy()
-        strategy_name = ["桌面端", "iPhone", "Android", "抖音APP", "爬虫"][attempt % len(retry_strategies)]
+        strategy_name = strategy_names[attempt % len(retry_strategies)]
 
         if cookie and strategy_name not in ["抖音APP", "爬虫"]:
             current_headers["Cookie"] = clean_cookie(cookie)
@@ -138,10 +145,10 @@ async def download_douyin_image(url, filename, cookie=None):
         try:
             timeout = aiohttp.ClientTimeout(total=30, connect=15)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                print(f"Attempt {attempt + 1}: Trying {strategy_name} strategy")
+                logger.info(f"图片下载尝试 {attempt + 1}: 使用 {strategy_name} 策略")
 
                 async with session.get(url, headers=current_headers, allow_redirects=True) as response:
-                    print(f"Image download attempt {attempt + 1}: Status {response.status}")
+                    logger.debug(f"图片下载尝试 {attempt + 1}: 状态码 {response.status}")
 
                     if response.status == 200:
                         os.makedirs(os.path.dirname(filename), exist_ok=True)
@@ -151,45 +158,46 @@ async def download_douyin_image(url, filename, cookie=None):
                             async with aiofiles.open(filename, "wb") as f:
                                 await f.write(content)
 
-                            print(f"Image download successful with {strategy_name}: {filename} ({len(content)} bytes)")
+                            logger.info(f"图片下载成功 ({strategy_name}): {filename} ({len(content)} bytes)")
                             return True
                         else:
-                            print(f"Downloaded content too small ({len(content)} bytes), likely an error page")
+                            logger.warning(f"下载内容过小 ({len(content)} bytes)，可能是错误页面")
                             continue
                     elif response.status == 404:
-                        print("Image not found (404), skipping retries")
+                        logger.warning("图片未找到 (404)，跳过重试")
                         return False
                     else:
-                        print(f"Image download failed with status {response.status}")
+                        logger.warning(f"图片下载失败，状态码: {response.status}")
 
         except aiohttp.ClientResponseError as e:
-            print(f"HTTP error with {strategy_name}: {e.status} {e.message}")
+            logger.error(f"HTTP错误 ({strategy_name}): {e.status} {e.message}")
         except aiohttp.ClientError as e:
-            print(f"Network error with {strategy_name}: {e}")
+            logger.error(f"网络错误 ({strategy_name}): {e}")
         except Exception as e:
-            print(f"Unexpected error with {strategy_name}: {e}")
+            logger.error(f"未知错误 ({strategy_name}): {e}")
 
         if attempt < max_retries - 1:
-            await asyncio.sleep(2)  # 增加等待时间
+            await asyncio.sleep(2)
 
-    print(f"Failed to download image after {max_retries} attempts")
+    logger.error(f"图片下载失败，已重试 {max_retries} 次")
     return False
 
 async def download_video(url, filename="video.mp4", cookie=None):
     """
-    Downloads a video from the given URL asynchronously.
+    异步下载抖音视频。
 
     Args:
-        url (str): The URL of the video.
-        filename (str): The filename to save the video as.
-        cookie (str): Optional cookie string for authentication.
-    """
-    # Check if the file already exists
-    if os.path.exists(filename):
-        print(f"File '{filename}' already exists. Skipping download.")
-        return
+        url (str): 视频URL
+        filename (str): 保存文件名
+        cookie (str): 可选的Cookie
 
-    # 抖音视频下载需要的完整请求头
+    Returns:
+        bool: 下载是否成功
+    """
+    if os.path.exists(filename):
+        logger.info(f"文件已存在，跳过下载: {filename}")
+        return True
+
     headers = {
         "Accept": "*/*",
         "Accept-Encoding": "gzip, deflate, br, zstd",
@@ -202,22 +210,19 @@ async def download_video(url, filename="video.mp4", cookie=None):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
-    # 添加Cookie如果提供了
     if cookie:
         headers["Cookie"] = clean_cookie(cookie)
 
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # 设置更长的超时时间
             timeout = aiohttp.ClientTimeout(total=60, connect=30)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url, headers=headers, allow_redirects=True) as response:
-                    print(f"Attempt {attempt + 1}: Status {response.status}")
+                    logger.info(f"视频下载尝试 {attempt + 1}: 状态码 {response.status}")
 
                     if response.status == 403:
-                        print("403 Forbidden - trying with mobile headers...")
-                        # 尝试移动端请求头
+                        logger.warning("403 Forbidden，尝试使用移动端请求头...")
                         mobile_headers = {
                             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1",
                             "Referer": "https://www.douyin.com/",
@@ -228,89 +233,83 @@ async def download_video(url, filename="video.mp4", cookie=None):
 
                         async with session.get(url, headers=mobile_headers, allow_redirects=True) as retry_response:
                             response = retry_response
-                            print(f"Mobile retry status: {response.status}")
+                            logger.info(f"移动端重试状态码: {response.status}")
 
                     response.raise_for_status()
 
                     if response.status == 304:
-                        print("Video not modified. No download needed.")
-                        return
+                        logger.info("视频未修改，无需下载")
+                        return True
 
                     os.makedirs(os.path.dirname(filename), exist_ok=True)
 
                     total_size = int(response.headers.get("content-length", 0))
-                    block_size = 8192  # 增大块大小提高下载效率
+                    block_size = 8192
 
                     async with aiofiles.open(filename, "wb") as file:
                         downloaded = 0
                         async for data in response.content.iter_chunked(block_size):
                             await file.write(data)
                             downloaded += len(data)
-                            if total_size and downloaded % (block_size * 10) == 0:  # 减少打印频率
-                                progress = (downloaded / total_size) * 100
-                                print(f"\rDownloading: {progress:.1f}% ({downloaded}/{total_size})", end="")
 
                     if total_size:
-                        print(f"\nDownload complete! File saved: {filename}")
+                        logger.info(f"视频下载完成: {filename} ({total_size} bytes)")
                     else:
-                        print(f"Download complete! File saved: {filename} (Size unknown)")
+                        logger.info(f"视频下载完成: {filename} (大小未知)")
 
                     # 验证文件是否成功下载
                     if os.path.exists(filename) and os.path.getsize(filename) > 0:
-                        print(f"File verified successfully: {os.path.getsize(filename)} bytes")
-                        return
+                        logger.info(f"文件验证成功: {os.path.getsize(filename)} bytes")
+                        return True
                     else:
-                        print("Downloaded file is empty or doesn't exist, retrying...")
+                        logger.warning("下载的文件为空或不存在，重试中...")
                         if os.path.exists(filename):
                             os.remove(filename)
                         continue
 
         except aiohttp.ClientError as e:
-            print(f"Attempt {attempt + 1} failed with network error: {e}")
+            logger.error(f"尝试 {attempt + 1} 网络错误: {e}")
             if attempt == max_retries - 1:
-                print(f"All {max_retries} attempts failed. Error: {e}")
-                return
+                logger.error(f"全部 {max_retries} 次尝试均失败: {e}")
+                return False
         except OSError as e:
-            print(f"Attempt {attempt + 1} failed with file error: {e}")
+            logger.error(f"尝试 {attempt + 1} 文件错误: {e}")
             if attempt == max_retries - 1:
-                print(f"All {max_retries} attempts failed. Error: {e}")
-                return
+                logger.error(f"全部 {max_retries} 次尝试均失败: {e}")
+                return False
         except Exception as e:
-            print(f"Attempt {attempt + 1} failed with unexpected error: {e}")
+            logger.error(f"尝试 {attempt + 1} 未知错误: {e}")
             if attempt == max_retries - 1:
-                print(f"All {max_retries} attempts failed. Error: {e}")
-                return
+                logger.error(f"全部 {max_retries} 次尝试均失败: {e}")
+                return False
 
-        # 等待一秒后重试
         await asyncio.sleep(1)
 
-    print("Download failed after all retries")
+    logger.error("视频下载失败，已用尽所有重试次数")
+    return False
 
 async def download(url, filename="video.mp4", cookie=None):
     """
-    Downloads videos or images from the given URL asynchronously.
+    异步下载抖音视频或图片。
 
     Args:
-        url (str): The URL of the media.
-        filename (str): The base filename to save the media as.
-        cookie (str): Optional cookie string for authentication.
+        url (str): 媒体URL
+        filename (str): 保存文件名
+        cookie (str): 可选的Cookie
+
+    Returns:
+        bool: 下载是否成功
     """
     # 检查是否是抖音图片URL
     if "douyinpic.com" in url and any(ext in url.lower() for ext in [".jpg", ".jpeg", ".png", ".webp", "image"]):
-        print("Detected Douyin image, using specialized download method")
-        success = await download_douyin_image(url, filename, cookie)
-        return success
+        logger.info("检测到抖音图片URL，使用专用下载方法")
+        return await download_douyin_image(url, filename, cookie)
 
     # 对于视频或其他媒体，使用原来的逻辑
     location_data = await get_location_from_url(url, cookie)
 
     if location_data and location_data.get("location"):
         download_url = location_data.get("location")
-        await download_video(download_url, filename, cookie)
+        return await download_video(download_url, filename, cookie)
     else:
-        await download_video(url, filename, cookie)
-
-
-# if __name__ == "__main__":
-#     url = "https://p3-pc-sign.douyinpic.com/tos-cn-i-0813c000-ce/oMAnCVBQBAEwiiwI8Td2SMAIJPQY0hADhiAPZ~tplv-dy-aweme-images:q75.jpeg?lk3s=138a59ce&x-expires=1744963200&x-signature=Cgf9pS1Fne0tvRujCHt6htkHP%2BI%3D&from=327834062&s=PackSourceEnum_AWEME_DETAIL&se=false&sc=image&biz_tag=aweme_images&l=202503191654145A604C96898653070E42"
-#     asyncio.run(download(url))
+        return await download_video(url, filename, cookie)
