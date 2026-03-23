@@ -5,6 +5,8 @@ from urllib.parse import urlencode
 
 import httpx
 
+from astrbot.api import logger
+
 from .cookie_extractor import extract_and_format_cookies
 from .crawlers.douyin.web.endpoints import DouyinAPIEndpoints
 from .crawlers.douyin.web.utils import AwemeIdFetcher, BogusManager
@@ -14,7 +16,7 @@ class DouyinParser:
     """
     一个独立的抖音分享链接解析器。
     """
-    def __init__(self, cookie: str):
+    def __init__(self, cookie: str, proxy: str = ""):
         # 使用cookie_extractor格式化cookie
         self.cookie = extract_and_format_cookies(cookie) if cookie else ""
         self.id_fetcher = AwemeIdFetcher()
@@ -25,6 +27,8 @@ class DouyinParser:
             "Referer": "https://www.douyin.com/",
             "Cookie": self.cookie,
         }
+        # 代理配置（httpx 0.28+ 使用 proxy 单数参数）
+        self.proxy = proxy or None
 
     async def fetch_video_data(self, aweme_id: str) -> dict:
         """
@@ -63,7 +67,10 @@ class DouyinParser:
         a_bogus = BogusManager.ab_model_2_endpoint(params, self.user_agent)
         endpoint = f"{DouyinAPIEndpoints.POST_DETAIL}?{urlencode(params)}&a_bogus={a_bogus}"
 
-        async with httpx.AsyncClient() as client:
+        transport = httpx.AsyncHTTPTransport(retries=3)
+        async with httpx.AsyncClient(
+            transport=transport, timeout=30, proxy=self.proxy
+        ) as client:
             response = await client.get(endpoint, headers=self.headers)
             response.raise_for_status()
 
@@ -142,36 +149,38 @@ class DouyinParser:
         Returns:
             包含核心视频信息的字典。
         """
-        print(f"正在解析链接: {share_url}")
+        logger.info(f"正在解析链接: {share_url}")
 
         # 步骤 1: 从分享文案中提取有效的URL
         url_match = re.search(r"(https?://[^\s]+)", share_url)
         if not url_match:
-            print("未能在分享文案中找到有效的URL")
+            logger.warning("未能在分享文案中找到有效的URL")
             return {"error": "No valid URL found in the share text"}
 
         extracted_url = url_match.group(1)
-        print(f"成功提取URL: {extracted_url}")
+        logger.info(f"成功提取URL: {extracted_url}")
 
         # 步骤 2: 从URL中提取 aweme_id
         try:
-            aweme_id = await self.id_fetcher.get_aweme_id(extracted_url)
+            aweme_id = await self.id_fetcher.get_aweme_id(
+                extracted_url, proxy=self.proxy
+            )
             if not aweme_id:
                 raise ValueError("未能从链接中提取到 aweme_id")
-            print(f"成功提取 aweme_id: {aweme_id}")
+            logger.info(f"成功提取 aweme_id: {aweme_id}")
         except Exception as e:
-            print(f"提取 aweme_id 失败: {e}")
+            logger.error(f"提取 aweme_id 失败: {e}")
             return {"error": "Failed to extract aweme_id", "details": str(e)}
 
         # 步骤 3: 使用 aweme_id 获取视频详情
         try:
             raw_video_data = await self.fetch_video_data(aweme_id)
-            print("成功获取视频数据！")
+            logger.info("成功获取视频数据")
             # 步骤 4: 处理原始数据，提取核心信息
             processed_data = self._process_data(raw_video_data)
             return processed_data
         except Exception as e:
-            print(f"获取或处理视频数据失败: {e}")
+            logger.error(f"获取或处理视频数据失败: {e}")
             return {"error": "Failed to fetch or process video data", "details": str(e)}
 
 async def main():
