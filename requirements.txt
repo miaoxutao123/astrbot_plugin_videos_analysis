@@ -1,8 +1,8 @@
-# 网络请求相关
+# 网络请求
 aiohttp>=3.8.0
 requests>=2.25.0
-
 httpx>=0.24.0
+
 # 异步文件操作
 aiofiles>=0.8.0
 
@@ -10,18 +10,26 @@ aiofiles>=0.8.0
 Pillow>=9.0.0
 qrcode>=7.3.0
 
-# 工具库
-asyncio>=3.4.3
+# Google Gemini API
 google-generativeai
 
-# 数据库
+# 数据解析
 PyYAML==6.0.1
+lxml
+beautifulsoup4
+pydantic
 
-# 安全相关
+# 安全
 gmssl==3.2.2
+
+# 抖音爬虫依赖
+browser-cookie3==0.19.1
+importlib_resources==6.4.0
 
 # 其他
 rich
-browser-cookie3==0.19.1
-importlib_resources==6.4.0
 cachetools
+
+# ASR 语音识别（可选，用于本地视频理解）
+# funasr
+# torchaudio
