@@ -174,7 +174,7 @@ class hybird_videos_analysis(Star):
         """
         from .tools.parse_tool import handle_parse_video_link
         result = await handle_parse_video_link(self, link)
-        event.return_result(result)
+        return result
 
     @filter.llm_tool(name="understand_video")
     async def understand_video(self, event, video_source: str, prompt: str = ""):
@@ -188,4 +188,4 @@ class hybird_videos_analysis(Star):
         """
         from .tools.understand_tool import handle_understand_video
         result = await handle_understand_video(self, video_source, prompt or None)
-        event.return_result(result)
+        return result
