@@ -2,6 +2,7 @@
 管理员命令处理器：B站登录、抖音登录、抖音Cookie手动设置
 """
 
+import asyncio
 import base64 as b64mod
 import os
 
@@ -14,10 +15,7 @@ from ..services.bilibili_service import (
     check_cookie_valid as bili_check_cookie_valid,
 )
 from ..douyin_login import (
-    generate_douyin_qrcode_playwright,
-    douyin_login_loop_playwright,
     save_manual_douyin_cookie,
-    check_douyin_cookie_valid,
 )
 from ..utils.config_helper import (
     DOWNLOAD_DIR_BILI,
@@ -57,46 +55,69 @@ async def handle_bili_login(plugin, event):
 
 
 async def handle_douyin_login(plugin, event):
-    """管理员指令：抖音扫码登录"""
-    is_valid = await check_douyin_cookie_valid()
-    if is_valid:
-        yield event.plain_result("抖音cookie仍然有效，无需重新登录。\n如需强制刷新，请先删除cookie文件后重试。")
-        return
+    """管理员指令：抖音扫码登录 (使用浏览器签名引擎)"""
+    signer = plugin.browser_signer
 
-    yield event.plain_result("正在打开抖音登录页面，首次加载可能需要1-2分钟，请耐心等待...")
-
-    pw_data = await generate_douyin_qrcode_playwright(timeout_seconds=180)
-    if not pw_data:
+    if not signer or not signer.is_ready:
         yield event.plain_result(
-            "抖音登录页面加载失败。\n"
-            "替代方案：使用 dy_cookie 命令手动粘贴cookie。\n"
-            "方法：在浏览器登录抖音后，按F12打开开发者工具，"
-            "在Console中输入 document.cookie 复制结果，"
-            "然后发送: dy_cookie <粘贴的cookie>"
+            "抖音浏览器签名引擎未就绪。\n\n"
+            "Windows: 请检查插件日志确认浏览器是否正常启动。\n"
+            "Linux: 请安装 Xvfb 后重启插件:\n"
+            "  sudo apt install xvfb\n\n"
+            "或使用 dy_cookie 命令手动粘贴cookie。"
         )
         return
 
-    nap_path = await send_file_if_needed(pw_data["screenshot_path"], plugin.nap_server_address, plugin.nap_server_port)
-    yield event.chain_result([Comp.Image.fromFileSystem(nap_path)])
-    yield event.plain_result("请使用抖音APP扫描上方二维码登录（120秒内有效）")
+    if signer.is_logged_in:
+        yield event.plain_result("抖音已登录，无需重复扫码。如需强制刷新，请先删除浏览器数据后重试。")
+        return
 
-    cookie_str = await douyin_login_loop_playwright(pw_data, timeout_seconds=120)
-    if cookie_str:
-        plugin._douyin_cookie_from_file = cookie_str
-        yield event.plain_result("抖音登录成功！cookie已自动保存，后续解析将使用新cookie。")
+    # 触发登录 (点击页面登录按钮)
+    yield event.plain_result("正在触发抖音登录页面...")
+    await signer.trigger_login()
+    await asyncio.sleep(3)
+
+    # 截图发送给用户
+    screenshot = await signer.get_page_screenshot()
+    if not screenshot:
+        yield event.plain_result("截图失败，请尝试使用 dy_cookie 命令手动粘贴cookie。")
+        return
+
+    os.makedirs(DOWNLOAD_DIR_BILI, exist_ok=True)
+    ss_path = os.path.join(DOWNLOAD_DIR_BILI, "douyin_login_qrcode.png")
+    with open(ss_path, "wb") as f:
+        f.write(screenshot)
+
+    nap_path = await send_file_if_needed(ss_path, plugin.nap_server_address, plugin.nap_server_port)
+    yield event.chain_result([Comp.Image.fromFileSystem(nap_path)])
+    yield event.plain_result("请在浏览器窗口中扫码或使用手机抖音扫描二维码登录（120秒内有效）")
+
+    # 等待登录
+    logged_in = await signer.wait_for_login(timeout_seconds=120)
+    if logged_in:
+        cookie_str = await signer.get_cookie_string()
+        plugin._douyin_cookie_from_scan = cookie_str
+        yield event.plain_result("抖音登录成功！cookie已自动保存。")
     else:
-        yield event.plain_result("登录超时或失败。\n可尝试使用 dy_cookie 命令手动粘贴cookie。")
+        yield event.plain_result(
+            "登录超时或失败。\n"
+            "可尝试以下替代方案:\n"
+            "1. 在浏览器中登录 www.douyin.com\n"
+            "2. 发送: dy_cookie <从浏览器复制的cookie>"
+        )
 
 
 async def handle_douyin_cookie(plugin, event):
     """管理员指令：手动粘贴抖音cookie"""
+    signer = plugin.browser_signer
+
     message_str = event.message_str.strip()
     for prefix in ("dy_cookie", "/dy_cookie"):
         if message_str.startswith(prefix):
             message_str = message_str[len(prefix):].strip()
             break
 
-    if not message_str or "=" not in message_str:
+    if not message_str:
         yield event.plain_result(
             "用法: dy_cookie <cookie字符串>\n\n"
             "获取方法:\n"
@@ -109,9 +130,18 @@ async def handle_douyin_cookie(plugin, event):
         )
         return
 
+    # 优先通过 BrowserSigner 设置 cookie
+    if signer and signer.is_ready:
+        ok = await signer.set_manual_cookies(message_str)
+        if ok:
+            plugin._douyin_cookie_from_scan = await signer.get_cookie_string()
+            yield event.plain_result("抖音cookie已注入浏览器并保存！")
+            return
+
+    # 回退: 使用旧的方式
     cookie_str = await save_manual_douyin_cookie(message_str)
     if cookie_str:
         plugin._douyin_cookie_from_file = cookie_str
-        yield event.plain_result("抖音cookie已保存！后续解析将使用此cookie。")
+        yield event.plain_result("抖音cookie已保存！")
     else:
         yield event.plain_result("cookie格式无效，请检查后重试。")

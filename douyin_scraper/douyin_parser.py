@@ -15,8 +15,12 @@ from .crawlers.douyin.web.utils import AwemeIdFetcher, BogusManager
 class DouyinParser:
     """
     一个独立的抖音分享链接解析器。
+
+    支持两种模式:
+    1. 浏览器签名 (推荐): 传入 browser_signer, 由 Chromium SDK 自动签名
+    2. 纯 Python (回退): 使用内置 A-Bogus 算法 (可能因反爬更新而失效)
     """
-    def __init__(self, cookie: str, proxy: str = ""):
+    def __init__(self, cookie: str, proxy: str = "", browser_signer=None):
         # 使用cookie_extractor格式化cookie
         self.cookie = extract_and_format_cookies(cookie) if cookie else ""
         self.id_fetcher = AwemeIdFetcher()
@@ -29,6 +33,8 @@ class DouyinParser:
         }
         # 代理配置（httpx 0.28+ 使用 proxy 单数参数）
         self.proxy = proxy or None
+        # 浏览器签名引擎 (可选)
+        self._browser_signer = browser_signer
 
     async def fetch_video_data(self, aweme_id: str) -> dict:
         """
@@ -123,9 +129,25 @@ class DouyinParser:
         # 否则，当作普通单视频处理
         elif aweme_detail.get("video"):
             media_type = "video"
-            video_list = aweme_detail.get("video", {}).get("play_addr", {}).get("url_list")
-            if video_list:
-                media_urls.append(video_list[0])
+            video = aweme_detail["video"]
+
+            # 优先从 bit_rate 获取最高画质
+            bit_rates = video.get("bit_rate", [])
+            if bit_rates:
+                best = bit_rates[0]
+                for br in bit_rates:
+                    if "1080" in br.get("gear_name", ""):
+                        best = br
+                        break
+                url_list = best.get("play_addr", {}).get("url_list", [])
+                if url_list:
+                    media_urls.append(url_list[0])
+
+            # 回退: 顶层 play_addr
+            if not media_urls:
+                video_list = video.get("play_addr", {}).get("url_list")
+                if video_list:
+                    media_urls.append(video_list[0])
 
         # 提取基础信息
         processed_data = {
@@ -174,7 +196,17 @@ class DouyinParser:
 
         # 步骤 3: 使用 aweme_id 获取视频详情
         try:
-            raw_video_data = await self.fetch_video_data(aweme_id)
+            # 优先使用浏览器签名 (如果可用)
+            if self._browser_signer:
+                logger.info("使用浏览器签名获取视频数据")
+                raw_video_data = await self._fetch_via_browser(aweme_id)
+            else:
+                logger.info("使用纯 Python 签名获取视频数据")
+                raw_video_data = await self._fetch_via_python(aweme_id)
+
+            if not raw_video_data:
+                return {"error": "Failed to fetch video data", "details": "API returned empty response"}
+
             logger.info("成功获取视频数据")
             # 步骤 4: 处理原始数据，提取核心信息
             processed_data = self._process_data(raw_video_data)
@@ -183,27 +215,58 @@ class DouyinParser:
             logger.error(f"获取或处理视频数据失败: {e}")
             return {"error": "Failed to fetch or process video data", "details": str(e)}
 
+    async def _fetch_via_browser(self, aweme_id: str) -> dict | None:
+        """通过浏览器签名引擎获取视频数据。直接返回 API 原始响应。"""
+        params = {
+            "aweme_id": aweme_id,
+            "device_platform": "webapp",
+            "aid": "6383",
+            "channel": "channel_pc_web",
+            "pc_client_type": "1",
+            "version_code": "170400",
+            "version_name": "17.4.0",
+            "cookie_enabled": "true",
+            "screen_width": "1920",
+            "screen_height": "1080",
+            "browser_language": "zh-CN",
+            "browser_platform": "Win32",
+            "browser_name": "Chrome",
+            "browser_version": "149.0.0.0",
+            "browser_online": "true",
+            "engine_name": "Blink",
+            "engine_version": "149.0.0.0",
+            "os_name": "Windows",
+            "os_version": "10",
+            "cpu_core_num": "16",
+            "device_memory": "8",
+            "platform": "PC",
+        }
+        raw = await self._browser_signer.fetch_signed_api(
+            "aweme/v1/web/aweme/detail/", params
+        )
+        return raw
+
+    async def _fetch_via_python(self, aweme_id: str) -> dict | None:
+        """通过纯 Python A-Bogus 签名获取视频数据 (旧方法, 可能失效)。"""
+        return await self.fetch_video_data(aweme_id)
+
 async def main():
     """
     主函数，用于演示解析器功能。
+    推荐配合 BrowserSigner 使用:
+        signer = BrowserSigner(headless=False)
+        await signer.start()
+        parser = DouyinParser(cookie="", browser_signer=signer)
+        result = await parser.parse("https://v.douyin.com/xxxxx/")
+        await signer.stop()
     """
-    # 从配置文件读取Cookie，或者直接在这里粘贴
-    # 注意：这里的Cookie是为了演示，实际使用时请确保它是有效的
-    user_cookie = "passport_csrf_token=REDACTED; passport_csrf_token_default=REDACTED; ttwid=REDACTED; bd_ticket_guard_client_web_domain=2; enter_pc_once=1; UIFID_TEMP=REDACTED; hevc_supported=true; IsDouyinActive=true; home_can_add_dy_2_desktop=%220%22; dy_swidth=2560; dy_sheight=1440; stream_recommend_feed_params=REDACTED; fpk1=REDACTED; fpk2=REDACTED; strategyABtestKey=REDACTED; volume_info=REDACTED; stream_player_status_params=REDACTED; xgplayer_user_id=REDACTED; s_v_web_id=REDACTED; odin_tt=REDACTED; __security_mc_1_s_sdk_crypt_sdk=43b5ab78-4435-a0f5; download_guide=REDACTED; passport_mfa_token=REDACTED; d_ticket=REDACTED; passport_assist_user=REDACTED; n_mh=REDACTED; sid_guard=REDACTED; uid_tt=REDACTED; uid_tt_ss=REDACTED; sid_tt=REDACTED; sessionid=REDACTED; sessionid_ss=REDACTED; session_tlb_tag=sttt%7C17%7CKUVbaImKSM3qkCkSIL5Kdv________-w8K1ByDUfNhJx9CG_m8SKhFib3YuLELd2-H0gdrI_EY0%3D; is_staff_user=false; sid_ucp_v1=REDACTED; ssid_ucp_v1=REDACTED; login_time=REDACTED; _bd_ticket_crypt_cookie=REDACTED; __security_mc_1_s_sdk_sign_data_key_web_protect=a8ac2d39-4554-834d; __security_mc_1_s_sdk_cert_key=99d08a3f-49d0-b41d; __security_server_data_status=1; is_dash_user=1; publish_badge_show_info=REDACTED; UIFID=REDACTED; SelfTabRedDotControl=%5B%5D; vdg_s=1; __ac_nonce=REDACTED; __ac_signature=REDACTED; douyin.com; xg_device_score=REDACTED; device_web_cpu_core=20; device_web_memory_size=-1; architecture=amd64; biz_trace_id=REDACTED; bd_ticket_guard_client_data=REDACTED; WallpaperGuide=REDACTED"
+    test_urls = [
+        "https://v.douyin.com/offWOmYUFdU/",
+    ]
 
-    # 创建解析器实例
-    parser = DouyinParser(cookie=user_cookie)
-
-    # 待解析的链接 (请替换为你自己的测试链接)
-    # 下面是不同类型的链接示例
-    test_urls = {
-        "multi_image": "2.51 复制打开抖音，看看【兮兮奈奈子的图文作品】  https://v.douyin.com/UHCPPHpOuC4/ MjP:/ X@Z.ZM 11/19",
-        "single_image": "5.82 复制打开抖音，看看【囡囡的图文作品】糟糕 是心动的感觉...# 对镜拍 # 美女 # ... https://v.douyin.com/UNGMxxP0rgA/ m@Q.kP 03/18 MWz:/",
-        "video": "1.07 你亖啦 你媽咪話要將你兩蚊雞賣俾我喔 # 我跟你讲  https://v.douyin.com/offWOmYUFdU/ 复制此链接，打开抖音搜索，直接观看视频！ DHI:/ D@u.Sy 04/13"
-    }
-
-    for link_type, url in test_urls.items():
-        print(f"\n------ 正在解析: {link_type} ------")
+    for url in test_urls:
+        print(f"\n------ 正在解析: {url} ------")
+        parser = DouyinParser(cookie="")
         result = await parser.parse(url)
         print("\n------ 解析结果 ------")
         print(json.dumps(result, indent=4, ensure_ascii=False))

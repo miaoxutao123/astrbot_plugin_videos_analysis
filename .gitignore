@@ -7,3 +7,5 @@ bili_cookies.json
 *.egg-info/
 .serena/
 image/
+data/
+sdk_extract/

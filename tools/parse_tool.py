@@ -43,7 +43,8 @@ async def handle_parse_video_link(plugin, link: str) -> dict:
     if re.search(r"v\.douyin\.com", link):
         try:
             cookie = plugin.effective_douyin_cookie
-            parser = DouyinParser(cookie=cookie, proxy=plugin.douyin_proxy)
+            parser = DouyinParser(cookie=cookie, proxy=plugin.douyin_proxy,
+                                  browser_signer=plugin.browser_signer)
             result = await parser.parse(link)
 
             if not result:
