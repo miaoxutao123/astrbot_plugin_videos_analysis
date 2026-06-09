@@ -18,6 +18,7 @@ from astrbot.core.message.message_event_result import MessageChain
 
 from .douyin_login import load_douyin_cookies
 from .utils.file_utils import delete_old_files
+from .douyin_scraper.browser_signer import BrowserSigner
 
 
 @register(
@@ -71,17 +72,45 @@ class hybird_videos_analysis(Star):
         self._douyin_cookie_from_file = None
         self._douyin_cookie_from_scan = None
 
+        # 浏览器签名引擎 (全局单例)
+        self._browser_signer: BrowserSigner | None = None
+
     @property
     def effective_douyin_cookie(self) -> str:
         """优先级：扫码cookie > 文件cookie > 配置cookie"""
         return self._douyin_cookie_from_scan or self._douyin_cookie_from_file or self._douyin_cookie_from_config or ""
 
+    @property
+    def browser_signer(self) -> BrowserSigner | None:
+        """获取浏览器签名引擎 (可能为 None, 如果未初始化)。"""
+        return self._browser_signer
+
     async def initialize(self):
-        """初始化：加载持久化cookie"""
+        """初始化：加载持久化cookie, 启动浏览器签名引擎。"""
+        # 加载文件 cookie
         cookie = await load_douyin_cookies()
         if cookie:
             self._douyin_cookie_from_file = cookie
             logger.info("已加载抖音cookie文件")
+
+        # 启动浏览器签名引擎 (非无头, 窗口可最小化; Linux 自动检测 Xvfb)
+        try:
+            self._browser_signer = BrowserSigner(headless=False)
+            status = await self._browser_signer.start()
+            if status.get("ok"):
+                logger.info(f"抖音浏览器签名引擎已就绪 ({status.get('reason')})")
+                if status.get("logged_in"):
+                    logger.info("抖音已登录 (从缓存恢复)")
+                else:
+                    logger.info("抖音未登录, 管理员可使用 /dy_login 扫码登录")
+            else:
+                logger.warning(f"抖音浏览器签名引擎启动失败: {status.get('reason')}")
+                logger.warning("将使用旧 A-Bogus 签名方式 (可能失效)")
+                await self._browser_signer.stop()
+                self._browser_signer = None
+        except Exception as e:
+            logger.warning(f"抖音浏览器签名引擎启动异常: {e}")
+            self._browser_signer = None
 
     # ==================== 被动解析 ====================
 

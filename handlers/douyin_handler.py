@@ -223,7 +223,8 @@ async def handle_douyin_parse(plugin, event):
     if plugin.show_progress_messages:
         yield event.plain_result("正在解析抖音链接...")
 
-    parser = DouyinParser(cookie=cookie, proxy=plugin.douyin_proxy)
+    parser = DouyinParser(cookie=cookie, proxy=plugin.douyin_proxy,
+                          browser_signer=plugin.browser_signer)
     result = await parser.parse(message_str)
 
     if not result:
