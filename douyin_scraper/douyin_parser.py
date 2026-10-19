@@ -241,9 +241,12 @@ class DouyinParser:
             "device_memory": "8",
             "platform": "PC",
         }
-        raw = await self._browser_signer.fetch_signed_api(
-            "aweme/v1/web/aweme/detail/", params
-        )
+        endpoint = "aweme/v1/web/aweme/detail/"
+        raw = await self._browser_signer.fetch_signed_api(endpoint, params)
+        if not raw:
+            logger.info("浏览器签名请求无结果，刷新页面后重试一次")
+            if await self._browser_signer.refresh():
+                raw = await self._browser_signer.fetch_signed_api(endpoint, params)
         return raw
 
     async def _fetch_via_python(self, aweme_id: str) -> dict | None:

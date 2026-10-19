@@ -2,122 +2,85 @@
 配置辅助模块：Gemini API 配置获取、LLM 响应发送、通用辅助函数
 """
 
-import json
-import os
-
-import astrbot.api.message_components as Comp
-from astrbot.api import logger
 from astrbot.api.message_components import Node
 
+from ..services.gemini_service import DEFAULT_MODEL, GeminiConfig
 from .file_utils import send_file, delete_old_files
 
-# 下载目录常量
-DOWNLOAD_DIR_DY = "data/plugins/astrbot_plugin_videos_analysis/download_videos/dy"
-DOWNLOAD_DIR_BILI = "data/plugins/astrbot_plugin_videos_analysis/download_videos/bili/"
-DOWNLOAD_DIR_DIRECT = "data/plugins/astrbot_plugin_videos_analysis/download_videos/direct/"
+from .paths import DOWNLOAD_DIR_BILI, DOWNLOAD_DIR_DIRECT, DOWNLOAD_DIR_DY  # noqa: F401
 
 
-async def get_gemini_api_config(context):
-    """获取 Gemini API 配置（优先框架 → 插件配置回退）
-
-    Args:
-        context: AstrBot Context 对象
-
-    Returns:
-        (api_key, proxy_url) 元组
-    """
-    api_key = None
-    proxy_url = None
-
-    # 1. 优先尝试从框架的默认 Provider 获取
-    provider = context.provider_manager.curr_provider_inst
-    if provider and provider.meta().type == "googlegenai_chat_completion":
-        logger.info("检测到框架默认LLM为Gemini，将使用框架配置。")
-        api_key = provider.get_current_key()
-        proxy_url = getattr(provider, "api_base", None) or getattr(provider, "base_url", None)
-        if proxy_url:
-            logger.info(f"使用框架配置的代理地址：{proxy_url}")
-
-    # 2. 如果默认 Provider 不是 Gemini，尝试查找其他 Gemini Provider
-    if not api_key:
-        logger.info("默认Provider不是Gemini，搜索其他Provider...")
-        for provider_name, provider_inst in context.provider_manager.providers.items():
-            if provider_inst and provider_inst.meta().type == "googlegenai_chat_completion":
-                logger.info(f"在Provider列表中找到Gemini配置：{provider_name}")
-                api_key = provider_inst.get_current_key()
-                proxy_url = getattr(provider_inst, "api_base", None) or getattr(provider_inst, "base_url", None)
-                break
-
-    return api_key, proxy_url
+def _find_framework_gemini(context):
+    """在框架 Provider 中查找 Gemini（优先当前默认 Provider）。"""
+    pm = context.provider_manager
+    candidates = [pm.curr_provider_inst, *getattr(pm, "provider_insts", [])]
+    for prov in candidates:
+        try:
+            if prov and prov.meta().type == "googlegenai_chat_completion":
+                return prov
+        except Exception:
+            continue
+    return None
 
 
-async def get_gemini_api_config_with_fallback(context, gemini_api_key: str = "", gemini_base_url: str = ""):
-    """获取 Gemini API 配置，带插件配置回退
+def resolve_gemini_config(plugin) -> GeminiConfig | None:
+    """解析 Gemini 配置：插件配置的 key 优先，其次复用框架里的 Gemini Provider。"""
+    model = plugin.gemini_model or ""
+    common = {"inline_limit_mb": plugin.gemini_inline_limit_mb}
+    if plugin.gemini_api_key:
+        return GeminiConfig(
+            api_key=plugin.gemini_api_key,
+            base_url=plugin.gemini_base_url,
+            model=model or DEFAULT_MODEL,
+            source="plugin",
+            **common,
+        )
+    prov = _find_framework_gemini(plugin.context)
+    if prov:
+        key = prov.get_current_key()
+        if key:
+            return GeminiConfig(
+                api_key=key,
+                base_url=getattr(prov, "api_base", None) or "",
+                model=model or prov.get_model() or DEFAULT_MODEL,
+                source=f"provider:{prov.meta().id}",
+                **common,
+            )
+    return None
 
-    Args:
-        context: AstrBot Context 对象
-        gemini_api_key: 插件配置的 API key
-        gemini_base_url: 插件配置的 base URL
 
-    Returns:
-        (api_key, proxy_url) 元组
-    """
-    api_key, proxy_url = await get_gemini_api_config(context)
-
-    # 3. 回退到插件自身配置
-    if not api_key:
-        logger.info("框架中未找到Gemini配置，回退到插件自身配置。")
-        api_key = gemini_api_key
-        proxy_url = gemini_base_url
-        if api_key:
-            logger.info("使用插件配置的API Key。")
-
-    return api_key, proxy_url
+GEMINI_MISSING_MSG = (
+    "抱歉，我需要 Gemini API 才能理解视频，但没有找到相关配置。\n"
+    "请在插件配置中填写 gemini_api_key（可配合 gemini_base_url 使用中转站），或在框架中添加 Gemini Provider。"
+)
 
 
 async def send_llm_response(context, event, video_summary: str, platform: str = "抖音"):
-    """将视频摘要提交给框架 LLM 进行评价 — 异步生成器"""
+    """将视频摘要交给框架 LLM 以当前人格评论 — 异步生成器。
+
+    人格与历史由框架根据 conversation 自动注入，这里只负责构造请求。
+    """
     if not video_summary:
         return
 
-    curr_cid = await context.conversation_manager.get_curr_conversation_id(event.unified_msg_origin)
-    conversation = None
-    llm_context = []
-    if curr_cid:
-        conversation = await context.conversation_manager.get_conversation(event.unified_msg_origin, curr_cid)
-        if conversation:
-            llm_context = json.loads(conversation.history)
-
-    # 获取当前人格设定
-    provider = context.provider_manager.curr_provider_inst
-    current_persona = None
-    if provider and hasattr(provider, "personality"):
-        current_persona = provider.personality
-    elif context.provider_manager.selected_default_persona:
-        current_persona = context.provider_manager.selected_default_persona
-
-    persona_prompt = ""
-    if current_persona and hasattr(current_persona, "prompt"):
-        persona_prompt = f"请保持你的人格设定：{current_persona.prompt}\n\n"
+    umo = event.unified_msg_origin
+    conv_mgr = context.conversation_manager
+    curr_cid = await conv_mgr.get_curr_conversation_id(umo)
+    if not curr_cid:
+        curr_cid = await conv_mgr.new_conversation(umo)
+    conversation = await conv_mgr.get_conversation(umo, curr_cid)
 
     final_prompt = (
-        f"{persona_prompt}我刚刚分析了这个{platform}视频的内容：\n\n{video_summary}\n\n"
+        f"我刚刚分析了这个{platform}视频的内容：\n\n{video_summary}\n\n"
         f"请基于这个视频内容，结合你的人格特点，自然地发表你的看法或评论。"
         f"不要说这是我转述给你的，请像你亲自观看了这个用户给你分享的来自{platform}的视频一样回应。"
     )
 
-    llm_result = event.request_llm(
+    yield event.request_llm(
         prompt=final_prompt,
         session_id=curr_cid,
-        contexts=llm_context,
         conversation=conversation,
     )
-
-    if hasattr(llm_result, "__aiter__"):
-        async for result in llm_result:
-            yield result
-    else:
-        yield llm_result
 
 
 def should_comprehend(event, platform_config: bool = False, private_auto_comprehend: bool = True) -> bool:

@@ -7,9 +7,7 @@ import re
 
 from astrbot.api import logger
 
-from ..douyin_scraper.douyin_parser import DouyinParser
 from ..services.bilibili_service import process_bili_video
-from ..services.douyin_service import download
 
 
 async def handle_parse_video_link(plugin, link: str) -> dict:
@@ -33,7 +31,7 @@ async def handle_parse_video_link(plugin, link: str) -> dict:
     # 自动提取 URL
     url_match = re.search(
         r"(https?://v\.douyin\.com/\S+|https?://b23\.tv/\S+|"
-        r"https?://www\.bilibili\.com/video/\S+|BV1\w{9}|av\d+)",
+        r"https?://(?:www\.|m\.)?bilibili\.com/video/\S+|BV1\w{9}|av\d+)",
         link,
     )
     if url_match:
@@ -42,10 +40,7 @@ async def handle_parse_video_link(plugin, link: str) -> dict:
     # ==================== 抖音解析 ====================
     if re.search(r"v\.douyin\.com", link):
         try:
-            cookie = plugin.effective_douyin_cookie
-            parser = DouyinParser(cookie=cookie, proxy=plugin.douyin_proxy,
-                                  browser_signer=plugin.browser_signer)
-            result = await parser.parse(link)
+            result = await plugin.make_douyin_parser().parse(link)
 
             if not result:
                 return {"error": "抖音链接解析失败", "platform": "douyin"}
@@ -62,6 +57,8 @@ async def handle_parse_video_link(plugin, link: str) -> dict:
                 "type": result.get("type", "unknown"),
                 "media_urls": result.get("media_urls", []),
                 "aweme_id": result.get("aweme_id"),
+                "desc": result.get("desc"),
+                "author": result.get("author_nickname"),
             }
 
             # 如果是视频，提供第一个直链

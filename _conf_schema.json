@@ -21,7 +21,7 @@
         "default": 60
     },
     "max_video_size": {
-        "description": "最大视频大小（单位MB）（预留，还未完全实现）",
+        "description": "视频超过此大小（MB）时以文件形式发送",
         "type": "int",
         "default": 200
     },
@@ -80,14 +80,33 @@
         "hint": "实验性功能，会消耗大量token，默认关闭，会读取你发的所有视频到llm进行分析"
     },
     "gemini_base_url": {
-        "description": "Gemini API 基础地址,反代地址也填写到这里",
+        "description": "Gemini API 地址（官方或中转站）",
         "type": "string",
-        "default": "https://generative-api.google.com/v1alpha2"
+        "default": "",
+        "hint": "留空使用官方 https://generativelanguage.googleapis.com ；new-api/one-api 等中转站填根地址，如 https://api.example.com（不要带 /v1beta）"
     },
     "gemini_api_key": {
         "description": "Gemini API Key",
         "type": "string",
         "default": ""
+    },
+    "gemini_model": {
+        "description": "Gemini 模型",
+        "type": "string",
+        "default": "",
+        "hint": "留空：插件 key 默认 gemini-2.5-flash；复用框架 Provider 时沿用其模型。中转站请填它实际提供的模型名"
+    },
+    "gemini_inline_limit_mb": {
+        "description": "内联上传阈值（MB）",
+        "type": "float",
+        "default": 20,
+        "hint": "不超过此大小的视频/音频以 base64 内联发送；更大的走 Google File API（多数中转站不支持 File API）"
+    },
+    "gemini_direct_max_mb": {
+        "description": "整段视频分析上限（MB）",
+        "type": "float",
+        "default": 200,
+        "hint": "超过此大小或整段分析失败时，回退为「音频转写 + 关键帧」模式"
     },
     "private_auto_comprehend": {
         "description": "私聊是否自动理解视频内容",
@@ -107,11 +126,22 @@
         "default": "",
         "hint": "如 http://127.0.0.1:7890 ，留空则直连。AstrBot启动时会清除系统代理，需在此手动配置。"
     },
+    "douyin_browser_signer": {
+        "description": "启用抖音浏览器签名引擎",
+        "type": "bool",
+        "default": true,
+        "hint": "抖音解析必需。需要 playwright + Chromium，Linux 无桌面环境还需 Xvfb。关闭后抖音解析基本不可用"
+    },
     "video_understand_method": {
-        "description": "视频理解方式",
+        "description": "视频理解首选方式",
         "type": "string",
-        "default": "local_asr",
-        "hint": "local_asr: 本地ASR+抽帧（需funasr）| mimo: 使用MiMo多模态大模型原生理解视频（推荐，需配置mimo_api_key）"
+        "default": "gemini",
+        "options": [
+            "gemini",
+            "mimo",
+            "local_asr"
+        ],
+        "hint": "首选失败时自动按 gemini → mimo → local_asr 回退。local_asr 需额外安装 funasr"
     },
     "mimo_model": {
         "description": "MiMo 模型ID",

@@ -36,7 +36,7 @@ import time
 import sys
 from urllib.parse import urlencode
 
-_PLUGIN_DATA_DIR = "data/plugins/astrbot_plugin_videos_analysis"
+_PLUGIN_DATA_DIR = "data/plugin_data/astrbot_plugin_videos_analysis/accounts"
 _USER_DATA_DIR = os.path.join(_PLUGIN_DATA_DIR, "dy_browser_profile")
 _COOKIE_FILE = os.path.join(_PLUGIN_DATA_DIR, "douyin_cookies.json")
 
@@ -54,26 +54,58 @@ def _find_xvfb() -> str | None:
     return shutil.which("Xvfb")
 
 
+_XVFB_PROC: subprocess.Popen | None = None
+
+
 def _start_xvfb(display: int = 99) -> int | None:
     """
-    尝试启动 Xvfb 虚拟显示器。
+    尝试启动 Xvfb 虚拟显示器（已存在则复用）。
     返回 display 编号, 失败返回 None。
     """
+    global _XVFB_PROC
+    socket_path = f"/tmp/.X11-unix/X{display}"
+    if os.path.exists(socket_path):
+        os.environ["DISPLAY"] = f":{display}"
+        return display
+
     xvfb = _find_xvfb()
     if not xvfb:
         return None
 
     try:
-        subprocess.Popen(
-            [xvfb, f":{display}", "-screen", "0", "1920x1080x24", "-ac"],
+        _XVFB_PROC = subprocess.Popen(
+            [xvfb, f":{display}", "-screen", "0", "1920x1080x24", "-ac", "-nolisten", "tcp"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        time.sleep(0.5)  # 等待 Xvfb 启动
+        # 等待 socket 出现，最多 5 秒
+        for _ in range(50):
+            if os.path.exists(socket_path):
+                break
+            if _XVFB_PROC.poll() is not None:
+                return None
+            time.sleep(0.1)
+        else:
+            return None
         os.environ["DISPLAY"] = f":{display}"
         return display
     except Exception:
         return None
+
+
+def _stop_xvfb() -> None:
+    """只停止本模块自己启动的 Xvfb，并撤销对应的 DISPLAY。"""
+    global _XVFB_PROC
+    if _XVFB_PROC is None:
+        return
+    if _XVFB_PROC.poll() is None:
+        _XVFB_PROC.terminate()
+        try:
+            _XVFB_PROC.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            _XVFB_PROC.kill()
+    os.environ.pop("DISPLAY", None)
+    _XVFB_PROC = None
 
 
 def _check_display() -> tuple[bool, str]:
@@ -201,17 +233,24 @@ class BrowserSigner:
                 )
             except Exception as e:
                 msg = str(e)
-                if "Executable doesn't exist" in msg or "chromium" in msg.lower():
+                await self._playwright.stop()
+                self._playwright = None
+                if "Executable doesn't exist" in msg:
                     return self._make_status(
                         False,
-                        "Chromium 浏览器未安装。请运行: playwright install chromium",
+                        "Chromium 浏览器未安装。请运行: playwright install --with-deps chromium",
                     )
-                if "display" in msg.lower() or "cannot open display" in msg.lower():
+                if "Missing X server" in msg or "cannot open display" in msg.lower():
                     return self._make_status(
                         False,
                         f"无法打开显示器。{_xvfb_install_hint()}",
                     )
-                return self._make_status(False, f"浏览器启动失败: {msg}")
+                if "error while loading shared libraries" in msg or "Host system is missing dependencies" in msg:
+                    return self._make_status(
+                        False,
+                        "Chromium 缺少系统依赖。请运行: playwright install-deps chromium",
+                    )
+                return self._make_status(False, f"浏览器启动失败: {msg[:300]}")
 
             pages = self._context.pages
             self._page = pages[0] if pages else await self._context.new_page()
@@ -294,15 +333,16 @@ class BrowserSigner:
                     need_qr_login=True,
                 )
 
-    async def stop(self) -> None:
-        """关闭浏览器, 保存登录状态。"""
+    async def stop(self, save: bool = True) -> None:
+        """关闭浏览器（默认保存登录状态）。"""
         async with self._lock:
             if self._context:
-                try:
-                    cookies = await self._context.cookies()
-                    await self._save_cookies(cookies)
-                except Exception:
-                    pass
+                if save:
+                    try:
+                        cookies = await self._context.cookies()
+                        await self._save_cookies(cookies)
+                    except Exception:
+                        pass
                 try:
                     await self._context.close()
                 except Exception:
@@ -319,6 +359,7 @@ class BrowserSigner:
             self._page = None
             self._sdk_ready = False
             self._logged_in = False
+            _stop_xvfb()
 
     @property
     def is_ready(self) -> bool:
@@ -486,11 +527,26 @@ class BrowserSigner:
         try:
             result = await self._page.evaluate(js_code)
             if not result or not result.get("ok"):
+                self._log(f"API 请求失败: status={result and result.get('status')} {(result or {}).get('error') or (result or {}).get('body', '')[:200]}")
+                return None
+            if not result.get("body"):
+                self._log("API 返回空响应（可能触发风控，可尝试 /dy_login 登录或 /dy_restart）")
                 return None
             return json.loads(result["body"])
         except Exception as e:
             self._log(f"API 请求异常: {e}")
             return None
+
+    async def refresh(self) -> bool:
+        """重新加载 douyin.com 并等待 SDK，用于风控导致的空响应后重试。"""
+        if not self._page:
+            return False
+        try:
+            await self._page.goto("https://www.douyin.com", wait_until="domcontentloaded", timeout=30000)
+        except Exception as e:
+            self._log(f"刷新页面失败: {e}")
+        self._sdk_ready = await self._wait_for_sdk(timeout=20)
+        return self._sdk_ready
 
     # ── 视频/图文解析 ────────────────────────────────────
 

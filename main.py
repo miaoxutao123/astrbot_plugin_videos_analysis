@@ -1,31 +1,31 @@
 """
 AstrBot 视频解析与理解插件
 支持平台：抖音、B站、MC百科
-功能：被动链接解析（默认关闭）、Agent 主动调用视频解析/理解工具
+功能：被动链接解析（默认关闭）、Agent 主动调用视频解析/理解工具、账号状态管理
 """
 
 import json
-import os
-import re
 
-import astrbot.api.message_components as Comp
 from astrbot.api import logger
-from astrbot.api.star import Context, Star, register
-
 from astrbot.api.event import filter
 from astrbot.api.event.filter import EventMessageType
-from astrbot.core.message.message_event_result import MessageChain
+from astrbot.api.star import Context, Star, register
 
 from .douyin_login import load_douyin_cookies
-from .utils.file_utils import delete_old_files
 from .douyin_scraper.browser_signer import BrowserSigner
+from .douyin_scraper.douyin_parser import DouyinParser
+from .services.account_manager import AccountManager
+from .utils.paths import DOUYIN_BROWSER_PROFILE, migrate_legacy_data
+
+# 旧版 _conf_schema 的默认值是个不存在的地址，按未填写处理
+_BOGUS_GEMINI_BASE = "https://generative-api.google.com/v1alpha2"
 
 
 @register(
     "astrbot_plugin_videos_analysis",
     "视频解析与理解",
     "抖音/B站/MC百科视频自动解析与AI理解",
-    "0.3.0",
+    "0.4.0",
     "https://github.com/Zhalslar/astrbot_plugin_videos_analysis",
 )
 class hybird_videos_analysis(Star):
@@ -53,14 +53,21 @@ class hybird_videos_analysis(Star):
         self.douyin_video_comprehend = config.get("douyin_video_comprehend", False)
         self.show_progress_messages = config.get("show_progress_messages", True)
         self.douyin_proxy = config.get("douyin_proxy", "")
+        self.douyin_browser_signer_enabled = config.get("douyin_browser_signer", True)
 
         # 视频理解配置
         self.url_video_comprehend = config.get("url_video_comprehend", False)
         self.upload_video_comprehend = config.get("upload_video_comprehend", False)
         self.private_auto_comprehend = config.get("private_auto_comprehend", True)
-        self.gemini_api_key = config.get("gemini_api_key", "")
-        self.gemini_base_url = config.get("gemini_base_url", "")
-        self.video_understand_method = config.get("video_understand_method", "local_asr")
+        self.video_understand_method = config.get("video_understand_method", "gemini")
+
+        # Gemini 配置
+        self.gemini_api_key = config.get("gemini_api_key", "").strip()
+        base = config.get("gemini_base_url", "").strip()
+        self.gemini_base_url = "" if base == _BOGUS_GEMINI_BASE else base
+        self.gemini_model = config.get("gemini_model", "").strip()
+        self.gemini_inline_limit_mb = float(config.get("gemini_inline_limit_mb", 20))
+        self.gemini_direct_max_mb = float(config.get("gemini_direct_max_mb", 200))
 
         # MiMo 配置
         self.mimo_api_base = config.get("mimo_api_base", "https://api.xiaomimimo.com/v1")
@@ -74,6 +81,9 @@ class hybird_videos_analysis(Star):
 
         # 浏览器签名引擎 (全局单例)
         self._browser_signer: BrowserSigner | None = None
+        self.browser_signer_error: str = ""
+
+        self.accounts = AccountManager(self)
 
     @property
     def effective_douyin_cookie(self) -> str:
@@ -85,31 +95,55 @@ class hybird_videos_analysis(Star):
         """获取浏览器签名引擎 (可能为 None, 如果未初始化)。"""
         return self._browser_signer
 
+    def make_douyin_parser(self) -> DouyinParser:
+        """所有抖音解析入口统一从这里取解析器，保证带上浏览器签名引擎。"""
+        signer = self._browser_signer if self._browser_signer and self._browser_signer.is_ready else None
+        return DouyinParser(cookie=self.effective_douyin_cookie, proxy=self.douyin_proxy, browser_signer=signer)
+
     async def initialize(self):
-        """初始化：加载持久化cookie, 启动浏览器签名引擎。"""
-        # 加载文件 cookie
+        """初始化：迁移旧数据、加载持久化cookie、启动浏览器签名引擎。"""
+        migrate_legacy_data()
+
         cookie = await load_douyin_cookies()
         if cookie:
             self._douyin_cookie_from_file = cookie
             logger.info("已加载抖音cookie文件")
 
-        # 启动浏览器签名引擎 (非无头, 窗口可最小化; Linux 自动检测 Xvfb)
+        if self.douyin_browser_signer_enabled:
+            await self.start_browser_signer()
+        else:
+            self.browser_signer_error = "已在配置中禁用"
+
+    async def start_browser_signer(self) -> dict:
+        """启动（或重启）抖音浏览器签名引擎，返回状态字典。"""
+        if self._browser_signer:
+            await self._browser_signer.stop()
+            self._browser_signer = None
         try:
-            self._browser_signer = BrowserSigner(headless=False)
-            status = await self._browser_signer.start()
-            if status.get("ok"):
-                logger.info(f"抖音浏览器签名引擎已就绪 ({status.get('reason')})")
-                if status.get("logged_in"):
-                    logger.info("抖音已登录 (从缓存恢复)")
-                else:
-                    logger.info("抖音未登录, 管理员可使用 /dy_login 扫码登录")
-            else:
-                logger.warning(f"抖音浏览器签名引擎启动失败: {status.get('reason')}")
-                logger.warning("将使用旧 A-Bogus 签名方式 (可能失效)")
-                await self._browser_signer.stop()
-                self._browser_signer = None
+            signer = BrowserSigner(headless=False, user_data_dir=DOUYIN_BROWSER_PROFILE)
+            status = await signer.start()
         except Exception as e:
-            logger.warning(f"抖音浏览器签名引擎启动异常: {e}")
+            status = {"ok": False, "reason": f"启动异常: {e}"}
+            signer = None
+
+        if status.get("ok"):
+            self._browser_signer = signer
+            self.browser_signer_error = ""
+            logger.info(f"抖音浏览器签名引擎已就绪 ({status.get('reason')})")
+            if not status.get("logged_in"):
+                logger.info("抖音未登录, 管理员可使用 /dy_login 扫码登录")
+        else:
+            self.browser_signer_error = status.get("reason", "未知错误")
+            logger.warning(f"抖音浏览器签名引擎不可用: {self.browser_signer_error}")
+            logger.warning("抖音解析将回退到纯 Python A-Bogus 签名（目前基本会被 403 拒绝）")
+            if signer:
+                await signer.stop()
+        return status
+
+    async def terminate(self):
+        """插件卸载/重载时关闭浏览器与 Xvfb，避免进程泄漏。"""
+        if self._browser_signer:
+            await self._browser_signer.stop()
             self._browser_signer = None
 
     # ==================== 被动解析 ====================
@@ -127,8 +161,8 @@ class hybird_videos_analysis(Star):
     @filter.event_message_type(EventMessageType.ALL)
     @filter.regex(
         r"(https?://b23\.tv/[\w]+|https?://bili2233\.cn/[\w]+|"
-        r"https?://www\.bilibili\.com/video/BV1\w{9}|"
-        r"https?://www\.bilibili\.com/video/av\d+|"
+        r"https?://(?:www\.|m\.)?bilibili\.com/video/BV1\w{9}|"
+        r"https?://(?:www\.|m\.)?bilibili\.com/video/av\d+|"
         r"BV1\w{9}|av\d+)"
     )
     async def auto_parse_bili(self, event):
@@ -161,6 +195,7 @@ class hybird_videos_analysis(Star):
 
     # ==================== 管理员命令 ====================
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("bili_login")
     async def bili_login_command(self, event):
         """B站扫码登录"""
@@ -168,6 +203,7 @@ class hybird_videos_analysis(Star):
         async for response in handle_bili_login(self, event):
             yield response
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("dy_login")
     async def douyin_login_command(self, event):
         """抖音扫码登录"""
@@ -175,12 +211,35 @@ class hybird_videos_analysis(Star):
         async for response in handle_douyin_login(self, event):
             yield response
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("dy_cookie")
     async def douyin_cookie_command(self, event):
         """手动设置抖音cookie"""
         from .handlers.admin_handler import handle_douyin_cookie
         async for response in handle_douyin_cookie(self, event):
             yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_accounts", alias={"账号状态"})
+    async def accounts_status_command(self, event, mode: str = ""):
+        """查看各平台账号/AI 服务状态。/va_accounts deep 会实际测试连通性"""
+        from .handlers.admin_handler import handle_accounts_status
+        async for response in handle_accounts_status(self, event, deep=(mode == "deep")):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_logout")
+    async def accounts_logout_command(self, event, platform: str = ""):
+        """注销平台登录态：/va_logout douyin|bilibili"""
+        yield event.plain_result(await self.accounts.logout(platform.strip().lower()))
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("dy_restart")
+    async def douyin_restart_command(self, event):
+        """重启抖音浏览器签名引擎"""
+        yield event.plain_result("正在重启抖音浏览器签名引擎...")
+        status = await self.start_browser_signer()
+        yield event.plain_result(("✅ " if status.get("ok") else "⚠️ ") + str(status.get("reason")))
 
     # ==================== 主动触发命令 ====================
 
@@ -196,14 +255,14 @@ class hybird_videos_analysis(Star):
     @filter.llm_tool(name="parse_video_link")
     async def parse_video_link(self, event, link: str):
         """解析视频链接，获取视频信息（标题、封面、直链等）。
-        支持抖音(v.douyin.com)和B站(b23.tv/bilibili.com)链接。
+        支持抖音(v.douyin.com)和B站(b23.tv/bilibili.com/BV号/av号)链接。
 
         Args:
-            link(str): 视频链接URL
+            link(string): 视频链接URL
         """
         from .tools.parse_tool import handle_parse_video_link
         result = await handle_parse_video_link(self, link)
-        return result
+        return json.dumps(result, ensure_ascii=False)
 
     @filter.llm_tool(name="understand_video")
     async def understand_video(self, event, video_source: str, prompt: str = ""):
@@ -212,9 +271,9 @@ class hybird_videos_analysis(Star):
         可用于理解通过 parse_video_link 工具获得的视频直链。
 
         Args:
-            video_source(str): 视频链接URL或本地文件路径
-            prompt(str): 可选的自定义分析提示词
+            video_source(string): 视频链接URL或本地文件路径
+            prompt(string): 可选的自定义分析提示词
         """
         from .tools.understand_tool import handle_understand_video
         result = await handle_understand_video(self, video_source, prompt or None)
-        return result
+        return json.dumps(result, ensure_ascii=False)

@@ -11,41 +11,44 @@ from astrbot.api.message_components import Image, Nodes, Plain
 
 from ..services.bilibili_service import process_bili_video
 from ..services.gemini_service import (
+    GeminiConfig,
     process_audio_with_gemini,
     process_images_with_gemini,
     process_video_with_gemini,
 )
-from ..douyin_scraper.douyin_parser import DouyinParser
 from ..utils.config_helper import (
     DOWNLOAD_DIR_DY,
     create_node,
-    get_gemini_api_config_with_fallback,
+    GEMINI_MISSING_MSG,
+    resolve_gemini_config,
     send_file_if_needed,
     send_llm_response,
 )
 from ..utils.media_utils import extract_frame, separate_audio_video
 
 
-async def analyze_video_with_gemini(plugin, event, video_path: str, platform: str = "视频", api_key: str = None, proxy_url: str = None):
+async def analyze_video_with_gemini(plugin, event, video_path: str, platform: str = "视频", gcfg: GeminiConfig | None = None):
     """
-    统一的视频分析流程：根据视频大小自动选择分析策略。
+    统一的视频分析流程：先整段视频交给 Gemini（小文件内联 / 大文件 File API），
+    失败或过大时回退到「音频转写 + 关键帧」模式。
     """
-    if not api_key:
-        api_key, proxy_url = await get_gemini_api_config_with_fallback(
-            plugin.context, plugin.gemini_api_key, plugin.gemini_base_url
-        )
-    if not api_key:
-        yield event.plain_result(
-            "抱歉，我需要Gemini API才能理解视频，但是没有找到相关配置。\n"
-            "请在框架中配置Gemini Provider或在插件配置中提供gemini_api_key。"
-        )
+    gcfg = gcfg or resolve_gemini_config(plugin)
+    if not gcfg:
+        yield event.plain_result(GEMINI_MISSING_MSG)
         return
 
     video_size_mb = os.path.getsize(video_path) / (1024 * 1024)
     video_summary = ""
 
-    if video_size_mb > 30:
-        # 大视频处理流程 (音频+关键帧)
+    if video_size_mb <= plugin.gemini_direct_max_mb:
+        if plugin.show_progress_messages:
+            yield event.plain_result(f"视频大小为 {video_size_mb:.2f}MB，正在交给 AI 分析...")
+        video_prompt = "请详细描述这个视频的内容，包括场景、人物、动作、对话和传达的核心信息。请使用中文回答。"
+        video_summary, _ = await process_video_with_gemini(gcfg, video_prompt, video_path)
+        if not video_summary:
+            logger.info("[gemini] 整段视频分析失败，回退到音频+关键帧模式")
+
+    if not video_summary:
         if plugin.show_progress_messages:
             yield event.plain_result(f"视频大小为 {video_size_mb:.2f}MB，采用音频+关键帧模式进行分析...")
 
@@ -58,37 +61,30 @@ async def analyze_video_with_gemini(plugin, event, video_path: str, platform: st
             audio_path, video_only_path = separated_files
             temp_files.extend([audio_path, video_only_path])
 
-            description, timestamps, _ = await process_audio_with_gemini(api_key, audio_path, proxy_url)
-            if not description or not timestamps:
+            description, timestamps, _ = await process_audio_with_gemini(gcfg, audio_path)
+            if not description:
                 yield event.plain_result("抱歉，我无法分析这个视频的音频内容。")
                 return
 
-            image_paths = []
             ts_and_paths = []
-            for ts in timestamps:
+            for ts in timestamps or []:
                 frame_path = await extract_frame(video_only_path, ts)
                 if frame_path:
-                    image_paths.append(frame_path)
                     temp_files.append(frame_path)
                     ts_and_paths.append((ts, frame_path))
 
-            if not image_paths:
+            if not ts_and_paths:
                 video_summary = description
             else:
                 prompt = f"这是关于一个视频的摘要和一些从该视频中提取的关键帧。视频摘要如下：\n\n{description}\n\n请结合摘要和这些关键帧，对整个视频内容进行一个全面、生动的总结。"
-                summary_tuple = await process_images_with_gemini(api_key, prompt, image_paths, proxy_url)
-                video_summary = summary_tuple[0] if summary_tuple else "无法生成最终摘要。"
+                video_summary, _ = await process_images_with_gemini(gcfg, prompt, [p for _, p in ts_and_paths])
+                video_summary = video_summary or description
 
-            if ts_and_paths:
                 key_frames_nodes = Nodes([])
                 key_frames_nodes.nodes.append(create_node(event, [Plain("以下是视频的关键时刻：")]))
                 for ts, frame_path in ts_and_paths:
                     nap_frame_path = await send_file_if_needed(frame_path, plugin.nap_server_address, plugin.nap_server_port)
-                    node_content = [
-                        Image.fromFileSystem(nap_frame_path),
-                        Plain(f"时间点: {ts}"),
-                    ]
-                    key_frames_nodes.nodes.append(create_node(event, node_content))
+                    key_frames_nodes.nodes.append(create_node(event, [Image.fromFileSystem(nap_frame_path), Plain(f"时间点: {ts}")]))
                 yield event.chain_result([key_frames_nodes])
         finally:
             for tmp in temp_files:
@@ -97,16 +93,7 @@ async def analyze_video_with_gemini(plugin, event, video_path: str, platform: st
                         os.remove(tmp)
                 except OSError:
                     pass
-    else:
-        # 小视频处理流程 (直接上传)
-        if plugin.show_progress_messages:
-            yield event.plain_result(f"视频大小为 {video_size_mb:.2f}MB，直接上传视频进行分析...")
 
-        video_prompt = "请详细描述这个视频的内容，包括场景、人物、动作和传达的核心信息。"
-        video_response = await process_video_with_gemini(api_key, video_prompt, video_path, proxy_url)
-        video_summary = video_response[0] if video_response and video_response[0] else "抱歉，我暂时无法理解这个视频内容。"
-
-    # 发送 AI 分析结果
     if video_summary:
         async for response in send_llm_response(plugin.context, event, video_summary, platform):
             yield response
@@ -176,7 +163,7 @@ async def handle_comprehend_video_command(plugin, event):
     message_str = event.message_str
     url_match = re.search(
         r"(https?://v\.douyin\.com/\S+|https?://b23\.tv/\S+|"
-        r"https?://www\.bilibili\.com/video/\S+|BV1\w{9})",
+        r"https?://www\.bilibili\.com/video/\S+|BV1\w{9}|av\d+)",
         message_str,
     )
 
@@ -186,22 +173,15 @@ async def handle_comprehend_video_command(plugin, event):
 
     url = url_match.group(0)
 
-    api_key, proxy_url = await get_gemini_api_config_with_fallback(
-        plugin.context, plugin.gemini_api_key, plugin.gemini_base_url
-    )
-    if not api_key:
-        yield event.plain_result(
-            "需要Gemini API才能理解视频，请先配置。\n"
-            "请在框架中配置Gemini Provider或在插件配置中提供gemini_api_key。"
-        )
+    gcfg = resolve_gemini_config(plugin)
+    if not gcfg:
+        yield event.plain_result(GEMINI_MISSING_MSG)
         return
 
     if re.search(r"v\.douyin\.com", url):
         if plugin.show_progress_messages:
             yield event.plain_result("正在解析抖音链接并分析视频内容...")
-        cookie = plugin.effective_douyin_cookie
-        parser = DouyinParser(cookie=cookie, proxy=plugin.douyin_proxy)
-        result = await parser.parse(url)
+        result = await plugin.make_douyin_parser().parse(url)
         if not result or result.get("error"):
             yield event.plain_result("抖音链接解析失败，请检查链接是否正确。")
             return
@@ -210,10 +190,10 @@ async def handle_comprehend_video_command(plugin, event):
             yield event.plain_result("无法识别内容类型。")
             return
         from .douyin_handler import _process_douyin_comprehension
-        async for resp in _process_douyin_comprehension(plugin, event, result, content_type, api_key, proxy_url):
+        async for resp in _process_douyin_comprehension(plugin, event, result, content_type, gcfg):
             yield resp
 
-    elif re.search(r"(b23\.tv|bilibili\.com|BV1\w{9})", url):
+    elif re.search(r"(b23\.tv|bilibili\.com|BV1\w{9}|av\d+)", url):
         if plugin.show_progress_messages:
             yield event.plain_result("正在下载B站视频并分析内容...")
         download_result = await process_bili_video(url, download_flag=True, quality=16, use_login=plugin.bili_use_login, event=None)
@@ -222,7 +202,7 @@ async def handle_comprehend_video_command(plugin, event):
             return
         video_path = download_result["video_path"]
         try:
-            async for resp in analyze_video_with_gemini(plugin, event, video_path, "B站"):
+            async for resp in analyze_video_with_gemini(plugin, event, video_path, "B站", gcfg):
                 yield resp
         finally:
             if video_path and os.path.exists(video_path):

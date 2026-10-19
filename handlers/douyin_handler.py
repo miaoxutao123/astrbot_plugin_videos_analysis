@@ -11,10 +11,11 @@ from astrbot.core.message.message_event_result import MessageChain
 
 from ..services.douyin_service import download
 from ..services.gemini_service import process_images_with_gemini
-from ..douyin_scraper.douyin_parser import DouyinParser
 from ..utils.config_helper import (
     DOWNLOAD_DIR_DY,
+    GEMINI_MISSING_MSG,
     create_node,
+    resolve_gemini_config,
     send_file_if_needed,
     send_llm_response,
     should_comprehend,
@@ -119,7 +120,7 @@ async def _process_single_media(plugin, event, result, media_type: str):
         return [Comp.Plain(f"媒体文件处理失败: {str(e)}")]
 
 
-async def _process_douyin_comprehension(plugin, event, result, content_type, api_key, proxy_url):
+async def _process_douyin_comprehension(plugin, event, result, content_type, gcfg):
     """处理抖音视频/图片的深度理解"""
     download_dir = DOWNLOAD_DIR_DY
     os.makedirs(download_dir, exist_ok=True)
@@ -128,14 +129,14 @@ async def _process_douyin_comprehension(plugin, event, result, content_type, api
     aweme_id = result.get("aweme_id", "unknown")
 
     if content_type == "image":
-        async for response in _process_douyin_images_comprehension(plugin, event, media_urls, aweme_id, download_dir, api_key, proxy_url):
+        async for response in _process_douyin_images_comprehension(plugin, event, media_urls, aweme_id, download_dir, gcfg):
             yield response
     elif content_type in ["video", "multi_video"]:
-        async for response in _process_douyin_videos_comprehension(plugin, event, media_urls, aweme_id, download_dir, api_key, proxy_url):
+        async for response in _process_douyin_videos_comprehension(plugin, event, media_urls, aweme_id, download_dir, gcfg):
             yield response
 
 
-async def _process_douyin_images_comprehension(plugin, event, media_urls, aweme_id, download_dir, api_key, proxy_url):
+async def _process_douyin_images_comprehension(plugin, event, media_urls, aweme_id, download_dir, gcfg):
     """处理抖音图片的深度理解"""
     if plugin.show_progress_messages:
         yield event.plain_result(f"检测到 {len(media_urls)} 张图片，正在下载并分析...")
@@ -156,7 +157,7 @@ async def _process_douyin_images_comprehension(plugin, event, media_urls, aweme_
             yield event.plain_result("正在使用AI分析图片内容...")
 
         prompt = "请详细描述这些图片的内容，包括场景、人物、物品、文字信息和传达的核心信息。如果是多张图片，请分别描述每张图片的内容。"
-        image_response = await process_images_with_gemini(api_key, prompt, image_paths, proxy_url)
+        image_response = await process_images_with_gemini(gcfg, prompt, image_paths)
 
         if image_response and image_response[0]:
             for image_path in image_paths:
@@ -173,7 +174,7 @@ async def _process_douyin_images_comprehension(plugin, event, media_urls, aweme_
         yield event.plain_result("抱歉，分析图片时出现了问题。")
 
 
-async def _process_douyin_videos_comprehension(plugin, event, media_urls, aweme_id, download_dir, api_key, proxy_url):
+async def _process_douyin_videos_comprehension(plugin, event, media_urls, aweme_id, download_dir, gcfg):
     """处理抖音视频的深度理解"""
     from .video_handler import analyze_video_with_gemini
 
@@ -198,7 +199,7 @@ async def _process_douyin_videos_comprehension(plugin, event, media_urls, aweme_
         else:
             yield event.chain_result([Comp.Video.fromFileSystem(nap_file_path)])
 
-        async for response in analyze_video_with_gemini(plugin, event, local_filename, "抖音", api_key=api_key, proxy_url=proxy_url):
+        async for response in analyze_video_with_gemini(plugin, event, local_filename, "抖音", gcfg):
             yield response
 
     except Exception as e:
@@ -211,7 +212,6 @@ async def _process_douyin_videos_comprehension(plugin, event, media_urls, aweme_
 
 async def handle_douyin_parse(plugin, event):
     """抖音被动解析核心逻辑"""
-    cookie = plugin.effective_douyin_cookie
     message_str = event.message_str
     match = re.search(r"(https?://v\.douyin\.com/[a-zA-Z0-9_\-]+(?:-[a-zA-Z0-9_\-]+)?)", message_str)
 
@@ -223,9 +223,7 @@ async def handle_douyin_parse(plugin, event):
     if plugin.show_progress_messages:
         yield event.plain_result("正在解析抖音链接...")
 
-    parser = DouyinParser(cookie=cookie, proxy=plugin.douyin_proxy,
-                          browser_signer=plugin.browser_signer)
-    result = await parser.parse(message_str)
+    result = await plugin.make_douyin_parser().parse(message_str)
 
     if not result:
         yield event.plain_result("抱歉，这个抖音链接我不能打开，请检查一下链接是否正确。")
@@ -255,19 +253,18 @@ async def handle_douyin_parse(plugin, event):
         return
 
     # 抖音深度理解流程
-    from ..utils.config_helper import get_gemini_api_config_with_fallback
     do_comprehend = should_comprehend(event, plugin.douyin_video_comprehend, plugin.private_auto_comprehend)
     if do_comprehend and content_type in ["video", "multi_video", "image"]:
         if plugin.show_progress_messages:
             yield event.plain_result("我看到了一个抖音视频链接，让我来仔细分析一下内容，请稍等一下...")
 
-        api_key, proxy_url = await get_gemini_api_config_with_fallback(plugin.context, plugin.gemini_api_key, plugin.gemini_base_url)
+        gcfg = resolve_gemini_config(plugin)
 
-        if not api_key:
-            yield event.plain_result("抱歉，我需要Gemini API才能理解视频，但是没有找到相关配置。\n请在框架中配置Gemini Provider或在插件配置中提供gemini_api_key。")
+        if not gcfg:
+            yield event.plain_result(GEMINI_MISSING_MSG)
         else:
             try:
-                async for response in _process_douyin_comprehension(plugin, event, result, content_type, api_key, proxy_url):
+                async for response in _process_douyin_comprehension(plugin, event, result, content_type, gcfg):
                     yield response
                 return
             except Exception as e:

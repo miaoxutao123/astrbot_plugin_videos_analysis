@@ -19,12 +19,13 @@
 
 ### 🤖 AI 视频理解
 - **多模型支持**：
-  - **Gemini**：智能视频内容分析（推荐，支持直接上传视频）
+  - **Gemini**：智能视频内容分析（推荐，REST 直连，兼容官方与 new-api/one-api 中转站）
   - **MiMo**：小米多模态模型（支持官方API / OpenRouter）
   - **本地 ASR**：FunASR 语音识别 + 智能抽帧（离线方案）
 - **智能分析策略**：
-  - 小视频（≤30MB）：直接上传 Gemini 分析
-  - 大视频（>30MB）：音频转录 + 关键帧提取 + 综合分析
+  - 小视频（≤`gemini_inline_limit_mb`）：base64 内联发送整段视频
+  - 更大的视频：尝试 Google File API；不可用或超过 `gemini_direct_max_mb` 时回退为音频转录 + 关键帧提取
+  - `understand_video` 按 `video_understand_method` 首选，失败自动按 gemini → mimo → local_asr 回退
   - 图片内容：多图片批量 AI 分析
 - **个性化回应**：结合人格设定提供自然回复
 
@@ -42,7 +43,8 @@
 ### 🔑 登录管理
 - **抖音**：QR码扫码登录（Playwright）/ 手动粘贴 Cookie
 - **B站**：QR码扫码登录
-- Cookie 自动持久化，支持有效性检查
+- Cookie 自动持久化到 `data/plugin_data/astrbot_plugin_videos_analysis/accounts/`（插件更新不会丢失，旧版本数据首次启动自动迁移）
+- `/va_accounts` 一览各平台登录态与 AI 服务连通性
 
 ## 🚀 安装使用
 
@@ -53,10 +55,24 @@
 - **Python 3.10+**
 - **FFmpeg**：用于音视频分离、关键帧提取
 - Python 依赖详见 [`requirements.txt`](requirements.txt)
+- **抖音解析必需**：Chromium + 显示环境（抖音已拦截纯 Python 签名与无头浏览器）
+  ```bash
+  playwright install --with-deps chromium
+  # Linux 无桌面环境（含 Docker）还需要 Xvfb，插件会自动启动 :99
+  apt install -y xvfb
+  ```
+  官方 Docker 镜像（`soulter/astrbot`）默认不含以上组件，需在容器内安装，或基于官方镜像构建：
+  ```dockerfile
+  FROM soulter/astrbot:latest
+  RUN apt-get update && apt-get install -y --no-install-recommends xvfb \
+      && pip install playwright && playwright install --with-deps chromium \
+      && rm -rf /var/lib/apt/lists/*
+  ```
+  装好后发送 `/dy_restart` 即可，无需重启 AstrBot。
 
 ### 快速开始
 1. 安装插件后重启 AstrBot
-2. 配置 Gemini API（框架 Provider 或插件配置）
+2. 配置 Gemini API（插件配置优先；未填写时复用框架里的 Gemini Provider）
 3. 可选：开启 `auto_parse_enabled` 启用被动解析
 4. Agent 可直接调用 `parse_video_link` / `understand_video` 工具
 
@@ -75,7 +91,11 @@
 | 配置项 | 描述 | 默认值 |
 |--------|------|--------|
 | `gemini_api_key` | Gemini API 密钥 | `""` |
-| `gemini_base_url` | Gemini 反代地址 | `""` |
+| `gemini_base_url` | Gemini 地址，中转站填根地址（不带 `/v1beta`） | `""`（官方） |
+| `gemini_model` | 模型名，中转站请填其实际提供的模型 | `gemini-2.5-flash` |
+| `gemini_inline_limit_mb` | 内联发送阈值 | `20` |
+| `gemini_direct_max_mb` | 整段视频分析上限，超过走音频+关键帧 | `200` |
+| `video_understand_method` | 首选理解方式 `gemini`/`mimo`/`local_asr` | `gemini` |
 | `mimo_api_key` | MiMo API 密钥 | `""` |
 | `mimo_api_base` | MiMo API 地址 | `https://api.xiaomimimo.com/v1` |
 | `mimo_model` | MiMo 模型 | `mimo-v2-omni` |
@@ -98,6 +118,7 @@
 | `douyin_video_comprehend` | 深度理解功能 | `false` |
 | `show_progress_messages` | 显示进度提示 | `true` |
 | `douyin_proxy` | 代理地址 | `""` |
+| `douyin_browser_signer` | 启用浏览器签名引擎（抖音解析必需） | `true` |
 
 ## 🎯 使用示例
 
@@ -123,13 +144,23 @@ Agent → understand_video("https://v.douyin.com/xxx")
 Bot：这个视频展示了...（AI详细分析）
 ```
 
-### 管理员命令
+### 管理员命令（仅 AstrBot 管理员可用）
 ```
-/bili_login    → B站扫码登录
-/dy_login      → 抖音扫码登录
-/dy_cookie xxx → 手动设置抖音cookie
-/理解视频 URL   → 主动触发视频AI理解
+/va_accounts [deep]  → 查看各平台账号与 AI 服务状态（别名 /账号状态；deep 实测连通性）
+/va_logout <平台>     → 注销 douyin / bilibili 登录态
+/bili_login          → B站扫码登录
+/dy_login            → 抖音扫码登录
+/dy_cookie xxx       → 手动设置抖音cookie（建议私聊发送）
+/dy_restart          → 重启抖音浏览器签名引擎
 ```
+
+### 通用命令
+```
+/理解视频 URL   → 主动触发视频AI理解（支持抖音 / B站 BV、av、b23 短链）
+```
+
+> Agent 调用 `understand_video` 时，下载 + 模型分析可能超过 AstrBot 默认的 120 秒工具超时，
+> 建议在 AstrBot 配置中把 `tool_call_timeout` 调到 300。
 
 ## 📁 项目结构
 
@@ -149,13 +180,15 @@ astrbot_plugin_videos_analysis/
 │   ├── bilibili_service # B站解析下载
 │   ├── douyin_service   # 抖音下载
 │   ├── mcmod_service    # MC百科
-│   ├── gemini_service   # Gemini API
+│   ├── gemini_service   # Gemini REST 客户端
+│   ├── account_manager  # 账号状态 / 注销（账号运维扩展点）
 │   ├── mimo_service     # MiMo 多模态
 │   └── video_analysis   # 本地 ASR + 抽帧
 ├── utils/               # 工具函数
 │   ├── file_utils       # 文件发送 + 清理
 │   ├── media_utils      # FFmpeg 封装
-│   └── config_helper    # 配置辅助
+│   ├── config_helper    # 配置辅助
+│   └── paths            # 持久化数据路径 + 旧数据迁移
 ├── douyin_scraper/      # 抖音爬虫
 └── douyin_login.py      # 抖音登录
 ```
@@ -168,7 +201,17 @@ astrbot_plugin_videos_analysis/
 
 ## 🔄 更新日志
 
-### v0.3.0（当前版本）
+### v0.4.0（当前版本）
+- 🐛 修复抖音 `/理解视频` 与 `understand_video` 未使用浏览器签名导致 403
+- 🐛 修复框架 Provider 查找报错（`provider_manager.providers` 已不存在）、人格注入失效
+- 🐛 修复 av 号解析（改用 aid 直查，并更新为新版 AV/BV 算法）
+- 🐛 B站 cookie 失效时不再在解析中途阻塞 40 秒等待扫码
+- ♻️ Gemini 改为 REST 直连，移除已废弃的 `google-generativeai`；模型可配置；兼容中转站
+- 🔒 登录/cookie 命令限管理员；`understand_video` 限制本地路径与内网地址
+- 🧹 插件卸载/重载时关闭 Chromium 与 Xvfb；抖音风控空响应自动刷新重试
+- 🔑 新增 `/va_accounts` `/va_logout` `/dy_restart`，账号数据迁移到 `plugin_data`
+
+### v0.3.0
 - 🔄 **模块化重构**：`main.py` 从 1349 行精简到 189 行
 - 📦 **新架构**：拆分为 `handlers/` `tools/` `services/` `utils/` 四个包
 - 🤖 **Agent 工具增强**：`understand_video` 支持 HTTP 直链视频
