@@ -31,6 +31,7 @@ import asyncio
 import json
 import os
 import shutil
+import socket
 import subprocess
 import time
 import sys
@@ -132,6 +133,37 @@ def _check_display() -> tuple[bool, str]:
     return False, _xvfb_install_hint()
 
 
+def _clear_stale_profile_lock(user_data_dir: str) -> bool:
+    """
+    清理残留的 Chromium 配置锁。
+
+    SingletonLock 指向 "<hostname>-<pid>"。容器重建后 hostname 改变，或进程已退出，
+    Chromium 会认为配置正被"另一台电脑"使用而直接退出，这里把这种残留锁删掉。
+    返回是否清理了锁。
+    """
+    lock = os.path.join(user_data_dir, "SingletonLock")
+    try:
+        target = os.readlink(lock)
+    except OSError:
+        return False
+    host, _, pid = target.rpartition("-")
+    alive = False
+    if host == socket.gethostname() and pid.isdigit():
+        try:
+            os.kill(int(pid), 0)
+            alive = True
+        except OSError:
+            alive = False
+    if alive:
+        return False
+    for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+        try:
+            os.remove(os.path.join(user_data_dir, name))
+        except OSError:
+            pass
+    return True
+
+
 def _xvfb_install_hint() -> str:
     """生成 Xvfb 安装提示。"""
     return (
@@ -202,6 +234,8 @@ class BrowserSigner:
                 )
 
             os.makedirs(self._user_data_dir, exist_ok=True)
+            if _clear_stale_profile_lock(self._user_data_dir):
+                self._log("已清理残留的浏览器配置锁（上次未正常退出或容器已重建）")
 
             # 3. 启动浏览器
             self._playwright = await async_playwright().start()
