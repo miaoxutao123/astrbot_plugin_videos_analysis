@@ -1,7 +1,8 @@
 """
 AstrBot 视频解析与理解插件
 支持平台：抖音、B站、MC百科
-功能：被动链接解析（默认关闭）、Agent 主动调用视频解析/理解工具、账号状态管理
+功能：被动链接解析（默认关闭）、Agent 主动调用视频解析/理解工具、账号运维（账号池轮换/定时巡检/状态页）、
+     创作者操作（发布/删除/评论精选回复，二次确认）
 """
 
 import json
@@ -15,6 +16,7 @@ from .douyin_login import load_douyin_cookies
 from .douyin_scraper.browser_signer import BrowserSigner
 from .douyin_scraper.douyin_parser import DouyinParser
 from .services.account_manager import AccountManager
+from .services.creator_ops import CreatorOps
 from .utils.paths import DOUYIN_BROWSER_PROFILE, migrate_legacy_data
 
 # 旧版 _conf_schema 的默认值是个不存在的地址，按未填写处理
@@ -25,13 +27,14 @@ _BOGUS_GEMINI_BASE = "https://generative-api.google.com/v1alpha2"
     "astrbot_plugin_videos_analysis",
     "视频解析与理解",
     "抖音/B站/MC百科视频自动解析与AI理解",
-    "0.4.0",
+    "0.5.0",
     "https://github.com/Zhalslar/astrbot_plugin_videos_analysis",
 )
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
         super().__init__(context, config)
         self.context = context
+        self.config = config
 
         # NAP 文件服务器
         self.nap_server_address = config.get("nap_server_address", "localhost")
@@ -84,6 +87,7 @@ class hybird_videos_analysis(Star):
         self.browser_signer_error: str = ""
 
         self.accounts = AccountManager(self)
+        self.creator_ops = CreatorOps(self)
 
     @property
     def effective_douyin_cookie(self) -> str:
@@ -114,6 +118,10 @@ class hybird_videos_analysis(Star):
         else:
             self.browser_signer_error = "已在配置中禁用"
 
+        from .handlers.web_api import register_web_apis
+        register_web_apis(self)
+        self.accounts.start_scheduler()
+
     async def start_browser_signer(self) -> dict:
         """启动（或重启）抖音浏览器签名引擎，返回状态字典。"""
         if self._browser_signer:
@@ -142,6 +150,7 @@ class hybird_videos_analysis(Star):
 
     async def terminate(self):
         """插件卸载/重载时关闭浏览器与 Xvfb，避免进程泄漏。"""
+        await self.accounts.stop_scheduler()
         if self._browser_signer:
             await self._browser_signer.stop()
             self._browser_signer = None
@@ -187,7 +196,16 @@ class hybird_videos_analysis(Star):
 
     @filter.event_message_type(EventMessageType.ALL)
     async def process_direct_video(self, event):
-        """检测消息中的视频附件，注入直链到上下文"""
+        """检测消息中的视频附件，注入直链到上下文；/va_upload 之后补发的视频在这里接住"""
+        if event.is_admin() and self.creator_ops.peek_upload_waiter(event):
+            source = await self.creator_ops.extract_video(event)
+            if source:
+                from .handlers.account_ops_handler import handle_upload_video_arrived
+                waiter = self.creator_ops.peek_upload_waiter(event, consume=True)
+                async for response in handle_upload_video_arrived(self, event, waiter, source):
+                    yield response
+                event.stop_event()
+                return
         if not self.upload_video_comprehend:
             return
         from .handlers.video_handler import handle_direct_video
@@ -241,6 +259,98 @@ class hybird_videos_analysis(Star):
         status = await self.start_browser_signer()
         yield event.plain_result(("✅ " if status.get("ok") else "⚠️ ") + str(status.get("reason")))
 
+    # ==================== 账号运维 ====================
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_check")
+    async def accounts_check_command(self, event):
+        """立即深度巡检所有平台账号"""
+        from .handlers.account_ops_handler import handle_health_check
+        async for response in handle_health_check(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_notify")
+    async def accounts_notify_command(self, event):
+        """把当前会话设为账号告警接收方：/va_notify [off]"""
+        from .handlers.account_ops_handler import handle_notify
+        async for response in handle_notify(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_pool")
+    async def accounts_pool_command(self, event):
+        """多账号池：/va_pool [save|use|del] <平台> <名称>"""
+        from .handlers.account_ops_handler import handle_pool
+        async for response in handle_pool(self, event):
+            yield response
+
+    # ==================== 创作者操作（危险操作需二次确认） ====================
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_works")
+    async def creator_works_command(self, event):
+        """查看当前账号最近作品：/va_works [平台]"""
+        from .handlers.account_ops_handler import handle_works
+        async for response in handle_works(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_upload")
+    async def creator_upload_command(self, event):
+        """发布视频：/va_upload [平台] <标题> #话题（附带/引用视频，或随后补发）"""
+        from .handlers.account_ops_handler import handle_upload
+        async for response in handle_upload(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_delete")
+    async def creator_delete_command(self, event):
+        """删除作品：/va_delete [平台] <序号|链接|ID>"""
+        from .handlers.account_ops_handler import handle_delete
+        async for response in handle_delete(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_reply")
+    async def creator_reply_command(self, event):
+        """精选评论回复：/va_reply [平台] [序号|链接|ID]，默认最新作品"""
+        from .handlers.account_ops_handler import handle_reply
+        async for response in handle_reply(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_confirm")
+    async def creator_confirm_command(self, event):
+        """执行待确认操作：/va_confirm <确认码> [序号...]"""
+        from .handlers.account_ops_handler import handle_confirm
+        async for response in handle_confirm(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_cancel")
+    async def creator_cancel_command(self, event):
+        """取消待确认操作：/va_cancel <确认码>"""
+        from .handlers.account_ops_handler import handle_cancel
+        async for response in handle_cancel(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_edit")
+    async def creator_edit_command(self, event):
+        """修改待发送的评论回复：/va_edit <确认码> <序号> <新回复>"""
+        from .handlers.account_ops_handler import handle_edit
+        async for response in handle_edit(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_pending")
+    async def creator_pending_command(self, event):
+        """查看待确认的操作"""
+        from .handlers.account_ops_handler import handle_pending
+        async for response in handle_pending(self, event):
+            yield response
+
     # ==================== 主动触发命令 ====================
 
     @filter.command("理解视频")
@@ -277,3 +387,18 @@ class hybird_videos_analysis(Star):
         from .tools.understand_tool import handle_understand_video
         result = await handle_understand_video(self, video_source, prompt or None)
         return json.dumps(result, ensure_ascii=False)
+
+    @filter.llm_tool(name="creator_upload_video")
+    async def creator_upload_video(self, event, video_source: str, title: str, tags: str = "", platform: str = "douyin"):
+        """把视频发布到管理员的短视频账号（仅管理员可用）。不会立即发布：会生成确认码，管理员发送 /va_confirm <确认码> 后才真正发布。
+
+        Args:
+            video_source(string): 视频直链URL或 AstrBot data 目录下的本地路径（例如用户发来视频时上下文里给出的直链）
+            title(string): 作品标题/文案，30 字以内
+            tags(string): 话题，空格分隔，不带 #
+            platform(string): 平台，目前支持 douyin
+        """
+        from .tools.creator_tool import handle_creator_upload
+        result = await handle_creator_upload(self, event, video_source, title, tags, platform)
+        return json.dumps(result, ensure_ascii=False)
+

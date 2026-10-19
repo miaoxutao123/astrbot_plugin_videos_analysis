@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>账号运维</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --text:#1f2329; --muted:#8a919f; --line:#e5e6eb;
+          --accent:#3370ff; --ok:#00b578; --bad:#fa5151; --warn:#ff8f1f; }
+  html[data-theme="dark"] { --bg:#1a1b1e; --card:#242528; --text:#e8e9eb; --muted:#8a919f;
+          --line:#3a3b3f; --accent:#4c7dff; --ok:#34c785; --bad:#ff6b6b; --warn:#ffb04d; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--text);
+         font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
+  .top { display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
+  .top h1 { font-size:17px; margin:0; }
+  .meta { color:var(--muted); font-size:12px; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:6px 12px;
+           font-size:13px; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:wait; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); padding:2px 8px; font-size:12px; }
+  h2.sec { font-size:14px; margin:18px 0 8px; color:var(--muted); font-weight:600; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; min-width:0; }
+  .card h3 { font-size:14px; margin:0 0 4px; display:flex; align-items:center; gap:8px; }
+  .dot { width:9px; height:9px; border-radius:50%; flex:none; }
+  .dot.ok { background:var(--ok); } .dot.warn { background:var(--warn); } .dot.bad { background:var(--bad); }
+  .summary { margin:0 0 8px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td { padding:3px 6px; border-bottom:1px dashed var(--line); vertical-align:top; word-break:break-all; }
+  td.k { color:var(--muted); white-space:nowrap; width:1%; }
+  .last { font-size:12px; color:var(--muted); margin-top:8px; }
+  .empty { color:var(--muted); padding:8px 0; }
+  .row { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px dashed var(--line); flex-wrap:wrap; }
+  .row:last-child { border-bottom:0; }
+  .tag { font-size:11px; padding:0 6px; border-radius:6px; border:1px solid var(--line); color:var(--muted); }
+  .tag.on { color:var(--ok); border-color:var(--ok); }
+  .tag.bad { color:var(--bad); border-color:var(--bad); }
+  .banner { border:1px solid var(--bad); color:var(--bad); border-radius:10px; padding:10px 14px; margin-bottom:12px; }
+  code { font-size:12px; background:var(--bg); padding:1px 4px; border-radius:4px; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <h1>账号运维</h1>
+    <span class="meta" id="meta">加载中…</span>
+    <span style="flex:1"></span>
+    <button id="check">立即巡检</button>
+    <button id="refresh" class="ghost">刷新</button>
+  </div>
+  <div id="banner"></div>
+
+  <h2 class="sec">平台状态</h2>
+  <div class="grid" id="status"></div>
+
+  <h2 class="sec">账号池</h2>
+  <div class="grid" id="pool"></div>
+
+  <h2 class="sec">待确认操作</h2>
+  <div class="card" id="pending"></div>
+
+<script>
+(function () {
+  // bridge 会把相对路径映射到 /api/v1/plugins/extensions/<插件>/<endpoint>，成功时返回 data 字段，status=error 时 reject
+  var bridge;
+  var NAMES = { douyin: '抖音', bilibili: 'B站', gemini: 'Gemini', mimo: 'MiMo' };
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function fmt(ts) { return ts ? new Date(ts * 1000).toLocaleString() : '—'; }
+  function banner(msg) { document.getElementById('banner').innerHTML = msg ? '<div class="banner">' + esc(msg) + '</div>' : ''; }
+
+  function statusCard(st, last) {
+    var rows = Object.keys(st.details || {}).map(function (k) {
+      return '<tr><td class="k">' + esc(k) + '</td><td>' + esc(st.details[k]) + '</td></tr>';
+    }).join('');
+    var lastLine = last
+      ? '<div class="last">上次巡检 ' + fmt(last.checked_at) + '：<span class="dot ' + last.state + '" style="display:inline-block"></span> ' + esc(last.summary) + '</div>'
+      : '<div class="last">尚未巡检</div>';
+    return '<div class="card"><h3><span class="dot ' + st.state + '"></span>' + esc(NAMES[st.platform] || st.platform) + '</h3>' +
+      '<p class="summary">' + esc(st.summary) + '</p><table>' + rows + '</table>' + lastLine + '</div>';
+  }
+
+  function poolCard(plat, accs) {
+    var body = accs.length ? accs.map(function (a) {
+      var tags = [];
+      if (a.active) tags.push('<span class="tag on">使用中</span>');
+      if (a.cooldown_left) tags.push('<span class="tag bad">冷却 ' + Math.ceil(a.cooldown_left / 60) + ' 分钟</span>');
+      if (a.valid === false) tags.push('<span class="tag bad">已失效</span>');
+      var btn = a.active ? '' : '<button class="ghost" data-use="' + esc(plat) + '|' + esc(a.name) + '">切换</button>';
+      return '<div class="row"><b>' + esc(a.name) + '</b>' + tags.join('') +
+        '<span class="meta">保存于 ' + fmt(a.saved_at) + (a.last_error ? ' · ' + esc(a.last_error) : '') + '</span>' +
+        '<span style="flex:1"></span>' + btn + '</div>';
+    }).join('') : '<div class="empty">空。聊天里发 <code>/va_pool save ' + esc(plat) + ' 名称</code> 保存当前登录</div>';
+    return '<div class="card"><h3>' + esc(NAMES[plat] || plat) + '</h3>' + body + '</div>';
+  }
+
+  function pendingCard(list) {
+    if (!list.length) return '<div class="empty">没有待确认的操作（发布/删除/评论回复在聊天里用 /va_confirm 执行）</div>';
+    return list.map(function (o) {
+      return '<div class="row"><code>' + esc(o.code) + '</code><span class="tag">' + esc(o.platform) + '·' + esc(o.account) + '</span>' +
+        '<span>' + esc(o.summary) + '</span><span class="meta">剩 ' + o.expires_in + ' 秒</span><span style="flex:1"></span>' +
+        '<button class="ghost" data-cancel="' + esc(o.code) + '">取消</button></div>';
+    }).join('');
+  }
+
+  function render(d) {
+    var last = d.last_check || {};
+    document.getElementById('status').innerHTML = d.live.map(function (st) { return statusCard(st, last[st.platform]); }).join('');
+    document.getElementById('pool').innerHTML = Object.keys(d.pool).map(function (p) { return poolCard(p, d.pool[p]); }).join('');
+    document.getElementById('pending').innerHTML = pendingCard(d.pending);
+    var s = d.settings;
+    document.getElementById('meta').textContent =
+      (s.interval_min ? '每 ' + s.interval_min + ' 分钟巡检' : '定时巡检已关闭') + ' · 告警会话 ' + s.notify_targets +
+      ' 个 · 连续失败 ' + s.rotate_threshold + ' 次轮换 · 上次巡检 ' + fmt(d.last_check_at);
+  }
+
+  function load() {
+    return bridge.apiGet('overview').then(function (data) {
+      banner('');
+      render(data);
+    }).catch(function (e) { banner('加载失败：' + e.message); });
+  }
+
+  function post(path, body, btn) {
+    if (btn) btn.disabled = true;
+    return bridge.apiPost(path, body || {}).then(function () {
+      return load();
+    }).catch(function (e) { banner('操作失败：' + e.message); })
+      .then(function () { if (btn) btn.disabled = false; });
+  }
+
+  function bind() {
+    document.getElementById('refresh').addEventListener('click', load);
+    document.getElementById('check').addEventListener('click', function (e) { post('check', {}, e.target); });
+    document.body.addEventListener('click', function (e) {
+      var t = e.target;
+      if (t.dataset.use) {
+        // 插件页 iframe 没有 allow-modals，confirm() 会被静默拦截，改成按钮内二次点击确认
+        if (t.dataset.armed !== '1') {
+          t.dataset.armed = '1';
+          t.textContent = '再点一次确认';
+          setTimeout(function () { t.dataset.armed = ''; t.textContent = '切换'; }, 3000);
+          return;
+        }
+        var p = t.dataset.use.split('|');
+        post('pool/use', { platform: p[0], name: p.slice(1).join('|') }, t);
+      } else if (t.dataset.cancel) {
+        post('pending/cancel', { code: t.dataset.cancel }, t);
+      }
+    });
+  }
+
+  (function wait(tries) {
+    var b = window.AstrBotPluginPage;
+    if (b && typeof b.ready === 'function') {
+      bridge = b;
+      b.ready().then(function () { bind(); load(); setInterval(load, 30000); });
+      return;
+    }
+    if (tries <= 0) { banner('未检测到插件页 bridge，请从 AstrBot WebUI 的插件详情页打开本页面。'); return; }
+    setTimeout(function () { wait(tries - 1); }, 150);
+  })(60);
+})();
+</script>
+</body>
+</html>

@@ -31,12 +31,13 @@
 
 ### 🔧 Agent 主动调用工具
 
-插件注册了两个 LLM Tool，供 Agent 主动调用：
+插件注册了三个 LLM Tool，供 Agent 主动调用：
 
 | 工具名 | 功能 | 支持输入 |
 |--------|------|----------|
 | `parse_video_link` | 解析视频链接，返回标题、封面、直链等信息 | 抖音链接、B站链接 |
 | `understand_video` | 深度理解视频内容 | 抖音/B站链接、HTTP直链、本地路径 |
+| `creator_upload_video` | 准备把视频发布到管理员账号（只生成确认码，管理员 `/va_confirm` 后才发布；非管理员调用直接拒绝） | 视频直链、data 目录下的本地视频 |
 
 > Agent 可以先用 `parse_video_link` 获取视频直链，再用 `understand_video` 理解直链视频内容。
 
@@ -45,6 +46,27 @@
 - **B站**：QR码扫码登录
 - Cookie 自动持久化到 `data/plugin_data/astrbot_plugin_videos_analysis/accounts/`（插件更新不会丢失，旧版本数据首次启动自动迁移）
 - `/va_accounts` 一览各平台登录态与 AI 服务连通性
+
+### 🛠️ 账号运维
+- **定时巡检**：后台每 `health_check_interval_minutes` 分钟深度检查抖音/B站登录态（含创作者中心与登录过期时间）和 Gemini/MiMo 连通性；
+  只在状态变化时（正常 → 异常 / 即将过期 / 恢复）推送到 `/va_notify` 设置的会话，不会重复刷屏
+- **多账号池 + 自动轮换**：`/va_pool save` 把当前登录保存为命名账号；抖音空响应/风控、B站 -352/-412/cookie 失效
+  连续 `rotate_fail_threshold` 次后自动切到池里下一个可用账号，换下来的账号冷却 `rotate_cooldown_minutes` 分钟，并通知管理员
+- **WebUI 状态页**：AstrBot WebUI → 插件页面 → 账号运维：平台状态、上次巡检结果、账号池（可切换）、待确认操作（可取消）。
+  接口需 WebUI 登录，返回内容不含 cookie / key
+
+### 🎬 创作者操作（抖音，平台可扩展）
+> 发布、删除、回复评论都是**危险操作**：命令只生成预览和 4 位确认码，管理员发送 `/va_confirm <码>` 后才执行（默认 60 秒内有效）。
+> 操作作用于账号池里**当前使用中**的账号，预览里会写明账号名。
+
+- **发布视频**：`/va_upload 标题 #话题` 时附带视频、引用一条视频消息，或在 2 分钟内补发视频；也可让 Agent 通过 `creator_upload_video` 发起
+- **删除作品**：`/va_works` 列出最近作品，`/va_delete <序号|链接|ID>`
+- **评论精选回复**：`/va_reply [序号|链接|ID]`（默认最新作品）读取 48 小时内的一级评论，按点赞取前 10 条、随机挑 1~5 条，
+  结合视频内容（复用 `understand_video` 的分析流程，按作品缓存）和 `creator_reply_style` 账号风格由 LLM 起草回复；
+  可 `/va_edit <码> <序号> <新回复>` 修改、`/va_confirm <码> 1 3` 只发部分。作者本人、已回复过的评论自动跳过，多条之间随机间隔 4~9 秒
+- 浏览器自动化失败时会把创作者中心截图发回，方便判断是未登录、验证码还是页面改版
+- 新平台只需在 `services/creator/` 实现 `CreatorPlatform`（`list_works / upload / delete / list_comments / reply_comment` 等）并登记到 `REGISTRY`，
+  命令里写 `/va_works bilibili` 这样的平台参数即可复用全部流程
 
 ## 🚀 安装使用
 
@@ -120,6 +142,23 @@
 | `douyin_proxy` | 代理地址 | `""` |
 | `douyin_browser_signer` | 启用浏览器签名引擎（抖音解析必需） | `true` |
 
+### 账号运维
+| 配置项 | 描述 | 默认值 |
+|--------|------|--------|
+| `health_check_interval_minutes` | 定时巡检间隔，0 关闭 | `360` |
+| `rotate_fail_threshold` | 连续失败几次后轮换账号 | `2` |
+| `rotate_cooldown_minutes` | 换下来的账号冷却时间 | `30` |
+
+### 创作者操作
+| 配置项 | 描述 | 默认值 |
+|--------|------|--------|
+| `confirm_timeout_seconds` | 危险操作确认有效期（评论回复至少 300 秒） | `60` |
+| `reply_max_comments` | 每次精选回复最多几条（1~5） | `5` |
+| `reply_window_hours` | 只看最近多少小时的评论 | `48` |
+| `creator_reply_style` | 账号回复风格（给 LLM 的人设/语气） | `""` |
+| `creator_reply_provider_id` | 起草回复用的模型提供商，留空用会话默认 | `""` |
+| `creator_reply_video_understanding` | 起草前先理解视频内容 | `true` |
+
 ## 🎯 使用示例
 
 ### 被动解析（需开启 auto_parse_enabled）
@@ -152,6 +191,36 @@ Bot：这个视频展示了...（AI详细分析）
 /dy_login            → 抖音扫码登录
 /dy_cookie xxx       → 手动设置抖音cookie（建议私聊发送）
 /dy_restart          → 重启抖音浏览器签名引擎
+
+# 账号运维
+/va_check            → 立即深度巡检（不推送，直接回复结果）
+/va_notify [off]     → 把当前会话设为（或取消）账号告警接收方
+/va_pool             → 查看账号池
+/va_pool save <douyin|bilibili> <名称>   → 保存当前登录为命名账号
+/va_pool use|del <平台> <名称>            → 切换 / 删除
+                       添加第二个号：/va_logout douyin → /dy_login 扫新号 → /va_pool save douyin 小号
+
+# 创作者操作（[平台] 可省略，默认 douyin）
+/va_works [平台]                    → 最近作品（带序号）
+/va_upload [平台] <标题> #话题       → 发布（附带/引用视频，或随后补发）
+/va_delete [平台] <序号|链接|ID>     → 删除作品
+/va_reply [平台] [序号|链接|ID]      → 评论精选回复（LLM 起草）
+/va_confirm <码> [序号...]          → 执行待确认操作（评论回复可只发部分）
+/va_edit <码> <序号> <新回复>        → 修改待发送的回复
+/va_cancel <码> · /va_pending       → 取消 / 查看待确认操作
+```
+
+评论精选回复示例：
+```
+管理员：/va_reply 1
+Bot：⚠️ 待确认 [6265] douyin·主号
+     回复作品 7644535719297355023 的 2 条评论
+     [1] 青蛙🐸爱好者😃（👍46，3 小时前）: 啥时候更新朋友收集梦想生活？
+         ↳ 安排上了！尽快更新[偷笑]
+     [2] 格了个蕾丝（👍22，5 小时前）: 这到底啥游戏啊？
+         ↳ 叫《GasNCar》哈，VR游戏，置顶评论里有写～
+     /va_confirm 6265 全部发送 · /va_confirm 6265 1 3 只发部分 ...
+管理员：/va_confirm 6265 2
 ```
 
 ### 通用命令
@@ -172,16 +241,22 @@ astrbot_plugin_videos_analysis/
 │   ├── bilibili_handler # B站被动解析
 │   ├── mcmod_handler    # MC百科解析
 │   ├── video_handler    # 视频分析 + 直链注入
-│   └── admin_handler    # 管理命令
+│   ├── admin_handler    # 管理命令
+│   ├── account_ops_handler # 账号运维 / 创作者操作命令（只做解析与渲染）
+│   └── web_api          # WebUI 插件页接口
+├── pages/accounts/      # WebUI 插件页「账号运维」
 ├── tools/               # LLM Agent 工具
 │   ├── parse_tool       # parse_video_link
-│   └── understand_tool  # understand_video
+│   ├── understand_tool  # understand_video
+│   └── creator_tool     # creator_upload_video
 ├── services/            # 平台服务层
 │   ├── bilibili_service # B站解析下载
 │   ├── douyin_service   # 抖音下载
 │   ├── mcmod_service    # MC百科
 │   ├── gemini_service   # Gemini REST 客户端
-│   ├── account_manager  # 账号状态 / 注销（账号运维扩展点）
+│   ├── account_manager  # 账号状态 / 注销 / 账号池轮换 / 定时巡检
+│   ├── creator_ops      # 二次确认、评论挑选、LLM 起草（平台无关）
+│   ├── creator/         # 创作者平台实现：base.CreatorPlatform + douyin
 │   ├── mimo_service     # MiMo 多模态
 │   └── video_analysis   # 本地 ASR + 抽帧
 ├── utils/               # 工具函数
@@ -201,7 +276,13 @@ astrbot_plugin_videos_analysis/
 
 ## 🔄 更新日志
 
-### v0.4.0（当前版本）
+### v0.5.0（当前版本）
+- 🛠️ 账号运维：定时巡检 + 状态变化告警（`/va_check` `/va_notify`），登录过期提前提醒
+- 🔁 多账号池（`/va_pool`），抖音/B站风控或 cookie 失效连续失败时自动轮换
+- 📊 WebUI 插件页「账号运维」
+- 🎬 创作者操作（抖音）：发布 / 删除 / 评论精选回复，全部二次确认；新增 LLM 工具 `creator_upload_video`
+
+### v0.4.0
 - 🐛 修复抖音 `/理解视频` 与 `understand_video` 未使用浏览器签名导致 403
 - 🐛 修复框架 Provider 查找报错（`provider_manager.providers` 已不存在）、人格注入失效
 - 🐛 修复 av 号解析（改用 aid 直查，并更新为新版 AV/BV 算法）

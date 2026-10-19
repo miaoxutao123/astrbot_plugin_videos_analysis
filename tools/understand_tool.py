@@ -195,7 +195,7 @@ async def handle_understand_video(plugin, video_source: str, prompt: str = None)
             # 抖音链接
             platform = "抖音"
             cookie = plugin.effective_douyin_cookie
-            result = await plugin.make_douyin_parser().parse(video_source)
+            result = await plugin.accounts.parse_douyin(video_source)
 
             if not result or result.get("error"):
                 return {"error": f"抖音链接解析失败: {result.get('error', '未知错误') if result else '无法解析'}"}

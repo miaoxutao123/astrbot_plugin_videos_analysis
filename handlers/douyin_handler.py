@@ -223,7 +223,7 @@ async def handle_douyin_parse(plugin, event):
     if plugin.show_progress_messages:
         yield event.plain_result("正在解析抖音链接...")
 
-    result = await plugin.make_douyin_parser().parse(message_str)
+    result = await plugin.accounts.parse_douyin(message_str)
 
     if not result:
         yield event.plain_result("抱歉，这个抖音链接我不能打开，请检查一下链接是否正确。")

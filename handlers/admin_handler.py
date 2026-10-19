@@ -151,5 +151,5 @@ async def handle_accounts_status(plugin, event, deep: bool = False):
         yield event.plain_result("正在检测各平台连通性...")
     statuses = await plugin.accounts.status_all(deep=deep)
     text = "\n".join(st.render() for st in statuses)
-    text += "\n\n命令: /bili_login /dy_login /dy_cookie /dy_restart /va_logout <douyin|bilibili> /va_accounts deep"
+    text += "\n\n命令: /bili_login /dy_login /dy_cookie /dy_restart /va_logout <douyin|bilibili> /va_accounts deep\n运维: /va_check /va_notify /va_pool /va_works /va_upload /va_delete /va_reply /va_pending"
     yield event.plain_result(text)

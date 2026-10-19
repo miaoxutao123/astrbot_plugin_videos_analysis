@@ -181,7 +181,7 @@ async def handle_comprehend_video_command(plugin, event):
     if re.search(r"v\.douyin\.com", url):
         if plugin.show_progress_messages:
             yield event.plain_result("正在解析抖音链接并分析视频内容...")
-        result = await plugin.make_douyin_parser().parse(url)
+        result = await plugin.accounts.parse_douyin(url)
         if not result or result.get("error"):
             yield event.plain_result("抖音链接解析失败，请检查链接是否正确。")
             return

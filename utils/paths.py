@@ -18,12 +18,16 @@ ACCOUNTS_DIR = f"{DATA_DIR}/accounts"
 BILI_COOKIE_FILE = f"{ACCOUNTS_DIR}/bili_cookies.json"
 DOUYIN_COOKIE_FILE = f"{ACCOUNTS_DIR}/douyin_cookies.json"
 DOUYIN_BROWSER_PROFILE = f"{ACCOUNTS_DIR}/dy_browser_profile"
+POOL_FILE = f"{ACCOUNTS_DIR}/pool.json"
+HEALTH_FILE = f"{ACCOUNTS_DIR}/health.json"
+CREATOR_DIR = f"{ACCOUNTS_DIR}/creator"
 
 DOWNLOAD_DIR = f"{DATA_DIR}/download_videos"
 DOWNLOAD_DIR_DY = f"{DOWNLOAD_DIR}/dy"
 DOWNLOAD_DIR_BILI = f"{DOWNLOAD_DIR}/bili"
 DOWNLOAD_DIR_DIRECT = f"{DOWNLOAD_DIR}/direct"
 IMAGE_DIR = f"{DATA_DIR}/image"
+UPLOAD_DIR = f"{DATA_DIR}/creator_uploads"
 
 _LEGACY_MOVES = {
     f"{LEGACY_DIR}/bili_cookies.json": BILI_COOKIE_FILE,

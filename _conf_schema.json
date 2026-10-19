@@ -160,5 +160,57 @@
         "type": "string",
         "default": "",
         "hint": "小米官方平台注册获取: https://platform.xiaomimimo.com/#/console/api-keys | 或填入OpenRouter API key"
+    },
+    "health_check_interval_minutes": {
+        "description": "账号定时巡检间隔（分钟）",
+        "type": "int",
+        "hint": "0 关闭。巡检会深度检查抖音/B站登录与 Gemini/MiMo 连通性，状态变化时推送给 /va_notify 设置的会话",
+        "default": 360
+    },
+    "rotate_fail_threshold": {
+        "description": "连续失败几次后自动轮换账号",
+        "type": "int",
+        "hint": "抖音空响应/风控、B站 -352/-412/cookie 失效计为失败；需要先用 /va_pool save 保存多个账号",
+        "default": 2
+    },
+    "rotate_cooldown_minutes": {
+        "description": "被轮换下来的账号冷却时间（分钟）",
+        "type": "int",
+        "default": 30
+    },
+    "confirm_timeout_seconds": {
+        "description": "危险操作二次确认有效期（秒）",
+        "type": "int",
+        "hint": "发布/删除用这个时长；评论回复至少 300 秒（需要时间审阅和修改）",
+        "default": 60
+    },
+    "reply_max_comments": {
+        "description": "每次评论精选回复最多几条（1~5）",
+        "type": "int",
+        "hint": "从 48 小时内点赞最高的 10 条里随机挑 1~N 条",
+        "default": 5
+    },
+    "reply_window_hours": {
+        "description": "评论精选只看最近多少小时的评论",
+        "type": "int",
+        "default": 48
+    },
+    "creator_reply_style": {
+        "description": "账号回复风格",
+        "type": "text",
+        "hint": "给 LLM 的人设/语气说明，例如：幽默、爱用颜文字、自称小编",
+        "default": ""
+    },
+    "creator_reply_provider_id": {
+        "description": "起草评论回复用的模型提供商 ID",
+        "type": "string",
+        "hint": "留空则用当前会话的默认模型",
+        "default": ""
+    },
+    "creator_reply_video_understanding": {
+        "description": "起草回复前先用 Gemini 理解视频内容",
+        "type": "bool",
+        "hint": "结果按作品缓存，每个作品只分析一次",
+        "default": true
     }
 }

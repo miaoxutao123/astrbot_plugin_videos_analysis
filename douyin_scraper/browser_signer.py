@@ -648,6 +648,65 @@ class BrowserSigner:
         cookies = await self._context.cookies()
         return "; ".join(f"{c['name']}={c['value']}" for c in cookies)
 
+    # ── 多账号 / 创作者操作支持 ─────────────────────────
+
+    async def export_cookies(self) -> list[dict]:
+        """导出完整 cookie 列表（含 domain/expires），用于账号池快照。"""
+        if not self._context:
+            return []
+        return await self._context.cookies()
+
+    async def replace_cookies(self, cookies: list[dict]) -> bool:
+        """清空当前浏览器 cookie 并换成另一账号的快照（账号切换）。"""
+        if not self._context:
+            return False
+        await self._context.clear_cookies()
+        if cookies:
+            await self._context.add_cookies(cookies)
+        await self._save_cookies(cookies)
+        self._logged_in = await self._check_logged_in()
+        await self.refresh()
+        return True
+
+    async def new_page(self):
+        """在同一登录态下打开新标签页（创作者中心操作用，调用方负责关闭）。"""
+        if not self._context:
+            raise RuntimeError("浏览器未启动")
+        return await self._context.new_page()
+
+    async def post_form(self, endpoint: str, query: dict, form: dict) -> dict | None:
+        """在 douyin.com 页面里发 x-www-form-urlencoded POST（评论发布等写接口），SDK 自动签名。"""
+        if not self._page:
+            return None
+        url = "https://www.douyin.com/" + endpoint.lstrip("/") + "?" + urlencode(query)
+        js_code = f"""
+        (async function() {{
+            try {{
+                const resp = await fetch({json.dumps(url)}, {{
+                    method: 'POST', credentials: 'include',
+                    headers: {{'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'}},
+                    body: {json.dumps(urlencode(form))}
+                }});
+                return {{ok: resp.ok, status: resp.status, body: await resp.text()}};
+            }} catch(e) {{
+                return {{ok: false, status: 0, error: e.message}};
+            }}
+        }})()
+        """
+        try:
+            result = await self._page.evaluate(js_code)
+        except Exception as e:
+            self._log(f"POST 异常: {e}")
+            return None
+        if not result or not result.get("body"):
+            status = result and result.get("status")
+            self._log(f"POST 失败: status={status} {(result or {}).get('error', '')}")
+            return {"status_code": -1, "status_msg": f"HTTP {status} 空响应（未登录或触发风控）"}
+        try:
+            return json.loads(result["body"])
+        except json.JSONDecodeError:
+            return {"status_code": -1, "status_msg": result["body"][:200]}
+
     # ── 内部方法 ─────────────────────────────────────────
 
     def _make_status(self, ok: bool, reason: str, **extra) -> dict:

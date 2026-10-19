@@ -40,7 +40,7 @@ async def handle_parse_video_link(plugin, link: str) -> dict:
     # ==================== 抖音解析 ====================
     if re.search(r"v\.douyin\.com", link):
         try:
-            result = await plugin.make_douyin_parser().parse(link)
+            result = await plugin.accounts.parse_douyin(link)
 
             if not result:
                 return {"error": "抖音链接解析失败", "platform": "douyin"}

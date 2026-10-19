@@ -503,10 +503,25 @@ async def check_login_status_loop(qrcode_key):
     log_callback("\n登录超时，请重试")
     return None
 
+# 账号池轮换钩子：AccountManager 注册 async (reason) -> None，遇到失效/风控时调用
+FAILURE_HOOK = None
+RISK_CODES = {-101, -352, -412}
+
+
+async def _report_failure(reason: str):
+    if FAILURE_HOOK:
+        try:
+            await FAILURE_HOOK(reason)
+        except Exception as e:
+            log_callback(f"上报B站账号失败时出错: {e}")
+
+
 async def get_video_download_url_with_cookie(bvid, quality=80, event=None):
     """使用Cookie获取高清视频下载链接"""
     # 检查Cookie是否有效
     if not await check_cookie_valid():
+        if os.path.exists(COOKIE_FILE):
+            await _report_failure("cookie 校验失败")
         log_callback("Cookie无效或不存在，将使用默认画质")
         return await get_video_download_url_by_bvid(bvid, 16)
     cookies = await load_cookies()
@@ -536,6 +551,8 @@ async def get_video_download_url_with_cookie(bvid, quality=80, event=None):
 
                 if data.get("code") != 0:
                     log_callback(f"获取视频地址失败: {data.get('message')}")
+                    if data.get("code") in RISK_CODES:
+                        await _report_failure(f"playurl {data.get('code')} {data.get('message')}")
                     return await get_video_download_url_by_bvid(bvid, 16)
 
                 # 获取视频和音频的URL
@@ -723,6 +740,8 @@ async def process_bili_video(url, download_flag=True, quality=80, use_login=True
         if not is_valid:
             log_callback("B站 Cookie 无效或不存在，本次使用无登录方式。管理员可发送 /bili_login 扫码登录。")
             use_login = False
+            if os.path.exists(COOKIE_FILE):
+                await _report_failure("cookie 校验失败")
 
         # 根据Cookie有效性决定使用哪种方式获取视频链接
         if is_valid:
