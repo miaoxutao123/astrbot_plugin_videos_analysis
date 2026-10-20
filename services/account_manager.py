@@ -150,6 +150,9 @@ class AccountManager:
                 details["登录过期"], warn = _fmt_expiry(sess.get("expires"))
             if signer.risk_status:
                 details["风控"], warn = signer.risk_status, True
+        from .creator.human import GUARD, OP_LABEL
+
+        details["今日写操作"] = " · ".join(f"{OP_LABEL.get(op, op)} {n}" for op, n in GUARD.usage("douyin").items())
         if deep and ok and logged_in:
             from .creator import get_creator
 

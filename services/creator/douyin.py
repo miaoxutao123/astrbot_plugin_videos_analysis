@@ -5,6 +5,8 @@
 - 读接口（评论列表、作品详情）走 www.douyin.com 页面内 fetch，SDK 自动签名，未登录也能读
 - 作品列表在创作者中心作品管理页拦截页面自己发出的 work_list 响应，不用自己算签名
 - 发布/删除用页面自动化（creator.douyin.com），失败时截图，方便对照页面改版修选择器
+- 防风控：页面交互用 human.py 的人类化点击/逐字输入；写操作过 WriteGuard 频率闸门；
+  打开页面和关键操作后检查验证码，出现就熔断（与签名请求共用 BrowserSigner 的风控状态）
 """
 
 import asyncio
@@ -16,17 +18,21 @@ from astrbot.api import logger
 
 from ...utils.paths import IMAGE_DIR
 from .base import Comment, CreatorPlatform, OpResult, Work
+from .human import GUARD, human_click, human_fill, human_hover, human_type, pause
 
 CREATOR = "https://creator.douyin.com"
 UPLOAD_URL = f"{CREATOR}/creator-micro/content/upload"
 MANAGE_URL = f"{CREATOR}/creator-micro/content/manage"
+# 设备参数（系统/浏览器/屏幕等）由 fetch_signed_api 按浏览器真实环境填充
 WEB_PARAMS = {
     "device_platform": "webapp", "aid": "6383", "channel": "channel_pc_web",
     "pc_client_type": "1", "version_code": "170400", "version_name": "17.4.0",
-    "cookie_enabled": "true", "browser_language": "zh-CN", "browser_platform": "Win32",
-    "browser_name": "Chrome", "browser_online": "true", "engine_name": "Blink",
-    "os_name": "Windows", "platform": "PC",
+    "platform": "PC",
 }
+
+
+class CaptchaError(RuntimeError):
+    pass
 
 
 class DouyinCreator(CreatorPlatform):
@@ -53,8 +59,26 @@ class DouyinCreator(CreatorPlatform):
 
     async def _creator_page(self, url: str):
         page = await self.signer.new_page()
-        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await pause(1.0, 2.5)  # 页面打开后先"看一眼"，不立刻操作
+            await self._check_captcha(page)
+        except Exception:
+            await page.close()
+            raise
         return page
+
+    async def _check_captcha(self, page, when: str = "打开页面") -> None:
+        """出现验证码就熔断并中止，不在验证码面前继续点。"""
+        s = self.plugin.browser_signer
+        if s and await s.has_captcha(page):
+            shot = await self._screenshot(page, "captcha")
+            s.trip_risk(f"创作者中心{when}时弹出验证码")
+            raise CaptchaError(f"创作者中心弹出验证码，已暂停抖音操作（{s.risk_status}）" + (f"\n失败截图: {shot}" if shot else ""))
+
+    @staticmethod
+    def _guard_refused(reason: str) -> OpResult:
+        return OpResult(False, f"已拦截：{reason}（防风控频率限制）")
 
     @staticmethod
     async def _is_login_page(page) -> bool:
@@ -85,11 +109,13 @@ class DouyinCreator(CreatorPlatform):
             async with page.expect_response(lambda r: "work_list" in r.url, timeout=30000) as resp_info:
                 await page.goto(MANAGE_URL, wait_until="domcontentloaded", timeout=30000)
             data = await (await resp_info.value).json()
+            await self._check_captcha(page)
             if data.get("status_code") not in (0, None) or await self._is_login_page(page):
                 raise RuntimeError(f"创作者中心未登录或登录已失效（{data.get('status_msg') or data.get('status_code')}），先 /dy_login 扫码")
         except RuntimeError:
             raise
         except Exception as e:
+            await self._check_captcha(page)
             if await self._is_login_page(page):
                 raise RuntimeError("创作者中心未登录，先 /dy_login 扫码") from e
             raise RuntimeError(f"读取作品列表失败（页面可能改版）: {e}") from e
@@ -157,6 +183,8 @@ class DouyinCreator(CreatorPlatform):
     # ── 写（仅供二次确认后调用） ──────────────────────────
 
     async def reply_comment(self, work_id: str, comment_id: str, text: str) -> OpResult:
+        if refused := await GUARD.acquire(self.name, "reply"):
+            return self._guard_refused(refused)
         form = {
             "aweme_id": work_id, "text": text, "reply_id": comment_id, "reply_to_reply_id": "0",
             "text_extra": "[]", "paste_edit_method": "non_paste", "comment_source": "0",
@@ -173,24 +201,31 @@ class DouyinCreator(CreatorPlatform):
         return OpResult(False, f"回复失败: {msg}", data or {})
 
     async def upload(self, video_path: str, title: str, tags: list[str]) -> OpResult:
-        page = await self._creator_page(UPLOAD_URL)
+        if refused := await GUARD.acquire(self.name, "upload"):
+            return self._guard_refused(refused)
         try:
-            await asyncio.sleep(2)
+            page = await self._creator_page(UPLOAD_URL)
+        except CaptchaError as e:
+            return OpResult(False, str(e))
+        try:
             if await self._is_login_page(page):
                 return OpResult(False, "创作者中心未登录，先 /dy_login 扫码", screenshot=await self._screenshot(page, "upload_login"))
             await page.locator("input[type=file]").first.set_input_files(video_path)
             await page.wait_for_url(re.compile(r".*/content/(publish|post/video).*"), timeout=60000)
 
+            await pause(1.5, 3.0)
+            await self._check_captcha(page, "上传视频")
             title_input = page.locator("input[placeholder*='标题']")
             if await title_input.count():
-                await title_input.first.fill(title[:30])
+                await human_fill(page, title_input.first, title[:30])
+                await pause()
             editor = page.locator(".zone-container, [contenteditable='true']").first
-            await editor.click()
+            await human_click(page, editor)
             if not await title_input.count():
-                await page.keyboard.type(title)
+                await human_type(page, title)
             for tag in tags:
-                await page.keyboard.type(f" #{tag}")
-                await asyncio.sleep(0.6)
+                await human_type(page, f" #{tag}")
+                await pause(0.6, 1.2)
                 await page.keyboard.press("Space")
 
             # 等视频上传完成：出现“重新上传”说明文件已传完；“上传失败”直接退出
@@ -203,12 +238,17 @@ class DouyinCreator(CreatorPlatform):
             else:
                 return OpResult(False, "等待上传完成超时（10 分钟）", screenshot=await self._screenshot(page, "upload_timeout"))
 
-            await page.get_by_role("button", name="发布", exact=True).click()
+            await pause(2.0, 4.0)  # 发布前停一下，像在检查内容
+            await human_click(page, page.get_by_role("button", name="发布", exact=True))
+            await pause(1.5, 3.0)
+            await self._check_captcha(page, "发布")
             try:
                 await page.wait_for_url(re.compile(r".*/content/manage.*"), timeout=60000)
             except Exception:
                 return OpResult(False, "点了发布但没跳转到作品管理页（可能需要验证码/审核弹窗）", screenshot=await self._screenshot(page, "publish"))
             return OpResult(True, "已发布，抖音审核通过后可见")
+        except CaptchaError as e:
+            return OpResult(False, str(e))
         except Exception as e:
             logger.warning(f"[creator] 抖音发布失败: {e}")
             return OpResult(False, f"发布失败: {e}", screenshot=await self._screenshot(page, "upload_err"))
@@ -221,25 +261,36 @@ class DouyinCreator(CreatorPlatform):
             title = next((w.title for w in works if w.id == work_id), "")
             if not title:
                 return OpResult(False, f"在最近 50 个作品里没找到 {work_id}")
-        page = await self._creator_page(MANAGE_URL)
+        if refused := await GUARD.acquire(self.name, "delete"):
+            return self._guard_refused(refused)
         try:
-            await asyncio.sleep(3)
+            page = await self._creator_page(MANAGE_URL)
+        except CaptchaError as e:
+            return OpResult(False, str(e))
+        try:
+            await pause(1.5, 3.0)
             if await self._is_login_page(page):
                 return OpResult(False, "创作者中心未登录", screenshot=await self._screenshot(page, "delete_login"))
             # 作品卡片：包含标题文本的最近一个带“删除”入口的祖先
             title_el = page.get_by_text(title[:20], exact=False).first
             await title_el.wait_for(timeout=15000)
             card = title_el.locator("xpath=ancestor::*[.//*[contains(text(),'删除')] or .//*[contains(text(),'更多')]][1]")
-            await card.hover()
+            await human_hover(page, card)  # 鼠标移到卡片上，露出操作入口
+            await pause()
             more = card.get_by_text("更多")
             if await more.count():
-                await more.first.click()
-            await page.get_by_text("删除作品").or_(card.get_by_text("删除", exact=True)).first.click()
-            await page.get_by_role("button", name=re.compile("确定|确认|删除")).last.click()
-            await asyncio.sleep(3)
+                await human_click(page, more.first)
+                await pause()
+            await human_click(page, page.get_by_text("删除作品").or_(card.get_by_text("删除", exact=True)).first)
+            await pause(0.8, 1.8)
+            await human_click(page, page.get_by_role("button", name=re.compile("确定|确认|删除")).last)
+            await pause(2.5, 4.0)
+            await self._check_captcha(page, "删除")
             if await page.get_by_text(title[:20], exact=False).count():
                 return OpResult(False, "点了删除但作品仍在列表中", screenshot=await self._screenshot(page, "delete_still"))
             return OpResult(True, "已删除")
+        except CaptchaError as e:
+            return OpResult(False, str(e))
         except Exception as e:
             logger.warning(f"[creator] 抖音删除失败: {e}")
             return OpResult(False, f"删除失败: {e}", screenshot=await self._screenshot(page, "delete_err"))

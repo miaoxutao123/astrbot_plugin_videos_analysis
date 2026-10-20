@@ -704,7 +704,7 @@ class BrowserSigner:
             return f"{self._risk_reason}（约 {left} 分钟后自动恢复，或在浏览器里完成验证后 /dy_restart）"
         return ""
 
-    def _trip_risk(self, reason: str) -> None:
+    def trip_risk(self, reason: str) -> None:
         """
         触发风控熔断：冷却期内不再发签名请求。
         被要求验证后继续高频重试只会让账号/设备的风险分越来越高。
@@ -713,15 +713,16 @@ class BrowserSigner:
         self._risk_reason = reason
         self._log(f"检测到抖音风控: {reason}，暂停签名请求 {_RISK_COOLDOWN // 60} 分钟")
 
-    async def has_captcha(self) -> bool:
-        """当前页面是否弹出了抖音验证码（验证中心 iframe / 验证码容器 / 验证码中间页）。"""
-        if not self._page:
+    async def has_captcha(self, page=None) -> bool:
+        """页面（默认主页面）是否弹出了抖音验证码（验证中心 iframe / 验证码容器 / 验证码中间页）。"""
+        page = page or self._page
+        if not page:
             return False
         try:
-            if "验证码" in (await self._page.title()):
+            if "验证码" in (await page.title()):
                 return True
             # 页面里常驻一个 0x0 的 rmc-nocaptcha 验证中心 iframe（无感风控 SDK），只算真正显示出来的
-            return await self._page.evaluate("""() => {
+            return await page.evaluate("""() => {
                 const shown = el => {
                     const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
                     return r.width > 50 && r.height > 50 && cs.display !== 'none' && cs.visibility !== 'hidden';
@@ -763,7 +764,7 @@ class BrowserSigner:
         return self._client_env
 
     async def fetch_signed_api(
-        self, endpoint: str, params: dict, method: str = "GET"
+        self, endpoint: str, params: dict, method: str = "GET", form: dict | None = None
     ) -> dict | None:
         """
         在浏览器页面上下文中调用抖音 API, SDK 自动签名。
@@ -775,7 +776,7 @@ class BrowserSigner:
         Args:
             endpoint: API 路径, 如 "aweme/v1/web/aweme/detail/"
             params: 参数字典
-            method: GET 或 POST
+            method: GET 或 POST（JSON body）；传 form 时为 x-www-form-urlencoded POST，params 作为 query
 
         Returns:
             API 响应 JSON, 失败返回 None
@@ -800,13 +801,19 @@ class BrowserSigner:
             if wait > 0:
                 await asyncio.sleep(wait)
             try:
-                return await self._do_fetch(endpoint, params, method)
+                return await self._do_fetch(endpoint, params, method, form)
             finally:
                 self._last_api_at = time.time()
 
-    async def _do_fetch(self, endpoint: str, params: dict, method: str) -> dict | None:
+    async def _do_fetch(self, endpoint: str, params: dict, method: str, form: dict | None = None) -> dict | None:
         base_url = "https://www.douyin.com/" + endpoint.lstrip("/")
-        if method.upper() == "POST":
+        if form is not None:
+            url, init = f"{base_url}?{urlencode(params)}", {
+                "method": "POST",
+                "headers": {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"},
+                "body": urlencode(form),
+            }
+        elif method.upper() == "POST":
             url, init = base_url, {
                 "method": "POST",
                 "headers": {"Content-Type": "application/json"},
@@ -836,14 +843,14 @@ class BrowserSigner:
 
         body = (result or {}).get("body") or ""
         if (result or {}).get("risk") or any(m in body for m in _RISK_BODY_MARKS):
-            self._trip_risk("接口要求验证（verify_check）")
+            self.trip_risk("接口要求验证（verify_check）")
             return None
         if not result or not result.get("ok"):
             self._log(f"API 请求失败: status={result and result.get('status')} {(result or {}).get('error') or body[:200]}")
             return None
         if not body:
             if await self.has_captcha():
-                self._trip_risk("页面弹出验证码")
+                self.trip_risk("页面弹出验证码")
             else:
                 self._log("API 返回空响应（可能触发风控，可尝试 /dy_login 登录或 /dy_restart）")
             return None
@@ -978,37 +985,17 @@ class BrowserSigner:
         return await self._context.new_page()
 
     async def post_form(self, endpoint: str, query: dict, form: dict) -> dict | None:
-        """在 douyin.com 页面里发 x-www-form-urlencoded POST（评论发布等写接口），SDK 自动签名。"""
-        if not self._page:
-            return None
-        url = "https://www.douyin.com/" + endpoint.lstrip("/") + "?" + urlencode(query)
-        js_code = f"""
-        (async function() {{
-            try {{
-                const resp = await fetch({json.dumps(url)}, {{
-                    method: 'POST', credentials: 'include',
-                    headers: {{'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'}},
-                    body: {json.dumps(urlencode(form))}
-                }});
-                return {{ok: resp.ok, status: resp.status, body: await resp.text()}};
-            }} catch(e) {{
-                return {{ok: false, status: 0, error: e.message}};
-            }}
-        }})()
         """
-        try:
-            result = await self._page.evaluate(js_code)
-        except Exception as e:
-            self._log(f"POST 异常: {e}")
-            return None
-        if not result or not result.get("body"):
-            status = result and result.get("status")
-            self._log(f"POST 失败: status={status} {(result or {}).get('error', '')}")
-            return {"status_code": -1, "status_msg": f"HTTP {status} 空响应（未登录或触发风控）"}
-        try:
-            return json.loads(result["body"])
-        except json.JSONDecodeError:
-            return {"status_code": -1, "status_msg": result["body"][:200]}
+        在 douyin.com 页面里发 x-www-form-urlencoded POST（评论发布等写接口），SDK 自动签名。
+        和读接口走同一套：真实设备参数、请求节流、风控检测与熔断。
+        """
+        if self.risk_status:
+            return {"status_code": -1, "status_msg": f"风控冷却中：{self.risk_status}"}
+        data = await self.fetch_signed_api(endpoint, query, form=form)
+        if data is None:
+            reason = self.risk_status or "空响应（未登录或触发风控）"
+            return {"status_code": -1, "status_msg": reason}
+        return data
 
     # ── 内部方法 ─────────────────────────────────────────
 
