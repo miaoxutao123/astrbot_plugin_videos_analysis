@@ -38,6 +38,8 @@ class DouyinCreator(CreatorPlatform):
         s = self.plugin.browser_signer
         if not s or not s.is_ready:
             raise RuntimeError(f"抖音签名引擎未就绪：{self.plugin.browser_signer_error or '请先 /dy_restart'}")
+        if s.risk_status:
+            raise RuntimeError(f"抖音风控冷却中：{s.risk_status}")
         return s
 
     async def _screenshot(self, page, tag: str) -> str:

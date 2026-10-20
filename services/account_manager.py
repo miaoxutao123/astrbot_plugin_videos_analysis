@@ -148,6 +148,8 @@ class AccountManager:
             sess = next((c for c in await signer.export_cookies() if c["name"] == "sessionid"), None)
             if sess:
                 details["登录过期"], warn = _fmt_expiry(sess.get("expires"))
+            if signer.risk_status:
+                details["风控"], warn = signer.risk_status, True
         if deep and ok and logged_in:
             from .creator import get_creator
 

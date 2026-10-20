@@ -30,6 +30,7 @@
 import asyncio
 import json
 import os
+import random
 import shutil
 import socket
 import subprocess
@@ -199,6 +200,77 @@ def _clear_stale_profile_lock(user_data_dir: str) -> bool:
     return True
 
 
+_CHROME_PATHS = (
+    "/opt/google/chrome/chrome",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+)
+
+
+def _major(version: str) -> int:
+    head = version.strip().split(".", 1)[0]
+    return int(head) if head.isdigit() else 0
+
+
+def _chrome_channel(user_data_dir: str) -> str | None:
+    """
+    装了正式版 Google Chrome 就用它（channel="chrome"），否则用 Playwright 自带的 Chromium。
+
+    Chromium 的 UA-CH 品牌里没有 "Google Chrome"，普通用户几乎都是正式版 Chrome，
+    换成正式版后浏览器身份和真人一致。安装: playwright install chrome
+
+    配置目录被更新版本的浏览器用过时不切换：低版本 Chrome 打开高版本配置会拒绝或损坏它，
+    登录态就没了。
+    """
+    path = next((p for p in _CHROME_PATHS if os.path.exists(p)), None)
+    if not path:
+        return None
+    try:
+        with open(os.path.join(user_data_dir, "Last Version"), encoding="utf-8") as f:
+            profile_major = _major(f.read())
+    except OSError:
+        return "chrome"
+    try:
+        out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=15).stdout
+        chrome_major = _major(out.strip().rsplit(" ", 1)[-1])
+    except Exception:
+        chrome_major = 0
+    return "chrome" if chrome_major and chrome_major >= profile_major else None
+
+
+def _mark_profile_clean_exit(user_data_dir: str) -> None:
+    """
+    把配置标记为正常退出。容器重启/崩溃时浏览器是被杀掉的，
+    下次启动会一直挂着 "Restore pages?" 提示，真人的浏览器不会这样。
+    """
+    pref = os.path.join(user_data_dir, "Default", "Preferences")
+    try:
+        with open(pref, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return
+    profile = data.setdefault("profile", {})
+    if profile.get("exit_type") == "Normal" and profile.get("exited_cleanly"):
+        return
+    profile["exit_type"] = "Normal"
+    profile["exited_cleanly"] = True
+    try:
+        with open(pref, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except OSError:
+        pass
+
+
+# 抖音风控页 / 验证码的特征（接口响应头、响应体、页面 DOM）
+_RISK_HEADERS = ("x-vc-bdturing-parameters", "bdturing-verify")
+_RISK_BODY_MARKS = ("verify_check", "\"verify_type\"", "bdturing")
+_RISK_COOLDOWN = 30 * 60
+# 两次签名请求之间的最小间隔（秒），再加随机抖动，避免连续高频调用
+_API_MIN_INTERVAL = 1.5
+_API_JITTER = 1.0
+
+
 def _xvfb_install_hint() -> str:
     """生成 Xvfb 安装提示。"""
     return (
@@ -224,9 +296,20 @@ class BrowserSigner:
         await signer.stop()
     """
 
-    def __init__(self, headless: bool = False, user_data_dir: str | None = None):
+    def __init__(
+        self,
+        headless: bool = False,
+        user_data_dir: str | None = None,
+        timezone: str = "Asia/Shanghai",
+    ):
         self._headless = headless
         self._user_data_dir = user_data_dir or _USER_DATA_DIR
+        self._timezone = timezone
+        self._client_env: dict | None = None
+        self._last_api_at = 0.0
+        self._api_lock = asyncio.Lock()
+        self._risk_until = 0.0
+        self._risk_reason = ""
         self._playwright = None
         self._context = None
         self._page = None
@@ -271,34 +354,51 @@ class BrowserSigner:
             os.makedirs(self._user_data_dir, exist_ok=True)
             if _clear_stale_profile_lock(self._user_data_dir):
                 self._log("已清理残留的浏览器配置锁（上次未正常退出或容器已重建）")
+            _mark_profile_clean_exit(self._user_data_dir)
 
             # 3. 启动浏览器
             self._playwright = await async_playwright().start()
+            self._client_env = None
 
+            # 可信环境：尽量让浏览器和真人桌面 Chrome 一致，不靠 JS 注入去"伪装"
+            # （注入的 webdriver/window.chrome 本身就能被检测出来）
+            # - 不禁用 GPU：禁用后 WebGL 直接不可用，是很明显的机器特征；无显卡时走 SwiftShader
+            # - 不固定 viewport：否则 screen 会被改成 1400x900，窗口反而比屏幕大
+            # - 去掉 --enable-automation，时区/语言与国内用户一致
             launch_args = [
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-blink-features=AutomationControlled",
-                "--disable-extensions",
-                "--disable-component-extensions-with-background-pages",
                 "--window-size=1400,900",
+                "--window-position=0,0",
+                "--lang=zh-CN",
+                "--accept-lang=zh-CN,zh",
             ]
-            # Linux 特有参数
             if _IS_LINUX:
-                launch_args += [
-                    "--disable-gpu",
-                    "--no-zygote",
-                    "--disable-software-rasterizer",
-                ]
+                launch_args += ["--no-zygote", "--enable-unsafe-swiftshader"]
+
+            launch_kwargs = dict(
+                headless=self._headless,
+                args=launch_args,
+                ignore_default_args=["--enable-automation"],
+                timezone_id=self._timezone,
+            )
+            if self._headless:
+                launch_kwargs["viewport"] = {"width": 1400, "height": 900}
+                launch_kwargs["locale"] = "zh-CN"
+            else:
+                launch_kwargs["no_viewport"] = True
+            if _IS_LINUX:
+                # Intl.DateTimeFormat().resolvedOptions().locale 跟随进程语言环境
+                launch_kwargs["env"] = {**os.environ, "LANG": "zh_CN.UTF-8", "LANGUAGE": "zh_CN:zh"}
+            channel = _chrome_channel(self._user_data_dir)
+            if channel:
+                launch_kwargs["channel"] = channel
 
             try:
                 self._context = await self._playwright.chromium.launch_persistent_context(
-                    self._user_data_dir,
-                    headless=self._headless,
-                    args=launch_args,
-                    viewport={"width": 1400, "height": 900},
-                    locale="zh-CN",
+                    self._user_data_dir, **launch_kwargs
                 )
             except Exception as e:
                 msg = str(e)
@@ -323,14 +423,9 @@ class BrowserSigner:
 
             pages = self._context.pages
             self._page = pages[0] if pages else await self._context.new_page()
+            self._log(f"浏览器: {'Google Chrome' if channel else 'Chromium'}，时区 {self._timezone}")
 
-            # 4. 注入反检测脚本
-            await self._page.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {get: () => false});
-                window.chrome = {runtime: {}, loadTimes: function() {}, csi: function() {}};
-            """)
-
-            # 5. 导航到 douyin.com
+            # 4. 导航到 douyin.com
             self._log(f"正在加载 douyin.com (display: {display_msg}) ...")
             try:
                 await self._page.goto(
@@ -341,7 +436,7 @@ class BrowserSigner:
             except Exception as e:
                 self._log(f"导航超时 (可能网络问题): {e}")
 
-            # 6. 检测验证码
+            # 5. 检测验证码
             title = await self._page.title()
             if "验证码" in title:
                 if self._headless:
@@ -376,7 +471,7 @@ class BrowserSigner:
                     "3. 等待一段时间后重试",
                 )
 
-            # 7. 等待 SDK
+            # 6. 等待 SDK
             self._sdk_ready = await self._wait_for_sdk(timeout=30)
             if not self._sdk_ready:
                 return self._make_status(
@@ -389,7 +484,7 @@ class BrowserSigner:
 
             self._log("SDK 就绪")
 
-            # 8. 检查登录状态
+            # 7. 检查登录状态
             self._logged_in = await self._check_logged_in()
 
             if self._logged_in:
@@ -572,11 +667,83 @@ class BrowserSigner:
 
     # ── API 签名调用 ─────────────────────────────────────
 
+    # ── 风控 ─────────────────────────────────────────────
+
+    @property
+    def risk_status(self) -> str:
+        """处于风控冷却期时返回原因，否则返回空串。"""
+        if time.time() < self._risk_until:
+            left = int(self._risk_until - time.time()) // 60 + 1
+            return f"{self._risk_reason}（约 {left} 分钟后自动恢复，或在浏览器里完成验证后 /dy_restart）"
+        return ""
+
+    def _trip_risk(self, reason: str) -> None:
+        """
+        触发风控熔断：冷却期内不再发签名请求。
+        被要求验证后继续高频重试只会让账号/设备的风险分越来越高。
+        """
+        self._risk_until = time.time() + _RISK_COOLDOWN
+        self._risk_reason = reason
+        self._log(f"检测到抖音风控: {reason}，暂停签名请求 {_RISK_COOLDOWN // 60} 分钟")
+
+    async def has_captcha(self) -> bool:
+        """当前页面是否弹出了抖音验证码（验证中心 iframe / 验证码容器 / 验证码中间页）。"""
+        if not self._page:
+            return False
+        try:
+            if "验证码" in (await self._page.title()):
+                return True
+            # 页面里常驻一个 0x0 的 rmc-nocaptcha 验证中心 iframe（无感风控 SDK），只算真正显示出来的
+            return await self._page.evaluate("""() => {
+                const shown = el => {
+                    const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+                    return r.width > 50 && r.height > 50 && cs.display !== 'none' && cs.visibility !== 'hidden';
+                };
+                const els = [...document.querySelectorAll('#captcha_container, .captcha_verify_container, [id^=captcha-verify]')];
+                const frames = [...document.querySelectorAll('iframe')].filter(f => /verifycenter|bdturing|captcha/i.test(f.src || ''));
+                return els.concat(frames).some(shown);
+            }""")
+        except Exception:
+            return False
+
+    async def _client_params(self) -> dict:
+        """
+        用浏览器真实环境生成抖音 web 接口的设备参数。
+
+        之前写死成 Windows / Chrome 149 / 16 核，而 SDK 采集到的是真实的 Linux Chrome，
+        同一请求里两套设备信息互相矛盾，是很强的风控信号。
+        """
+        if self._client_env is None:
+            env = await self._page.evaluate("""() => {
+                const ua = navigator.userAgent;
+                const ver = (ua.match(/Chrome\\/([\\d.]+)/) || [])[1] || '';
+                const plat = navigator.platform || '';
+                let os_name = 'Linux', os_version = '';
+                if (/Win/.test(plat)) { os_name = 'Windows'; os_version = (ua.match(/Windows NT ([\\d.]+)/) || [])[1] || '10'; }
+                else if (/Mac/.test(plat)) { os_name = 'Mac OS'; os_version = ((ua.match(/Mac OS X ([\\d_]+)/) || [])[1] || '').replace(/_/g, '.'); }
+                return {
+                    screen_width: String(screen.width), screen_height: String(screen.height),
+                    browser_language: navigator.language, browser_platform: plat,
+                    browser_name: 'Chrome', browser_version: ver,
+                    engine_name: 'Blink', engine_version: ver,
+                    os_name, os_version,
+                    cpu_core_num: String(navigator.hardwareConcurrency || 8),
+                    device_memory: String(navigator.deviceMemory || 8),
+                    browser_online: String(navigator.onLine), cookie_enabled: String(navigator.cookieEnabled),
+                };
+            }""")
+            self._client_env = env
+        return self._client_env
+
     async def fetch_signed_api(
         self, endpoint: str, params: dict, method: str = "GET"
     ) -> dict | None:
         """
         在浏览器页面上下文中调用抖音 API, SDK 自动签名。
+
+        - 设备参数统一用浏览器真实环境覆盖（调用方传的同名参数会被替换）
+        - 请求之间保持最小间隔 + 随机抖动
+        - 检测到验证码/风控后熔断一段时间，期间直接返回 None
 
         Args:
             endpoint: API 路径, 如 "aweme/v1/web/aweme/detail/"
@@ -589,61 +756,79 @@ class BrowserSigner:
         if not self._page:
             self._log("浏览器未启动")
             return None
+        if self.risk_status:
+            self._log(f"风控冷却中，跳过请求: {self.risk_status}")
+            return None
 
         if not self._sdk_ready:
             await self._wait_for_sdk(timeout=5)
 
+        try:
+            params = {**params, **(await self._client_params())}
+        except Exception as e:
+            self._log(f"读取浏览器环境失败（沿用调用方参数）: {e}")
+
+        async with self._api_lock:
+            wait = self._last_api_at + _API_MIN_INTERVAL + random.uniform(0, _API_JITTER) - time.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+            try:
+                return await self._do_fetch(endpoint, params, method)
+            finally:
+                self._last_api_at = time.time()
+
+    async def _do_fetch(self, endpoint: str, params: dict, method: str) -> dict | None:
         base_url = "https://www.douyin.com/" + endpoint.lstrip("/")
-
         if method.upper() == "POST":
-            url = base_url
-            body_json = json.dumps(params)
-            js_code = f"""
-            (async function() {{
-                try {{
-                    const resp = await fetch({json.dumps(url)}, {{
-                        method: 'POST',
-                        headers: {{'Content-Type': 'application/json'}},
-                        body: {json.dumps(body_json)}
-                    }});
-                    const text = await resp.text();
-                    return {{ok: resp.ok, status: resp.status, body: text}};
-                }} catch(e) {{
-                    return {{ok: false, status: 0, error: e.message}};
-                }}
-            }})()
-            """
+            url, init = base_url, {
+                "method": "POST",
+                "headers": {"Content-Type": "application/json"},
+                "body": json.dumps(params),
+            }
         else:
-            query = urlencode(params)
-            url = f"{base_url}?{query}"
-            js_code = f"""
-            (async function() {{
-                try {{
-                    const resp = await fetch({json.dumps(url)});
-                    const text = await resp.text();
-                    return {{ok: resp.ok, status: resp.status, body: text}};
-                }} catch(e) {{
-                    return {{ok: false, status: 0, error: e.message}};
-                }}
-            }})()
-            """
+            url, init = f"{base_url}?{urlencode(params)}", {}
 
+        risk_headers = json.dumps(list(_RISK_HEADERS))
+        js_code = f"""
+        (async function() {{
+            try {{
+                const resp = await fetch({json.dumps(url)}, Object.assign({{credentials: 'include'}}, {json.dumps(init)}));
+                const text = await resp.text();
+                const risk = {risk_headers}.filter(h => resp.headers.get(h));
+                return {{ok: resp.ok, status: resp.status, body: text, risk}};
+            }} catch(e) {{
+                return {{ok: false, status: 0, error: e.message}};
+            }}
+        }})()
+        """
         try:
             result = await self._page.evaluate(js_code)
-            if not result or not result.get("ok"):
-                self._log(f"API 请求失败: status={result and result.get('status')} {(result or {}).get('error') or (result or {}).get('body', '')[:200]}")
-                return None
-            if not result.get("body"):
-                self._log("API 返回空响应（可能触发风控，可尝试 /dy_login 登录或 /dy_restart）")
-                return None
-            return json.loads(result["body"])
         except Exception as e:
             self._log(f"API 请求异常: {e}")
             return None
 
+        body = (result or {}).get("body") or ""
+        if (result or {}).get("risk") or any(m in body for m in _RISK_BODY_MARKS):
+            self._trip_risk("接口要求验证（verify_check）")
+            return None
+        if not result or not result.get("ok"):
+            self._log(f"API 请求失败: status={result and result.get('status')} {(result or {}).get('error') or body[:200]}")
+            return None
+        if not body:
+            if await self.has_captcha():
+                self._trip_risk("页面弹出验证码")
+            else:
+                self._log("API 返回空响应（可能触发风控，可尝试 /dy_login 登录或 /dy_restart）")
+            return None
+        try:
+            return json.loads(body)
+        except ValueError as e:
+            self._log(f"API 响应不是 JSON: {e} {body[:200]}")
+            return None
+
     async def refresh(self) -> bool:
         """重新加载 douyin.com 并等待 SDK，用于风控导致的空响应后重试。"""
-        if not self._page:
+        if not self._page or self.risk_status:
             return False
         try:
             await self._page.goto("https://www.douyin.com", wait_until="domcontentloaded", timeout=30000)
@@ -666,21 +851,8 @@ class BrowserSigner:
             "pc_client_type": "1",
             "version_code": "170400",
             "version_name": "17.4.0",
-            "cookie_enabled": "true",
-            "screen_width": "1920",
-            "screen_height": "1080",
-            "browser_language": "zh-CN",
-            "browser_platform": "Win32",
-            "browser_name": "Chrome",
-            "browser_version": "149.0.0.0",
-            "browser_online": "true",
-            "engine_name": "Blink",
-            "engine_version": "149.0.0.0",
-            "os_name": "Windows",
-            "os_version": "10",
-            "cpu_core_num": "16",
-            "device_memory": "8",
             "platform": "PC",
+            # 设备参数（屏幕/系统/浏览器版本等）由 fetch_signed_api 按浏览器真实环境填充
         }
         raw = await self.fetch_signed_api("aweme/v1/web/aweme/detail/", params)
         if not raw:

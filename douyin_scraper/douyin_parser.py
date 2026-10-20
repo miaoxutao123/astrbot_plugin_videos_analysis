@@ -225,21 +225,8 @@ class DouyinParser:
             "pc_client_type": "1",
             "version_code": "170400",
             "version_name": "17.4.0",
-            "cookie_enabled": "true",
-            "screen_width": "1920",
-            "screen_height": "1080",
-            "browser_language": "zh-CN",
-            "browser_platform": "Win32",
-            "browser_name": "Chrome",
-            "browser_version": "149.0.0.0",
-            "browser_online": "true",
-            "engine_name": "Blink",
-            "engine_version": "149.0.0.0",
-            "os_name": "Windows",
-            "os_version": "10",
-            "cpu_core_num": "16",
-            "device_memory": "8",
             "platform": "PC",
+            # 设备参数（屏幕/系统/浏览器版本等）由 fetch_signed_api 按浏览器真实环境填充
         }
         endpoint = "aweme/v1/web/aweme/detail/"
         raw = await self._browser_signer.fetch_signed_api(endpoint, params)
