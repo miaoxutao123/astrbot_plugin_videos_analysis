@@ -295,6 +295,8 @@ _RISK_COOLDOWN = 30 * 60
 # 两次签名请求之间的最小间隔（秒），再加随机抖动，避免连续高频调用
 _API_MIN_INTERVAL = 1.5
 _API_JITTER = 1.0
+# 单个签名请求的超时（秒）
+_API_TIMEOUT = 20
 
 
 def _xvfb_install_hint() -> str:
@@ -826,7 +828,8 @@ class BrowserSigner:
         js_code = f"""
         (async function() {{
             try {{
-                const resp = await fetch({json.dumps(url)}, Object.assign({{credentials: 'include'}}, {json.dumps(init)}));
+                // 没有超时的话，某个接口一直不返回会把整个签名引擎（持有请求锁）卡死
+                const resp = await fetch({json.dumps(url)}, Object.assign({{credentials: 'include', signal: AbortSignal.timeout({_API_TIMEOUT * 1000})}}, {json.dumps(init)}));
                 const text = await resp.text();
                 const risk = {risk_headers}.filter(h => resp.headers.get(h));
                 return {{ok: resp.ok, status: resp.status, body: text, risk}};
@@ -836,7 +839,10 @@ class BrowserSigner:
         }})()
         """
         try:
-            result = await self._page.evaluate(js_code)
+            result = await asyncio.wait_for(self._page.evaluate(js_code), _API_TIMEOUT + 10)
+        except asyncio.TimeoutError:
+            self._log(f"API 请求超时（{_API_TIMEOUT + 10}s）: {endpoint}")
+            return None
         except Exception as e:
             self._log(f"API 请求异常: {e}")
             return None

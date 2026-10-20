@@ -330,7 +330,13 @@ class CreatorOps:
             raise RuntimeError(f"LLM 返回的回复数量不对：{text[:200]}")
         return [str(r).strip() for r in replies]
 
-    async def prepare_replies(self, event, platform: str, work_ref: str) -> PendingOp | str:
+    @staticmethod
+    def match_commenter(comments: list[Comment], target: str) -> list[Comment]:
+        """按账号 ID（抖音号）/ 昵称 / uid 找某个人的评论（忽略开头的 @ 和大小写）。"""
+        t = target.lstrip("@＠").strip().lower()
+        return [c for c in comments if c.text.strip() and t in (c.handle.lower(), c.user.lower(), c.user_id)]
+
+    async def prepare_replies(self, event, platform: str, work_ref: str, target: str = "") -> PendingOp | str:
         creator = get_creator(self.plugin, platform)
         if work_ref:
             work_id = await creator.resolve_work(work_ref)
@@ -343,7 +349,13 @@ class CreatorOps:
             work_id = works[0].id
         comments = await creator.list_comments(work_id)
         ctx = await creator.work_context(work_id)
-        picked = self.pick_comments(platform, comments, ctx.get("author", ""))
+        if target:
+            # 指定了回复对象：不受时间窗口/随机挑选限制，只回这个人的评论
+            picked = self.match_commenter(comments, target)[: self.reply_max]
+            if not picked:
+                return f"作品 {work_id} 的评论里没找到 {target}（共读取 {len(comments)} 条）"
+        else:
+            picked = self.pick_comments(platform, comments, ctx.get("author", ""))
         if not picked:
             return f"作品 {work_id} 在 {self.reply_window_h} 小时内没有可回复的新评论（共读取 {len(comments)} 条）"
         summary = await self._video_summary(platform, work_id, ctx)

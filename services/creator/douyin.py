@@ -174,6 +174,7 @@ class DouyinCreator(CreatorPlatform):
                     id=str(c.get("cid")), text=c.get("text", ""), digg=int(c.get("digg_count") or 0),
                     create_time=int(c.get("create_time") or 0), user=user.get("nickname", ""),
                     user_id=str(user.get("uid", "")),
+                    handle=str(user.get("unique_id") or user.get("short_id") or ""),
                 ))
             if not data.get("has_more"):
                 break

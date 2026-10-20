@@ -27,6 +27,7 @@ class Comment:
     create_time: int
     user: str
     user_id: str = ""
+    handle: str = ""  # 平台账号 ID（抖音号等），用于按人指定回复
 
 
 @dataclass

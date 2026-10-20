@@ -314,7 +314,7 @@ class hybird_videos_analysis(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("va_reply")
     async def creator_reply_command(self, event):
-        """精选评论回复：/va_reply [平台] [序号|链接|ID]，默认最新作品"""
+        """精选评论回复：/va_reply [平台] [序号|链接|ID] [@抖音号/昵称]，默认最新作品"""
         from .handlers.account_ops_handler import handle_reply
         async for response in handle_reply(self, event):
             yield response

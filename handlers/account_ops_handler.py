@@ -177,6 +177,9 @@ async def handle_delete(plugin, event):
 
 async def handle_reply(plugin, event):
     platform, args = _take_platform(command_args(event, "va_reply"))
+    # @抖音号/@昵称：只回复这个人的评论
+    target = next((a for a in args if a.startswith(("@", "＠"))), "")
+    args = [a for a in args if a != target]
     ref = args[0] if args else ""
     try:
         work = _work_from_index(plugin, platform, ref) if ref else None
@@ -185,7 +188,7 @@ async def handle_reply(plugin, event):
         return
     yield event.plain_result("正在读取评论并起草回复（可能需要分析视频，约 10~60 秒）...")
     try:
-        res = await plugin.creator_ops.prepare_replies(event, platform, work.id if work else ref)
+        res = await plugin.creator_ops.prepare_replies(event, platform, work.id if work else ref, target)
     except Exception as e:
         yield event.plain_result(f"起草失败: {e}")
         return
