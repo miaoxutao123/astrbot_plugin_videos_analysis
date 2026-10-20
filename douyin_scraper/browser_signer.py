@@ -55,81 +55,116 @@ def _find_xvfb() -> str | None:
     return shutil.which("Xvfb")
 
 
-_XVFB_PROC: subprocess.Popen | None = None
+_XVFB_DISPLAY = 99
 
 
-def _start_xvfb(display: int = 99) -> int | None:
+def _x_display_alive(display: str) -> bool:
     """
-    尝试启动 Xvfb 虚拟显示器（已存在则复用）。
+    DISPLAY 对应的 X server 是否真的能连上。
+
+    只看 /tmp/.X11-unix/X<n> 是否存在不够：容器重启后 socket 文件还在，
+    但 Xvfb 进程已经没了，Chromium 会报 "Missing X server"。
+    """
+    host, sep, rest = display.rpartition(":")
+    if not sep:
+        return False
+    num = rest.split(".", 1)[0]
+    if not num.isdigit():
+        return False
+    try:
+        if host in ("", "unix"):
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(1)
+                s.connect(f"/tmp/.X11-unix/X{num}")
+        else:
+            with socket.create_connection((host, 6000 + int(num)), timeout=1):
+                pass
+        return True
+    except OSError:
+        return False
+
+
+def _remove_stale_x_files(display: int) -> None:
+    """删除残留的 X 锁和 socket（调用前须确认该 display 已连不上）。"""
+    for path in (f"/tmp/.X{display}-lock", f"/tmp/.X11-unix/X{display}"):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
+def _start_xvfb(display: int = _XVFB_DISPLAY) -> int | None:
+    """
+    确保 :display 上有一个可连接的 Xvfb（已在运行则复用）。
     返回 display 编号, 失败返回 None。
+
+    启动的 Xvfb 不随插件停止而关闭：插件热重载时新旧模块各有一份全局状态，
+    旧实例 terminate 时若关掉 Xvfb，会把新实例正在用的显示器一起杀掉。
+    Xvfb 常驻的开销很小，下次启动直接复用。
     """
-    global _XVFB_PROC
-    socket_path = f"/tmp/.X11-unix/X{display}"
-    if os.path.exists(socket_path):
-        os.environ["DISPLAY"] = f":{display}"
+    name = f":{display}"
+    if _x_display_alive(name):
+        os.environ["DISPLAY"] = name
         return display
 
     xvfb = _find_xvfb()
     if not xvfb:
         return None
 
+    # 连不上却有锁/socket → 上次的 Xvfb 已死（如容器重启），清掉残留，
+    # 否则 Xvfb 会因锁文件拒绝启动
+    _remove_stale_x_files(display)
     try:
-        _XVFB_PROC = subprocess.Popen(
-            [xvfb, f":{display}", "-screen", "0", "1920x1080x24", "-ac", "-nolisten", "tcp"],
+        os.makedirs("/tmp/.X11-unix", mode=0o1777, exist_ok=True)
+    except OSError:
+        pass
+
+    try:
+        proc = subprocess.Popen(
+            [xvfb, name, "-screen", "0", "1920x1080x24", "-ac", "-nolisten", "tcp"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
-        # 等待 socket 出现，最多 5 秒
-        for _ in range(50):
-            if os.path.exists(socket_path):
-                break
-            if _XVFB_PROC.poll() is not None:
-                return None
-            time.sleep(0.1)
-        else:
-            return None
-        os.environ["DISPLAY"] = f":{display}"
-        return display
     except Exception:
         return None
 
-
-def _stop_xvfb() -> None:
-    """只停止本模块自己启动的 Xvfb，并撤销对应的 DISPLAY。"""
-    global _XVFB_PROC
-    if _XVFB_PROC is None:
-        return
-    if _XVFB_PROC.poll() is None:
-        _XVFB_PROC.terminate()
-        try:
-            _XVFB_PROC.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            _XVFB_PROC.kill()
-    os.environ.pop("DISPLAY", None)
-    _XVFB_PROC = None
+    # 等待 X server 可连接，最多 5 秒
+    for _ in range(50):
+        if _x_display_alive(name):
+            os.environ["DISPLAY"] = name
+            return display
+        if proc.poll() is not None:
+            return None
+        time.sleep(0.1)
+    proc.kill()
+    return None
 
 
 def _check_display() -> tuple[bool, str]:
     """
-    检查显示器环境。
+    检查显示器环境（每次启动浏览器前都重新检查）。
     返回 (是否可用, 原因描述)。
     """
-    display = os.environ.get("DISPLAY", "")
-
-    # 已有 DISPLAY 环境变量 → 直接可用
-    if display:
-        return True, f"DISPLAY={display}"
-
     # Windows/macOS 通常原生有显示器
     if _IS_WINDOWS or _IS_MACOS:
         return True, "Windows/macOS 原生显示"
 
-    # Linux 无 DISPLAY → 尝试 Xvfb
+    display = os.environ.get("DISPLAY", "")
+    if display and _x_display_alive(display):
+        return True, f"DISPLAY={display}"
+
+    # Linux 无 DISPLAY，或 DISPLAY 已失效（Xvfb 被杀/容器重启）→ 启动 Xvfb
     display_num = _start_xvfb()
     if display_num is not None:
-        return True, f"Xvfb :{display_num} 已启动"
+        if display and display != f":{display_num}":
+            return True, f"DISPLAY={display} 不可用，已改用 Xvfb :{display_num}"
+        return True, f"Xvfb :{display_num} 就绪"
 
-    # Xvfb 未安装
+    if display:
+        os.environ.pop("DISPLAY", None)
     return False, _xvfb_install_hint()
 
 
@@ -393,7 +428,6 @@ class BrowserSigner:
             self._page = None
             self._sdk_ready = False
             self._logged_in = False
-            _stop_xvfb()
 
     @property
     def is_ready(self) -> bool:
