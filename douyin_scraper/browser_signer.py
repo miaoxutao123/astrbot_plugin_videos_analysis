@@ -262,6 +262,32 @@ def _mark_profile_clean_exit(user_data_dir: str) -> None:
         pass
 
 
+def _disable_secure_dns(user_data_dir: str) -> None:
+    """
+    关闭 Chrome 的安全 DNS（DoH），改用系统 DNS。
+
+    容器的 resolv.conf 里有 8.8.8.8 时，Chrome 启动十几秒后会自动升级到 dns.google 的 DoH。
+    宿主机走代理时这个查询从海外出口发出，抖音 CDN 被解析到美国节点
+    （实测 lf-fe-creator.douyinstatic.com → 弗吉尼亚的阿里云 CDN），
+    浏览器直连跨洋节点，创作者中心的静态 JS 每 2 秒才十几 KB，goto 30s 超时；
+    国内用户访问海外节点本身也是风控信号。系统 DNS 返回的是国内节点。
+    """
+    path = os.path.join(user_data_dir, "Local State")
+    try:
+        with open(path, encoding="utf-8") as f:
+            state = json.load(f)
+    except (OSError, ValueError):
+        state = {}
+    if state.get("dns_over_https", {}).get("mode") == "off":
+        return
+    state["dns_over_https"] = {"mode": "off", "templates": ""}
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+    except OSError:
+        pass
+
+
 # 抖音风控页 / 验证码的特征（接口响应头、响应体、页面 DOM）
 _RISK_HEADERS = ("x-vc-bdturing-parameters", "bdturing-verify")
 _RISK_BODY_MARKS = ("verify_check", "\"verify_type\"", "bdturing")
@@ -355,6 +381,7 @@ class BrowserSigner:
             if _clear_stale_profile_lock(self._user_data_dir):
                 self._log("已清理残留的浏览器配置锁（上次未正常退出或容器已重建）")
             _mark_profile_clean_exit(self._user_data_dir)
+            _disable_secure_dns(self._user_data_dir)
 
             # 3. 启动浏览器
             self._playwright = await async_playwright().start()
