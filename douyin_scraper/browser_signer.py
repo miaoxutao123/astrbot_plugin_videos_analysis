@@ -449,6 +449,42 @@ class BrowserSigner:
             self._log(f"截图失败: {e}")
             return None
 
+    async def get_login_qr_screenshot(self, timeout: float = 30) -> bytes | None:
+        """
+        等登录弹窗里的二维码真正渲染出来再截图（只截弹窗）。
+
+        点击登录后弹窗先显示抖音 logo 占位，二维码（data: PNG）要几秒后才出现，
+        固定 sleep 后截图会拿到扫不了的空图。超时则退回整页截图。
+        """
+        if not self._page:
+            return None
+        try:
+            handle = await self._page.wait_for_function(
+                """() => {
+                    const panel = document.querySelector('[id^=login-full-panel]') || document;
+                    let img = panel.querySelector('img[aria-label="二维码"]');
+                    if (!img) {
+                        img = [...panel.querySelectorAll('img')].find(i => (i.src || '').startsWith('data:image')
+                            && i.naturalWidth >= 200 && Math.abs(i.naturalWidth - i.naturalHeight) < 4);
+                    }
+                    if (!img || !img.complete || !img.naturalWidth || img.getBoundingClientRect().width < 50) return null;
+                    // 向上找到弹窗本体（足够宽的祖先），截图只截这一块
+                    let box = img.getBoundingClientRect();
+                    for (let el = img.parentElement; el && el !== document.body; el = el.parentElement) {
+                        const r = el.getBoundingClientRect();
+                        if (r.width >= 500 && r.height >= 300 && r.width < innerWidth) { box = r; break; }
+                    }
+                    return {x: box.x, y: box.y, width: box.width, height: box.height};
+                }""",
+                timeout=timeout * 1000,
+            )
+            clip = await handle.json_value()
+            await asyncio.sleep(0.5)
+            return await self._page.screenshot(type="png", clip=clip)
+        except Exception as e:
+            self._log(f"等待登录二维码失败，改为整页截图: {e}")
+        return await self.get_page_screenshot()
+
     async def trigger_login(self) -> bool:
         """点击 douyin.com 页面的登录按钮, 弹出登录对话框/二维码。"""
         if not self._page:

@@ -73,10 +73,9 @@ async def handle_douyin_login(plugin, event):
     # 触发登录 (点击页面登录按钮)
     yield event.plain_result("正在触发抖音登录页面...")
     await signer.trigger_login()
-    await asyncio.sleep(3)
 
-    # 截图发送给用户
-    screenshot = await signer.get_page_screenshot()
+    # 等二维码渲染完成后截图发送给用户
+    screenshot = await signer.get_login_qr_screenshot()
     if not screenshot:
         yield event.plain_result("截图失败，请尝试使用 dy_cookie 命令手动粘贴cookie。")
         return
