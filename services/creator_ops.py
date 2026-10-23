@@ -66,9 +66,22 @@ class CreatorOps:
         self._pending: dict[str, PendingOp] = {}
         self.max_pending_per_user = int(cfg.get("max_pending_per_user", 3) or 3)
         self._upload_waiters: dict[str, dict] = {}
-        self.last_works: dict[str, list] = {}  # /va_works 的结果，供按序号引用
+        # 最近一次列表（作品/搜索/推荐）按"会话+平台"分别保存，群里多人同时用也不会串号
+        self.last_works: dict[str, list] = {}
         # 待确认操作只在内存里，重载后之前暂存的发布素材都已无主，直接清掉
         shutil.rmtree(UPLOAD_DIR, ignore_errors=True)
+
+    @staticmethod
+    def _list_key(event, platform: str) -> str:
+        return f"{event.unified_msg_origin}|{platform}"
+
+    def remember_list(self, event, platform: str, works: list) -> None:
+        self.last_works[self._list_key(event, platform)] = works
+        if len(self.last_works) > 500:  # 防止长期运行无限增长
+            self.last_works.pop(next(iter(self.last_works)))
+
+    def recall_list(self, event, platform: str) -> list:
+        return self.last_works.get(self._list_key(event, platform)) or []
 
     # ── 二次确认 ─────────────────────────────────────────
 
@@ -145,10 +158,10 @@ class CreatorOps:
         if op.requester_admin:
             await self._send(op.umo, preview)
             return {"status": "pending_confirmation", "code": op.code,
-                    "message": f"尚未执行。确认信息已发到当前会话，需要管理员本人发送 /va_confirm {op.code} 才会执行。请如实告知，不要声称已完成。"}
+                    "message": f"尚未执行。确认信息已发到当前会话，需要管理员本人回复「确认 {op.code}」才会执行。请如实告知，不要声称已完成，也不要替用户确认。"}
         head = (
             f"🔐 权限申请：{op.requester_name}（{op.requester}）请求执行以下操作\n"
-            f"来源会话：{op.umo}\n批准：/va_confirm {op.code} · 拒绝：/va_cancel {op.code}\n\n"
+            f"来源会话：{op.umo}\n批准请回复「确认 {op.code}」，拒绝请回复「拒绝 {op.code}」\n\n"
         )
         sent = 0
         for umo in self.plugin.accounts.notify_targets():
@@ -191,8 +204,12 @@ class CreatorOps:
         self._pending.pop(op.code, None)
         if op.platform == "douyin" and op.account_key != (self.plugin.accounts.active_name("douyin") or ""):
             return f"❌ 申请时用的是抖音账号「{op.account}」，现在已切换到「{self.plugin.accounts.active_name('douyin') or '其他账号'}」，为避免发错账号已取消，请重新发起"
-        creator = get_creator(self.plugin, op.platform, op.account_key or None)
         try:
+            if op.kind == "config":
+                return await self._apply_config(op.payload["changes"])
+            if op.kind == "pool_use":
+                return await self.plugin.accounts.pool_use(op.platform, op.payload["name"])
+            creator = get_creator(self.plugin, op.platform, op.account_key or None)
             if op.kind == "upload":
                 p = op.payload
                 try:
@@ -211,8 +228,6 @@ class CreatorOps:
                 return self._render_result(f"评论《{p.get('title') or p['work_id']}》", res)
             if op.kind == "sign":
                 return self._render_result("修改签名", await creator.update_sign(op.payload["text"]))
-            if op.kind == "pool_use":
-                return await self.plugin.accounts.pool_use(op.platform, op.payload["name"])
             if op.kind == "avatar":
                 try:
                     res = await creator.update_avatar(op.payload["path"])
@@ -244,6 +259,10 @@ class CreatorOps:
             return f"把签名改为「{p['text']}」（原签名「{p.get('old', '')}」）"
         if op.kind == "pool_use":
             return f"把 {op.platform} 当前账号切换为「{p['name']}」"
+        if op.kind == "config":
+            from .settings_service import diff_text
+
+            return "修改插件设置：\n" + diff_text(p["changes"], self.plugin.config)
         if op.kind == "avatar":
             return f"更换头像（{p['size_kb']:.0f}KB）"
         return f"回复作品 {p['work_id']} 的 {len(p['items'])} 条评论"
@@ -264,10 +283,10 @@ class CreatorOps:
             src = "（LLM 起草）" if op.payload.get("drafted") else ""
             return (
                 f"{head}\n\n评论内容{src}：{op.payload['text']}\n\n"
-                f"/va_confirm {op.code} 发送 · /va_edit {op.code} 1 <新内容> 修改 · /va_cancel {op.code} 取消"
+                f"回复「确认 {op.code}」发送 · /va_edit {op.code} 1 <新内容> 修改 · 回复「拒绝 {op.code}」取消"
                 f"（{int(op.expires - time.time())} 秒内有效）"
             )
-        return f"{head}\n\n发送 /va_confirm {op.code} 执行，/va_cancel {op.code} 取消（{int(op.expires - time.time())} 秒内有效）"
+        return f"{head}\n\n回复「确认 {op.code}」执行，「拒绝 {op.code}」取消（也可用 /va_confirm、/va_cancel；{int(op.expires - time.time())} 秒内有效）"
 
     # ── 发布 ─────────────────────────────────────────────
 
@@ -338,6 +357,29 @@ class CreatorOps:
                     return getattr(seg, "url", "") or None
         return None
 
+    def prepare_config(self, event, changes: dict) -> PendingOp:
+        return self._new_op("config", "plugin", event, {"changes": changes})
+
+    async def _apply_config(self, changes: dict) -> str:
+        """写入配置文件并稍后重载插件，让所有缓存的配置项生效。"""
+        from .settings_service import diff_text
+
+        text = diff_text(changes, self.plugin.config)
+        for k, v in changes.items():
+            self.plugin.config[k] = v
+        self.plugin.config.save_config()
+        mgr = getattr(self.plugin.context, "_star_manager", None)
+        if mgr:
+            async def _reload():
+                await asyncio.sleep(1.5)  # 先把结果发出去再重载
+                try:
+                    await mgr.reload("astrbot_plugin_videos_analysis")
+                except Exception as e:
+                    logger.warning(f"[settings] 重载插件失败，请手动重启: {e}")
+            asyncio.create_task(_reload())
+            return f"✅ 设置已保存，插件将自动重载生效：\n{text}"
+        return f"✅ 设置已保存（请重启插件生效）：\n{text}"
+
     def prepare_pool_use(self, event, platform: str, name: str) -> PendingOp:
         if not self.plugin.accounts._find(platform, name):
             raise ValueError(f"账号池里没有 {platform}/{name}")
@@ -402,7 +444,7 @@ class CreatorOps:
             return cache[key]
         if not (self.reply_use_video and ctx.get("media_url")):
             return ""
-        if platform == "bilibili" and event is not None:
+        if event is not None:
             # B站走轻量浏览（字幕/线上ASR + 抽帧），结果会写进缓存
             from .browse_service import browse_work
 
@@ -421,7 +463,7 @@ class CreatorOps:
         if not path or not os.path.exists(path):
             return ""
         # 走插件统一的视频理解流程（按 video_understand_method 选择 Gemini/MiMo/本地 ASR 并自动回退）
-        res = await handle_understand_video(self.plugin, path, "用 150 字以内概括这个短视频的内容、看点和情绪基调，供博主回复评论时参考。")
+        res = await handle_understand_video(self.plugin, path, "用 150 字以内概括这个短视频的内容、看点和情绪基调，供博主回复评论时参考。", event)
         text = res.get("analysis") if isinstance(res, dict) else ""
         if not text:
             logger.info(f"[creator] 视频理解失败，仅用文案起草回复: {res.get('error') if isinstance(res, dict) else res}")

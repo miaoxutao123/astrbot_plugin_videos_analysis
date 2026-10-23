@@ -84,6 +84,6 @@ class CreatorPlatform(ABC):
         """在任意作品下发一条一级评论（只能由二次确认流程调用）。"""
         return OpResult(False, f"{self.label or self.name}暂不支持发评论")
 
-    async def fetch_video(self, work_id: str, ctx: dict) -> str | None:
-        """把作品视频下载到本地，供视频理解使用；不支持返回 None。"""
+    async def fetch_video(self, work_id: str, ctx: dict, max_seconds: int = 0) -> str | None:
+        """把作品视频下载到本地，供视频理解使用（max_seconds>0 时只要开头这么长）；不支持返回 None。"""
         return None

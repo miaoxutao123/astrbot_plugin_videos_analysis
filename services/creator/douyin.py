@@ -156,7 +156,7 @@ class DouyinCreator(CreatorPlatform):
             "media_url": urls[0] if info.get("type") == "video" and urls else "",
         }
 
-    async def fetch_video(self, work_id: str, ctx: dict) -> str | None:
+    async def fetch_video(self, work_id: str, ctx: dict, max_seconds: int = 0) -> str | None:
         if not ctx.get("media_url"):
             return None
         from ..douyin_service import download

@@ -33,8 +33,21 @@ async def analyze_video_with_gemini(plugin, event, video_path: str, platform: st
     失败或过大时回退到「音频转写 + 关键帧」模式。
     """
     gcfg = gcfg or resolve_gemini_config(plugin)
-    if not gcfg:
-        yield event.plain_result(GEMINI_MISSING_MSG)
+    if not gcfg or plugin.video_understand_method != "gemini":
+        # 默认路径：抽帧 + ASR → 当前对话模型（不依赖 Gemini）
+        from ..services.browse_service import browse, cleanup_browse_files
+
+        if plugin.show_progress_messages:
+            yield event.plain_result("正在看视频（抽帧 + 语音转写），请稍等...")
+        try:
+            res = await browse(plugin, event, video_path, {"title": ""}, platform="", work_id="")
+        finally:
+            cleanup_browse_files(video_path)
+        if res.get("summary"):
+            async for response in send_llm_response(plugin.context, event, res["summary"], platform):
+                yield response
+        else:
+            yield event.plain_result("抱歉，我没能看懂这个视频（没有可用的转写或看图模型）。")
         return
 
     video_size_mb = os.path.getsize(video_path) / (1024 * 1024)
@@ -174,9 +187,6 @@ async def handle_comprehend_video_command(plugin, event):
     url = url_match.group(0)
 
     gcfg = resolve_gemini_config(plugin)
-    if not gcfg:
-        yield event.plain_result(GEMINI_MISSING_MSG)
-        return
 
     if re.search(r"v\.douyin\.com", url):
         if plugin.show_progress_messages:

@@ -73,18 +73,26 @@
   写操作遇到 -352/-412/验证码/重复评论等风控码时，该账号写操作熔断 `risk_cooldown_minutes`（默认 60 分钟）并推送告警
 
 ### 🤖 全部功能支持 LLM 调用（危险操作需管理员审批）
-| 级别 | 工具 | 说明 |
-|------|------|------|
-| 公开读 | `bili_search_videos` `bili_feed` `browse_video` `parse_video_link` `understand_video` | 任何人都能让 AI 调用 |
-| 管理员读 | `video_account_status` `list_my_works` `list_work_comments` `bili_account_profile` | 涉及账号隐私，非管理员会被拒绝 |
-| 危险写 | `post_comment` `reply_comments` `update_bili_signature` `update_bili_avatar` `delete_work` `switch_account` `creator_upload_video` | **只提交申请** |
+面向小白设计：直接对机器人说"搜一下罗翔的视频""看看这个讲了什么""把这个视频发我""插件还缺什么配置"即可。
 
-危险写的"提权"流程：
-- 管理员自己让 AI 操作 → 预览发回当前会话，管理员本人 `/va_confirm <码>` 才执行
-- 普通用户让 AI 操作 → 申请推送到管理员的审批会话（管理员私聊发 `/va_notify` 设置），申请人只收到"已提交审批"；
-  管理员 `/va_confirm` 批准或 `/va_cancel` 拒绝后，结果会回告申请人
-- 没有任何工具能代为确认；每人最多 `max_pending_per_user`（默认 3）个待审批，防止被提示词注入刷屏；
-  `llm_allow_non_admin_requests=false` 可禁止普通用户发起申请
+| 工具 | 权限 | action |
+|------|------|--------|
+| `video_browse` | 所有人 | `search` 搜索 · `recommend` 推荐 · `hot` 热门 · `watch` 看视频（抽帧+转写总结）· `info` 链接信息 |
+| `video_download` | 所有人（30 秒限频） | 下载视频/抖音图文并发到当前聊天 |
+| `video_account` | 仅管理员 | `status` 账号状态 · `works` 我的作品 · `comments` 评论 · `profile` 资料 |
+| `video_action` | 只能**提交申请** | `comment` · `reply` · `sign` · `avatar` · `delete` · `switch_account` · `upload` |
+| `video_plugin_settings` | 仅管理员 | `show` 查看 · `check` 体检 · `set` 修改（需确认） |
+
+5 个工具的定义合计约 930 tokens（原 16 个约 1970），描述为静态文本，不影响模型的提示词缓存；详见 [docs/ROADMAP.md](docs/ROADMAP.md#6-上下文与缓存评估结论v08-实测)。
+
+**提权审批**：
+- 管理员自己让 AI 操作 → 预览发回当前会话，管理员本人回复「确认 1234」（或 `/va_confirm 1234`）才执行，「拒绝 1234」取消
+- 普通用户让 AI 操作 → 申请推送到管理员审批会话（管理员私聊发 `/va_notify` 设置），申请人只收到"已提交审批"，结果回告申请人
+- 没有任何工具能代为确认；每人最多 3 个待审批；`llm_allow_non_admin_requests=false` 可禁止普通用户发起申请
+
+**看视频**：先转写（B站字幕 → 线上 ASR → 框架 STT → 本地 funasr），再由对话模型读带时间轴的转写**挑出需要看画面的时刻**抽帧；
+没有转写时按时长均匀抽帧。关键帧 + 转写交给当前对话模型（如可看图的 DeepSeek）总结。超过 `browse_max_minutes` 的视频只看开头，
+超过 `browse_sync_max_minutes` 的转后台看完再推送。Gemini / MiMo **默认关闭**（`gemini_enabled` / `mimo_enabled`）。
 
 ### 🎬 创作者操作（抖音 / B站，平台可扩展）
 > 发布、删除、回复评论都是**危险操作**：命令只生成预览和 4 位确认码，管理员发送 `/va_confirm <码>` 后才执行（默认 60 秒内有效）。
@@ -315,7 +323,15 @@ astrbot_plugin_videos_analysis/
 
 ## 🔄 更新日志
 
-### v0.7.0（当前版本）
+### v0.8.0（当前版本）
+- 🧭 面向小白：自然语言配置（`video_plugin_settings`：查看 / 体检 / 修改需确认，改完自动重载）；审批可直接回复「确认 1234」
+- 🎞️ 看视频：按转写挑帧（对话模型判断哪些时刻要看画面），无转写按时长切帧；临时文件独立目录、用完即删；长视频截取开头、超时转后台
+- 📥 下载发送：`/va_download`（别名「下载视频」）与 `video_download` 工具，B站/抖音
+- 🔕 Gemini / MiMo 默认关闭，默认链路只用当前对话模型
+- 🧩 工具合并为 5 个、结果瘦身（schema 约 1974 → 931 tokens）；“序号”列表按会话保存，群聊不再串号
+- 🔌 `publish_request` 对外接口，供视频生成插件联动；新增 [docs/ROADMAP.md](docs/ROADMAP.md) 完整运维设计与路线图
+
+### v0.7.0
 - 🖼️ 浏览总结改为"关键帧 + 转写"交给当前对话模型（适配可看图的新版 DeepSeek），Gemini/纯文字逐级降级
 - 👥 B站多账号：操作绑定账号、确认时用发起时的账号；账号池逐个续期
 - 🛡️ 抗风控：bili_ticket、请求节流、按账号频率闸门、风控熔断、重复内容/链接拦截

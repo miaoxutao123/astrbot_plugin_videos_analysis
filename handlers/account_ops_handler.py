@@ -125,7 +125,7 @@ async def handle_works(plugin, event):
     except Exception as e:
         yield event.plain_result(f"读取作品失败: {e}")
         return
-    plugin.creator_ops.last_works[platform] = works
+    plugin.creator_ops.remember_list(event, platform, works)
     if not works:
         yield event.plain_result("当前账号没有作品")
         return
@@ -141,8 +141,8 @@ async def handle_works(plugin, event):
     yield event.plain_result("\n".join(lines))
 
 
-def _work_from_index(plugin, platform: str, ref: str):
-    works = plugin.creator_ops.last_works.get(platform) or []
+def _work_from_index(plugin, event, platform: str, ref: str):
+    works = plugin.creator_ops.recall_list(event, platform)
     if ref.isdigit() and len(ref) <= 2:
         idx = int(ref)
         if 1 <= idx <= len(works):
@@ -187,7 +187,7 @@ async def handle_delete(plugin, event):
         yield event.plain_result("用法: /va_delete [平台] <作品序号|链接|ID>（序号来自 /va_works）")
         return
     try:
-        work = _work_from_index(plugin, platform, args[0])
+        work = _work_from_index(plugin, event, platform, args[0])
         work_id = work.id if work else await get_creator(plugin, platform).resolve_work(args[0])
         title = work.title if work else ""
     except Exception as e:
@@ -208,7 +208,7 @@ async def handle_reply(plugin, event):
     args = [a for a in args if a != target]
     ref = args[0] if args else ""
     try:
-        work = _work_from_index(plugin, platform, ref) if ref else None
+        work = _work_from_index(plugin, event, platform, ref) if ref else None
     except ValueError as e:
         yield event.plain_result(str(e))
         return
@@ -232,7 +232,7 @@ async def handle_comment(plugin, event):
         return
     ref, text = args[0], " ".join(args[1:]).strip()
     try:
-        work = _work_from_index(plugin, platform, ref)
+        work = _work_from_index(plugin, event, platform, ref)
     except ValueError as e:
         yield event.plain_result(str(e))
         return
@@ -314,7 +314,7 @@ async def handle_bili_feed(plugin, event):
     except Exception as e:
         yield event.plain_result(f"读取失败: {e}")
         return
-    plugin.creator_ops.last_works["bilibili"] = works
+    plugin.creator_ops.remember_list(event, "bilibili", works)
     yield event.plain_result(_render_list("bilibili", "B站热门：" if kind == "hot" else "B站首页推荐：", works) if works else "没有内容")
 
 
@@ -328,7 +328,7 @@ async def handle_bili_search(plugin, event):
     except Exception as e:
         yield event.plain_result(f"搜索失败: {e}")
         return
-    plugin.creator_ops.last_works["bilibili"] = works
+    plugin.creator_ops.remember_list(event, "bilibili", works)
     yield event.plain_result(_render_list("bilibili", f"B站搜索「{kw}」：", works) if works else f"没有搜到「{kw}」")
 
 
@@ -341,7 +341,7 @@ async def handle_bili_watch(plugin, event):
         return
     creator = get_creator(plugin, "bilibili")
     try:
-        work = _work_from_index(plugin, "bilibili", args[0])
+        work = _work_from_index(plugin, event, "bilibili", args[0])
         work_id = work.id if work else await creator.resolve_work(args[0])
         if not work_id:
             yield event.plain_result(f"无法识别视频: {args[0]}")
@@ -365,7 +365,10 @@ async def handle_bili_watch(plugin, event):
             lines += [f"· {c.user}（👍{_fmt_count(c.digg)}）: {c.text[:60]}" for c in hot]
     except Exception:
         pass
-    lines.append(f"\n转写来源: {res['transcript_source']}（{res['transcript_len']} 字）· 总结: {res['method']} · 用时 {res['seconds']}s")
+    lines.append(
+        f"\n转写: {res['transcript_source']}（{res['transcript_len']} 字）· 抽帧: {res['frame_method']} {' '.join(res['frame_times'])}\n"
+        f"总结: {res['method']} · 用时 {res['seconds']}s"
+    )
     if res.get("watch_report"):
         lines.append(f"观看记录: {res['watch_report']}")
     lines.append(f"/va_comment {work_id} [内容] 发评论（不写内容由 AI 结合本次浏览起草）")

@@ -79,6 +79,12 @@
         "default": false,
         "hint": "实验性功能，会消耗大量token，默认关闭，会读取你发的所有视频到llm进行分析"
     },
+    "gemini_enabled": {
+        "description": "启用 Gemini（可选）",
+        "type": "bool",
+        "default": false,
+        "hint": "默认关闭。开启并填写下面的 Key 后，可作为看图/理解视频的备选"
+    },
     "gemini_base_url": {
         "description": "Gemini API 地址（官方或中转站）",
         "type": "string",
@@ -141,13 +147,20 @@
     "video_understand_method": {
         "description": "视频理解首选方式",
         "type": "string",
-        "default": "gemini",
+        "default": "llm",
         "options": [
+            "llm",
             "gemini",
             "mimo",
             "local_asr"
         ],
-        "hint": "首选失败时自动按 gemini → mimo → local_asr 回退。local_asr 需额外安装 funasr"
+        "hint": "llm：抽帧+语音转写交给当前对话模型（默认，适合 DeepSeek 等）；gemini/mimo 需先打开对应开关"
+    },
+    "mimo_enabled": {
+        "description": "启用 MiMo（可选）",
+        "type": "bool",
+        "default": false,
+        "hint": "默认关闭"
     },
     "mimo_model": {
         "description": "MiMo 模型ID",
@@ -284,5 +297,17 @@
         "type": "int",
         "default": 60,
         "hint": "账号写操作遇到 -352/-412/验证码/重复评论等风控码后，该账号暂停写操作的时长（读操作不受影响）"
+    },
+    "browse_max_minutes": {
+        "description": "看视频最长处理（分钟）",
+        "type": "int",
+        "default": 20,
+        "hint": "更长的视频只看开头这么长（B站直接截取开头，不下载整片）"
+    },
+    "browse_sync_max_minutes": {
+        "description": "超过多少分钟转后台看",
+        "type": "int",
+        "default": 8,
+        "hint": "工具调用有超时，长视频改为后台观看，看完把总结推到聊天里"
     }
 }

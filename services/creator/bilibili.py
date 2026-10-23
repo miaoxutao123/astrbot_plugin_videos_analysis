@@ -212,14 +212,33 @@ class BilibiliCreator(CreatorPlatform):
 
     async def work_context(self, work_id: str) -> dict:
         v = await self._view(work_id)
+        pages = v.get("pages") or []
         return {
             "title": v.get("title", ""),
             "desc": v.get("desc", ""),
             "author": (v.get("owner") or {}).get("name", ""),
             "media_url": f"https://www.bilibili.com/video/{work_id}",
+            # 多 P 视频只处理第 1P（下载接口也只取第 1P），时长以它为准
+            "duration": int((pages[0].get("duration") if pages else v.get("duration")) or 0),
+            "parts": len(pages),
         }
 
-    async def fetch_video(self, work_id: str, ctx: dict) -> str | None:
+    async def fetch_video(self, work_id: str, ctx: dict, max_seconds: int = 0) -> str | None:
+        if max_seconds and ctx.get("duration", 0) > max_seconds:
+            # 长视频：ffmpeg 直接拉流只截取开头，不下载整个文件
+            url = await bilibili_service.get_video_download_url_by_bvid(work_id, 16)
+            if url:
+                os.makedirs(bilibili_service.BILI_DOWNLOAD_DIR, exist_ok=True)
+                out = os.path.join(bilibili_service.BILI_DOWNLOAD_DIR, f"{work_id}_head{max_seconds}.mp4")
+                hdr = f"Referer: https://www.bilibili.com/\r\nUser-Agent: {bili_account.UA}\r\n"
+                proc = await asyncio.create_subprocess_exec(
+                    "ffmpeg", "-y", "-loglevel", "error", "-headers", hdr, "-t", str(max_seconds), "-i", url,
+                    "-c", "copy", out, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+                )
+                _, err = await proc.communicate()
+                if proc.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 1024:
+                    return out
+                logger.warning(f"[bili] 截取开头失败，改为完整下载: {err.decode(errors='ignore')[-200:]}")
         res = await bilibili_service.process_bili_video(work_id, download_flag=True, quality=16, use_login=False)
         return (res or {}).get("video_path")
 

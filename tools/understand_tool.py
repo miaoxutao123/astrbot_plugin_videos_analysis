@@ -110,16 +110,30 @@ async def _download_from_url(url: str, download_dir: str, cookie: str = None, ma
         return None
 
 
-_ALL_METHODS = ("gemini", "mimo", "local_asr")
+_ALL_METHODS = ("llm", "gemini", "mimo", "local_asr")
 
 
 def _method_order(preferred: str) -> list[str]:
-    """首选方法在前，其余作为回退。"""
-    preferred = preferred if preferred in _ALL_METHODS else "gemini"
+    """首选方法在前，其余作为回退（未开启的 Gemini/MiMo 会在各自的分析函数里直接跳过）。"""
+    preferred = preferred if preferred in _ALL_METHODS else "llm"
     return [preferred, *[m for m in _ALL_METHODS if m != preferred]]
 
 
-async def _analyze_gemini(plugin, video_path: str, prompt: str):
+async def _analyze_llm(plugin, video_path: str, prompt: str, event=None):
+    if event is None:
+        return "缺少会话上下文"
+    from ..services.browse_service import browse, cleanup_browse_files
+
+    try:
+        res = await browse(plugin, event, video_path, {"title": ""}, user_prompt=prompt)
+    finally:
+        cleanup_browse_files(video_path)
+    if not res.get("summary"):
+        return "抽帧+转写总结失败"
+    return {"analysis": res["summary"], "method": "frames+asr", "transcript_source": res["transcript_source"], "summary_by": res["method"]}
+
+
+async def _analyze_gemini(plugin, video_path: str, prompt: str, event=None):
     gcfg = resolve_gemini_config(plugin)
     if not gcfg:
         return "未配置 Gemini"
@@ -129,9 +143,9 @@ async def _analyze_gemini(plugin, video_path: str, prompt: str):
     return {"analysis": text, "method": "gemini", "model": gcfg.model, "duration": f"{duration:.1f}s"}
 
 
-async def _analyze_mimo(plugin, video_path: str, prompt: str):
-    if not plugin.mimo_api_key:
-        return "未配置 MiMo"
+async def _analyze_mimo(plugin, video_path: str, prompt: str, event=None):
+    if not (plugin.mimo_enabled and plugin.mimo_api_key):
+        return "未开启 MiMo"
     text = await analyze_video_with_mimo(
         video_path=video_path,
         api_key=plugin.mimo_api_key,
@@ -142,7 +156,7 @@ async def _analyze_mimo(plugin, video_path: str, prompt: str):
     return {"analysis": text, "method": "mimo", "model": plugin.mimo_model} if text else "MiMo 返回空结果"
 
 
-async def _analyze_local_asr(plugin, video_path: str, prompt: str):
+async def _analyze_local_asr(plugin, video_path: str, prompt: str, event=None):
     if not local_asr_available():
         return "未安装 funasr"
     asr_result = await local_asr_analyze_video(video_path)
@@ -155,10 +169,10 @@ async def _analyze_local_asr(plugin, video_path: str, prompt: str):
     }
 
 
-_ANALYZERS = {"gemini": _analyze_gemini, "mimo": _analyze_mimo, "local_asr": _analyze_local_asr}
+_ANALYZERS = {"llm": _analyze_llm, "gemini": _analyze_gemini, "mimo": _analyze_mimo, "local_asr": _analyze_local_asr}
 
 
-async def handle_understand_video(plugin, video_source: str, prompt: str = None) -> dict:
+async def handle_understand_video(plugin, video_source: str, prompt: str = None, event=None) -> dict:
     """
     深度理解视频内容。
 
@@ -238,7 +252,7 @@ async def handle_understand_video(plugin, video_source: str, prompt: str = None)
         errors = []
         for method in _method_order(plugin.video_understand_method):
             try:
-                result = await _ANALYZERS[method](plugin, video_path, analysis_prompt)
+                result = await _ANALYZERS[method](plugin, video_path, analysis_prompt, event)
             except Exception as e:
                 logger.warning(f"[understand_video] {method} 分析异常: {e}")
                 result = None

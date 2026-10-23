@@ -157,7 +157,12 @@ async def _process_douyin_images_comprehension(plugin, event, media_urls, aweme_
             yield event.plain_result("正在使用AI分析图片内容...")
 
         prompt = "请详细描述这些图片的内容，包括场景、人物、物品、文字信息和传达的核心信息。如果是多张图片，请分别描述每张图片的内容。"
-        image_response = await process_images_with_gemini(gcfg, prompt, image_paths)
+        if gcfg and plugin.video_understand_method == "gemini":
+            image_response = await process_images_with_gemini(gcfg, prompt, image_paths)
+        else:
+            from ..services.browse_service import describe_images
+
+            image_response = (await describe_images(plugin, event, image_paths, prompt), None)
 
         if image_response and image_response[0]:
             for image_path in image_paths:
@@ -258,18 +263,14 @@ async def handle_douyin_parse(plugin, event):
         if plugin.show_progress_messages:
             yield event.plain_result("我看到了一个抖音视频链接，让我来仔细分析一下内容，请稍等一下...")
 
-        gcfg = resolve_gemini_config(plugin)
-
-        if not gcfg:
-            yield event.plain_result(GEMINI_MISSING_MSG)
-        else:
-            try:
-                async for response in _process_douyin_comprehension(plugin, event, result, content_type, gcfg):
-                    yield response
-                return
-            except Exception as e:
-                logger.error(f"处理抖音视频理解时发生错误: {e}")
-                yield event.plain_result("抱歉，处理这个视频时出现了一些问题，将使用常规模式解析。")
+        gcfg = resolve_gemini_config(plugin)  # 未开启 Gemini 时为 None，走抽帧 + ASR + 对话模型
+        try:
+            async for response in _process_douyin_comprehension(plugin, event, result, content_type, gcfg):
+                yield response
+            return
+        except Exception as e:
+            logger.error(f"处理抖音视频理解时发生错误: {e}")
+            yield event.plain_result("抱歉，处理这个视频时出现了一些问题，将使用常规模式解析。")
 
     # 常规解析流程
     media_count = len(result.get("media_urls", []))
