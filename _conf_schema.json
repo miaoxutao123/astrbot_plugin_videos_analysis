@@ -96,6 +96,12 @@
         "default": "",
         "hint": "留空：插件 key 默认 gemini-2.5-flash；复用框架 Provider 时沿用其模型。中转站请填它实际提供的模型名"
     },
+    "gemini_fallback_models": {
+        "description": "Gemini 备用模型",
+        "type": "string",
+        "default": "",
+        "hint": "逗号分隔。主模型返回 5xx/404（上游故障、模型下线）时依次改用，如 gemini-3.5-flash-lite,gemini-3.1-flash-lite"
+    },
     "gemini_inline_limit_mb": {
         "description": "内联上传阈值（MB）",
         "type": "float",
@@ -212,5 +218,44 @@
         "type": "bool",
         "hint": "结果按作品缓存，每个作品只分析一次",
         "default": true
+    },
+    "browse_asr_api_base": {
+        "description": "浏览用线上 ASR 地址（OpenAI 兼容）",
+        "type": "string",
+        "default": "",
+        "hint": "如 SiliconFlow 免费的 https://api.siliconflow.cn/v1 ，或 new-api 中转站 https://xxx/v1 。留空则依次尝试 B站字幕 → 框架 STT → 本地 funasr"
+    },
+    "browse_asr_api_key": {
+        "description": "浏览用线上 ASR Key",
+        "type": "string",
+        "default": ""
+    },
+    "browse_asr_model": {
+        "description": "浏览用 ASR 模型",
+        "type": "string",
+        "default": "FunAudioLLM/SenseVoiceSmall",
+        "hint": "SiliconFlow 免费：FunAudioLLM/SenseVoiceSmall；中转站按其模型名填写（如 sensevoicesmall）"
+    },
+    "browse_asr_max_minutes": {
+        "description": "转写最长时长（分钟）",
+        "type": "int",
+        "default": 15,
+        "hint": "超出部分不转写，控制耗时和流量"
+    },
+    "browse_max_frames": {
+        "description": "浏览抽帧数",
+        "type": "int",
+        "default": 6
+    },
+    "browse_report_history": {
+        "description": "浏览后写入B站观看历史",
+        "type": "bool",
+        "default": true,
+        "hint": "登录状态下 /bili_watch 会上报播放心跳和历史记录，让账号行为更像真人"
+    },
+    "browse_report_seconds": {
+        "description": "上报的观看时长（秒）",
+        "type": "int",
+        "default": 60
     }
 }

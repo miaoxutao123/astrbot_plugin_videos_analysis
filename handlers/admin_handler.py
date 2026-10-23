@@ -43,7 +43,7 @@ async def handle_bili_login(plugin, event):
 
     nap_path = await send_file_if_needed(image_path, plugin.nap_server_address, plugin.nap_server_port)
     yield event.chain_result([Comp.Image.fromFileSystem(nap_path)])
-    yield event.plain_result("请使用B站APP扫描上方二维码登录（40秒内有效）")
+    yield event.plain_result("请使用B站APP扫描上方二维码登录（2 分钟内有效）")
 
     cookies = await bili_check_login_status_loop(qr_data["qrcode_key"])
     if cookies:

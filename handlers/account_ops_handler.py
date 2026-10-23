@@ -2,6 +2,7 @@
 账号运维 & 创作者操作命令（只做参数解析与渲染，逻辑在 AccountManager / CreatorOps）
 """
 
+import re
 import time
 
 import astrbot.api.message_components as Comp
@@ -20,10 +21,20 @@ def command_args(event, *names: str) -> list[str]:
     return parts
 
 
+_BILI_REF = re.compile(r"BV1[0-9A-Za-z]{9}|bilibili\.com/video/|b23\.tv/|bili2233\.cn/|^av\d+$", re.I)
+
+
 def _take_platform(args: list[str]) -> tuple[str, list[str]]:
+    """第一个参数是平台名就取走；否则按链接猜（B站链接/BV/av 号 → bilibili），默认抖音。"""
     if args and normalize_platform(args[0]):
         return normalize_platform(args[0]), args[1:]
+    if args and _BILI_REF.search(args[0]):
+        return "bilibili", args
     return "douyin", args
+
+
+def _cmd_prefix(platform: str) -> str:
+    return "" if platform == "douyin" else f"{platform} "
 
 
 # ── 巡检 / 告警 ──────────────────────────────────────────
@@ -112,7 +123,11 @@ async def handle_works(plugin, event):
     for i, w in enumerate(works, 1):
         ts = time.strftime("%m-%d %H:%M", time.localtime(w.create_time)) if w.create_time else ""
         lines.append(f"{i}. {w.title[:30]}  👍{w.digg} 💬{w.comments}  {ts}\n   {w.id}")
-    lines.append("\n/va_reply <序号> 精选评论回复 · /va_delete <序号> 删除")
+    pre = _cmd_prefix(platform)
+    tail = f"\n/va_reply {pre}<序号> 精选评论回复 · /va_comment {pre}<序号> [内容] 发评论"
+    if platform == "douyin":
+        tail += " · /va_delete <序号> 删除"
+    lines.append(tail)
     yield event.plain_result("\n".join(lines))
 
 
@@ -195,6 +210,35 @@ async def handle_reply(plugin, event):
     yield event.plain_result(res if isinstance(res, str) else plugin.creator_ops.render_preview(res))
 
 
+async def handle_comment(plugin, event):
+    platform, args = _take_platform(command_args(event, "va_comment"))
+    if not args:
+        yield event.plain_result(
+            "用法: /va_comment [平台] <序号|链接|BV号> [评论内容]\n"
+            "不写内容时会结合视频内容由 AI 起草，确认前可 /va_edit <确认码> 1 <新内容> 修改。"
+        )
+        return
+    ref, text = args[0], " ".join(args[1:]).strip()
+    try:
+        work = _work_from_index(plugin, platform, ref)
+    except ValueError as e:
+        yield event.plain_result(str(e))
+        return
+    if not text:
+        yield event.plain_result("正在理解视频并起草评论（约 10~60 秒）...")
+    try:
+        res = await plugin.creator_ops.prepare_comment(event, platform, work.id if work else ref, text)
+    except Exception as e:
+        yield event.plain_result(f"准备评论失败: {e}")
+        return
+    yield event.plain_result(res if isinstance(res, str) else plugin.creator_ops.render_preview(res))
+
+
+async def handle_bili_refresh(plugin, event):
+    force = "force" in command_args(event, "bili_refresh")
+    yield event.plain_result(await plugin.accounts.refresh_bilibili(force=force))
+
+
 async def handle_confirm(plugin, event):
     args = command_args(event, "va_confirm")
     if not args:
@@ -232,3 +276,149 @@ async def handle_pending(plugin, event):
         yield event.plain_result("没有待确认的操作")
         return
     yield event.plain_result("\n".join(f"[{o['code']}] {o['platform']}·{o['account']} {o['summary']}（剩 {o['expires_in']} 秒）" for o in ops))
+
+
+# ── B站浏览 / 账号资料 ───────────────────────────────────
+
+
+def _fmt_count(n: int) -> str:
+    return f"{n / 10000:.1f}万" if n >= 10000 else str(n)
+
+
+def _render_list(platform: str, title: str, works) -> str:
+    lines = [title]
+    for i, w in enumerate(works, 1):
+        dur = f"{w.duration // 60}:{w.duration % 60:02d}" if w.duration else ""
+        lines.append(f"{i}. {w.title[:32]}\n   UP {w.author} · ▶{_fmt_count(w.views)} 👍{_fmt_count(w.digg)} {dur} · {w.id}")
+    lines.append(f"\n/bili_watch <序号> 浏览（抽帧+语音转写）· /va_comment {_cmd_prefix(platform)}<序号> [内容] 发评论")
+    return "\n".join(lines)
+
+
+async def handle_bili_feed(plugin, event):
+    args = command_args(event, "bili_feed")
+    kind = "hot" if args and args[0] in ("hot", "热门") else "rcmd"
+    try:
+        works = await get_creator(plugin, "bilibili").feed(kind, limit=10)
+    except Exception as e:
+        yield event.plain_result(f"读取失败: {e}")
+        return
+    plugin.creator_ops.last_works["bilibili"] = works
+    yield event.plain_result(_render_list("bilibili", "B站热门：" if kind == "hot" else "B站首页推荐：", works) if works else "没有内容")
+
+
+async def handle_bili_search(plugin, event):
+    kw = " ".join(command_args(event, "bili_search")).strip()
+    if not kw:
+        yield event.plain_result("用法: /bili_search <关键词>")
+        return
+    try:
+        works = await get_creator(plugin, "bilibili").search(kw, limit=10)
+    except Exception as e:
+        yield event.plain_result(f"搜索失败: {e}")
+        return
+    plugin.creator_ops.last_works["bilibili"] = works
+    yield event.plain_result(_render_list("bilibili", f"B站搜索「{kw}」：", works) if works else f"没有搜到「{kw}」")
+
+
+async def handle_bili_watch(plugin, event):
+    from ..services.browse_service import browse_work
+
+    args = command_args(event, "bili_watch")
+    if not args:
+        yield event.plain_result("用法: /bili_watch <序号|BV号|链接>（序号来自 /bili_feed、/bili_search、/va_works bili）")
+        return
+    creator = get_creator(plugin, "bilibili")
+    try:
+        work = _work_from_index(plugin, "bilibili", args[0])
+        work_id = work.id if work else await creator.resolve_work(args[0])
+        if not work_id:
+            yield event.plain_result(f"无法识别视频: {args[0]}")
+            return
+        ctx = await creator.work_context(work_id)
+    except Exception as e:
+        yield event.plain_result(f"读取视频失败: {e}")
+        return
+    yield event.plain_result(f"正在浏览《{ctx['title'][:30]}》（下载 360P → 抽帧 + 语音转写，约 20~90 秒）...")
+    seconds = int(plugin.config.get("browse_report_seconds", 60) or 0) if plugin.config.get("browse_report_history", True) else 0
+    try:
+        res = await browse_work(plugin, event, "bilibili", work_id, ctx, report_seconds=seconds)
+    except Exception as e:
+        yield event.plain_result(f"浏览失败: {e}")
+        return
+    lines = [f"📺 {ctx['title']}\nUP {ctx.get('author', '')} · {work_id}", "", res["summary"] or "（没有生成概要）", ""]
+    try:
+        hot = await creator.hot_comments(work_id, 3)
+        if hot:
+            lines.append("🔥 热评：")
+            lines += [f"· {c.user}（👍{_fmt_count(c.digg)}）: {c.text[:60]}" for c in hot]
+    except Exception:
+        pass
+    lines.append(f"\n转写来源: {res['transcript_source']}（{res['transcript_len']} 字）· 总结: {res['method']} · 用时 {res['seconds']}s")
+    if res.get("watch_report"):
+        lines.append(f"观看记录: {res['watch_report']}")
+    lines.append(f"/va_comment {work_id} [内容] 发评论（不写内容由 AI 结合本次浏览起草）")
+    yield event.plain_result("\n".join(lines))
+
+
+async def handle_bili_profile(plugin, event):
+    try:
+        p = await get_creator(plugin, "bilibili").profile()
+    except Exception as e:
+        yield event.plain_result(f"读取资料失败: {e}")
+        return
+    text = (
+        f"B站账号: {p['uname']}（mid {p['mid']}，Lv{p['level']}{'，大会员' if p['vip'] else ''}）\n"
+        f"签名: {p['sign'] or '（空）'}\n关注 {p['following']} · 粉丝 {p['follower']} · 硬币 {p['coins']}\n\n"
+        "/bili_sign <新签名> 改签名 · /bili_avatar（附带或引用一张图）换头像"
+    )
+    chain = [Comp.Plain(text)]
+    if p.get("face"):
+        chain.insert(0, Comp.Image.fromURL(p["face"]))
+    yield event.chain_result(chain)
+
+
+async def handle_bili_sign(plugin, event):
+    text = (event.message_str or "").strip()
+    for prefix in ("/bili_sign", "bili_sign"):
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+            break
+    if not text:
+        yield event.plain_result("用法: /bili_sign <新签名>（70 字以内）")
+        return
+    try:
+        res = await plugin.creator_ops.prepare_sign(event, "bilibili", text)
+    except Exception as e:
+        yield event.plain_result(f"准备失败: {e}")
+        return
+    yield event.plain_result(res if isinstance(res, str) else plugin.creator_ops.render_preview(res))
+
+
+async def _extract_image(event) -> str | None:
+    from astrbot.core.message.components import Image, Reply
+
+    segs = list(getattr(event.message_obj, "message", []) or [])
+    for seg in list(segs):
+        if isinstance(seg, Reply) and seg.chain:
+            segs.extend(seg.chain)
+    for seg in segs:
+        if isinstance(seg, Image):
+            try:
+                return await seg.convert_to_file_path()
+            except Exception:
+                return seg.url or seg.file
+    return None
+
+
+async def handle_bili_avatar(plugin, event):
+    source = await _extract_image(event)
+    if not source:
+        yield event.plain_result("请在 /bili_avatar 消息里附带一张图片，或引用一条图片消息再发 /bili_avatar")
+        return
+    try:
+        op = await plugin.creator_ops.prepare_avatar(event, "bilibili", source)
+    except Exception as e:
+        yield event.plain_result(f"处理图片失败: {e}")
+        return
+    nap = await send_file_if_needed(op.payload["path"], plugin.nap_server_address, plugin.nap_server_port)
+    yield event.chain_result([Comp.Image.fromFileSystem(nap), Comp.Plain(plugin.creator_ops.render_preview(op))])

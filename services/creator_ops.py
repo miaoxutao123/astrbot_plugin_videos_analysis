@@ -20,7 +20,7 @@ import aiohttp
 
 from astrbot.api import logger
 
-from ..utils.paths import CREATOR_DIR, DOWNLOAD_DIR_DY, UPLOAD_DIR
+from ..utils.paths import CREATOR_DIR, UPLOAD_DIR
 from .creator import Comment, OpResult, get_creator
 
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".flv", ".avi"}
@@ -86,7 +86,7 @@ class CreatorOps:
         now = time.time()
         for code in [c for c, op in self._pending.items() if op.expires < now]:
             op = self._pending.pop(code)
-            if op.kind == "upload":
+            if op.kind in ("upload", "avatar"):
                 self._remove_staged(op.payload.get("path", ""))
 
     def pending_list(self) -> list[dict]:
@@ -105,12 +105,15 @@ class CreatorOps:
         op = self._pending.pop(code, None)
         if not op:
             return f"没有待确认的操作 {code}（可能已过期）"
-        if op.kind == "upload":
+        if op.kind in ("upload", "avatar"):
             self._remove_staged(op.payload.get("path", ""))
         return f"已取消 {code}"
 
     def edit_reply(self, code: str, index: int, text: str) -> str:
         op = self._pending.get(code)
+        if op and op.kind in ("comment", "sign"):
+            op.payload.update(text=text, drafted=False)
+            return f"已修改 {code} 的评论内容，发送 /va_confirm {code} 执行"
         if not op or op.kind != "reply":
             return f"没有待确认的评论回复 {code}"
         items = op.payload["items"]
@@ -138,6 +141,18 @@ class CreatorOps:
                 return self._render_result(f"删除 {op.payload['work_id']}", res)
             if op.kind == "reply":
                 return await self._run_replies(creator, op, picks)
+            if op.kind == "comment":
+                p = op.payload
+                res = await creator.post_comment(p["work_id"], p["text"])
+                return self._render_result(f"评论《{p.get('title') or p['work_id']}》", res)
+            if op.kind == "sign":
+                return self._render_result("修改签名", await creator.update_sign(op.payload["text"]))
+            if op.kind == "avatar":
+                try:
+                    res = await creator.update_avatar(op.payload["path"])
+                finally:
+                    self._remove_staged(op.payload["path"])
+                return self._render_result("修改头像", res)
         except Exception as e:
             logger.warning(f"[creator] 执行 {op.kind} 失败: {e}")
             return f"执行失败: {e}"
@@ -156,6 +171,13 @@ class CreatorOps:
             return f"发布《{p['title']}》 {' '.join('#' + t for t in p['tags'])}（{p['size_mb']:.1f}MB）"
         if op.kind == "delete":
             return f"删除作品 {p['work_id']}" + (f"《{p['title']}》" if p.get("title") else "")
+        if op.kind == "comment":
+            who = f"（UP：{p['author']}）" if p.get("author") else ""
+            return f"评论作品 {p['work_id']}《{p.get('title', '')}》{who}"
+        if op.kind == "sign":
+            return f"把签名改为「{p['text']}」（原签名「{p.get('old', '')}」）"
+        if op.kind == "avatar":
+            return f"更换头像（{p['size_kb']:.0f}KB）"
         return f"回复作品 {p['work_id']} 的 {len(p['items'])} 条评论"
 
     def render_preview(self, op: PendingOp) -> str:
@@ -170,6 +192,13 @@ class CreatorOps:
                 f"/va_edit {op.code} <序号> <新回复> 修改 · /va_cancel {op.code} 取消（{int(op.expires - time.time())} 秒内有效）"
             )
             return "\n".join(lines)
+        if op.kind == "comment":
+            src = "（LLM 起草）" if op.payload.get("drafted") else ""
+            return (
+                f"{head}\n\n评论内容{src}：{op.payload['text']}\n\n"
+                f"/va_confirm {op.code} 发送 · /va_edit {op.code} 1 <新内容> 修改 · /va_cancel {op.code} 取消"
+                f"（{int(op.expires - time.time())} 秒内有效）"
+            )
         return f"{head}\n\n发送 /va_confirm {op.code} 执行，/va_cancel {op.code} 取消（{int(op.expires - time.time())} 秒内有效）"
 
     # ── 发布 ─────────────────────────────────────────────
@@ -276,7 +305,19 @@ class CreatorOps:
         k = random.randint(1, min(self.reply_max, len(top)))
         return sorted(random.sample(top, k), key=lambda c: c.digg, reverse=True)
 
-    async def _video_summary(self, platform: str, work_id: str, ctx: dict) -> str:
+    def cache_summary(self, platform: str, work_id: str, text: str) -> None:
+        cache_file = os.path.join(CREATOR_DIR, "video_context.json")
+        try:
+            with open(cache_file, encoding="utf-8") as f:
+                cache = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            cache = {}
+        cache[f"{platform}:{work_id}"] = text.strip()
+        os.makedirs(CREATOR_DIR, exist_ok=True)
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=1)
+
+    async def _video_summary(self, platform: str, work_id: str, ctx: dict, event=None) -> str:
         cache_file = os.path.join(CREATOR_DIR, "video_context.json")
         try:
             with open(cache_file, encoding="utf-8") as f:
@@ -288,14 +329,23 @@ class CreatorOps:
             return cache[key]
         if not (self.reply_use_video and ctx.get("media_url")):
             return ""
-        from ..tools.understand_tool import handle_understand_video
-        from .douyin_service import download
+        if platform == "bilibili" and event is not None:
+            # B站走轻量浏览（字幕/线上ASR + 抽帧），结果会写进缓存
+            from .browse_service import browse_work
 
-        os.makedirs(DOWNLOAD_DIR_DY, exist_ok=True)
-        path = os.path.join(DOWNLOAD_DIR_DY, f"{work_id}.mp4")
-        if not os.path.exists(path):
-            await download(ctx["media_url"], path, self.plugin.effective_douyin_cookie)
-        if not os.path.exists(path):
+            try:
+                return (await browse_work(self.plugin, event, platform, work_id, ctx)).get("summary", "")
+            except Exception as e:
+                logger.info(f"[creator] 浏览视频失败，仅用文案起草: {e}")
+                return ""
+        from ..tools.understand_tool import handle_understand_video
+
+        try:
+            path = await get_creator(self.plugin, platform).fetch_video(work_id, ctx)
+        except Exception as e:
+            logger.info(f"[creator] 下载作品视频失败，仅用文案起草: {e}")
+            path = None
+        if not path or not os.path.exists(path):
             return ""
         # 走插件统一的视频理解流程（按 video_understand_method 选择 Gemini/MiMo/本地 ASR 并自动回退）
         res = await handle_understand_video(self.plugin, path, "用 150 字以内概括这个短视频的内容、看点和情绪基调，供博主回复评论时参考。")
@@ -358,13 +408,79 @@ class CreatorOps:
             picked = self.pick_comments(platform, comments, ctx.get("author", ""))
         if not picked:
             return f"作品 {work_id} 在 {self.reply_window_h} 小时内没有可回复的新评论（共读取 {len(comments)} 条）"
-        summary = await self._video_summary(platform, work_id, ctx)
+        summary = await self._video_summary(platform, work_id, ctx, event)
         drafts = await self._draft(event, ctx, summary, picked)
         items = [
             {"id": c.id, "user": c.user, "text": c.text, "digg": c.digg, "create_time": c.create_time, "reply": r}
             for c, r in zip(picked, drafts)
         ]
         return self._new_op("reply", platform, event, {"work_id": work_id, "items": items}, ttl=max(self.confirm_timeout, 300))
+
+    async def prepare_comment(self, event, platform: str, work_ref: str, text: str = "") -> PendingOp | str:
+        """对任意作品发一级评论；不给内容时结合视频内容由 LLM 起草，确认前可 /va_edit 修改。"""
+        creator = get_creator(self.plugin, platform)
+        logged_in, msg = await creator.check_login()
+        if not logged_in:
+            return f"{creator.label}未登录，无法发评论：{msg}"
+        work_id = await creator.resolve_work(work_ref)
+        if not work_id:
+            return f"无法识别作品：{work_ref}"
+        ctx = await creator.work_context(work_id)
+        drafted = False
+        if not text:
+            summary = await self._video_summary(platform, work_id, ctx, event)
+            text = await self._draft_comment(event, ctx, summary)
+            drafted = True
+        payload = {"work_id": work_id, "title": ctx.get("title", ""), "author": ctx.get("author", ""), "text": text, "drafted": drafted}
+        return self._new_op("comment", platform, event, payload, ttl=max(self.confirm_timeout, 300))
+
+    async def prepare_sign(self, event, platform: str, text: str) -> PendingOp | str:
+        creator = get_creator(self.plugin, platform)
+        if len(text) > 70:
+            return f"签名最多 70 字，当前 {len(text)} 字"
+        prof = await creator.profile()
+        return self._new_op("sign", platform, event, {"text": text, "old": prof.get("sign", "")})
+
+    async def prepare_avatar(self, event, platform: str, source: str) -> PendingOp:
+        from PIL import Image
+
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        dest = os.path.join(UPLOAD_DIR, f"avatar_{int(time.time())}_{secrets.token_hex(3)}.jpg")
+        tmp = ""
+        if source.startswith(("http://", "https://")):
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as s:
+                async with s.get(source) as r:
+                    r.raise_for_status()
+                    raw = await r.read()
+            tmp = dest + ".src"
+            with open(tmp, "wb") as f:
+                f.write(raw)
+            source = tmp
+        try:
+            # 统一裁成不超过 1024px 的正方形 JPEG（B站头像要求方形、<2MB）
+            with Image.open(source) as im:
+                im = im.convert("RGB")
+                side = min(im.size)
+                left, top = (im.width - side) // 2, (im.height - side) // 2
+                im.crop((left, top, left + side, top + side)).resize((min(side, 1024),) * 2).save(dest, "JPEG", quality=90)
+        finally:
+            if tmp and os.path.exists(tmp):
+                os.remove(tmp)
+        return self._new_op("avatar", platform, event, {"path": dest, "size_kb": os.path.getsize(dest) / 1024})
+
+    async def _draft_comment(self, event, ctx: dict, summary: str) -> str:
+        ctx_obj = self.plugin.context
+        provider_id = self.reply_provider or await ctx_obj.get_current_chat_provider_id(event.unified_msg_origin)
+        system = (
+            f"你是一位普通观众，要在 UP 主「{ctx.get('author') or 'UP主'}」的视频下发一条评论。风格：{self.reply_style}。\n"
+            "要求：40 字以内，针对视频具体内容，不要编造视频里没有的事实，不要引战，不要带链接或联系方式，不要自称 AI。只输出评论正文。"
+        )
+        prompt = f"视频标题：{ctx.get('title') or '（无）'}\n简介：{(ctx.get('desc') or '（无）')[:300]}\n视频内容：{summary or '（未分析）'}"
+        resp = await ctx_obj.llm_generate(chat_provider_id=provider_id, prompt=prompt, system_prompt=system)
+        text = (resp.completion_text or "").strip().strip('"“”')
+        if not text:
+            raise RuntimeError("LLM 没有返回评论内容")
+        return text
 
     async def _run_replies(self, creator, op: PendingOp, picks: list[int] | None) -> str:
         items = op.payload["items"]

@@ -12,7 +12,7 @@ import json
 import mimetypes
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
@@ -35,6 +35,7 @@ class GeminiConfig:
     inline_limit_mb: float = 20
     timeout: float = 300
     source: str = "plugin"
+    fallback_models: list[str] = field(default_factory=list)
 
     @property
     def root(self) -> str:
@@ -126,7 +127,22 @@ class GeminiClient:
     # ── 生成 ────────────────────────────────────────────
 
     async def generate(self, parts: list[dict]) -> tuple[str, float]:
-        url = f"{self.cfg.root}/v1beta/models/{self.cfg.model}:generateContent"
+        """依次尝试主模型和备用模型；只有 5xx / 404（模型不可用、上游故障）才换下一个。"""
+        models = [self.cfg.model, *[m for m in self.cfg.fallback_models if m and m != self.cfg.model]]
+        last: GeminiError | None = None
+        for i, model in enumerate(models):
+            try:
+                return await self._generate_once(model, parts)
+            except GeminiError as e:
+                last = e
+                retryable = getattr(e, "status", 0) >= 500 or getattr(e, "status", 0) == 404
+                if not retryable or i == len(models) - 1:
+                    raise
+                logger.warning(f"[gemini] {model} 不可用（HTTP {e.status}），改用备用模型 {models[i + 1]}")
+        raise last or GeminiError("没有可用模型")
+
+    async def _generate_once(self, model: str, parts: list[dict]) -> tuple[str, float]:
+        url = f"{self.cfg.root}/v1beta/models/{model}:generateContent"
         body = {"contents": [{"role": "user", "parts": parts}]}
         start = time.monotonic()
         async with httpx.AsyncClient(timeout=self.cfg.timeout) as client:
@@ -136,7 +152,9 @@ class GeminiClient:
                 raise GeminiError(f"请求 Gemini 失败: {e}") from e
         duration = time.monotonic() - start
         if r.status_code != 200:
-            raise GeminiError(f"Gemini HTTP {r.status_code}: {r.text[:300]}")
+            err = GeminiError(f"Gemini HTTP {r.status_code}: {r.text[:300]}")
+            err.status = r.status_code
+            raise err
         data = r.json()
         candidates = data.get("candidates") or []
         if not candidates:

@@ -28,7 +28,7 @@ from ..utils.paths import (
     HEALTH_FILE,
     POOL_FILE,
 )
-from . import bilibili_service
+from . import bili_account, bilibili_service
 from .gemini_service import test_gemini
 
 PLATFORMS = ("douyin", "bilibili", "gemini", "mimo")
@@ -176,12 +176,30 @@ class AccountManager:
             expiry, warn = _fmt_expiry(_bili_expiry(cookies))
             details = {
                 "mid": info.get("mid"), "大会员": "是" if vip else "否", "登录过期": expiry,
+                "自动续期": "可用" if cookies.get(bili_account.REFRESH_KEY) else "不可用（无 refresh_token，需重新 /bili_login）",
                 "使用登录态": "是" if self.plugin.bili_use_login else "否（bili_use_login 未开启）",
             }
             if deep:
                 details.update(await self._bili_pool_health())
             return AccountStatus("bilibili", True, f"已登录: {info.get('uname')}", details, warn=warn)
         return AccountStatus("bilibili", False, "cookie 已失效", {"处理": "发送 /bili_login 重新扫码"})
+
+    async def refresh_bilibili(self, force: bool = False) -> str:
+        """按需续期当前 B站 cookie，成功后写回 cookie 文件和账号池里的当前账号。"""
+        cookies = await bilibili_service.load_cookies()
+        if not cookies:
+            return "B站未登录，先 /bili_login 扫码"
+        new, msg = await bili_account.refresh_cookies(cookies, force=force)
+        if not new:
+            return msg
+        await bilibili_service.save_cookies_dict(new)
+        acc = self._find("bilibili", self.active_name("bilibili"))
+        if acc and str(acc.get("secret", {}).get("DedeUserID")) == str(new.get("DedeUserID")):
+            acc.update(secret=new, saved_at=time.time(), valid=True)
+            self._save_pool()
+        expiry, _ = _fmt_expiry(_bili_expiry(new))
+        logger.info(f"[accounts] B站 cookie 已续期，新过期时间 {expiry}")
+        return f"B站 cookie {msg}，新过期时间 {expiry}"
 
     async def _bili_pool_health(self) -> dict:
         """检查池里非当前的 B站账号是否还有效（便宜：一次 nav 请求/账号）。"""
@@ -421,6 +439,12 @@ class AccountManager:
 
     async def run_health_check(self, notify: bool = True) -> tuple[list[AccountStatus], list[str]]:
         """深度检查所有平台，与上次结果对比；状态变化时推送（仅变化时，不重复刷屏）。"""
+        try:
+            msg = await self.refresh_bilibili()
+            if "已续期" in msg or "失败" in msg:
+                logger.info(f"[accounts] {msg}")
+        except Exception as e:
+            logger.warning(f"[accounts] B站自动续期异常: {e}")
         statuses = await self.status_all(deep=True)
         last = self._health.setdefault("last", {})
         changes = []

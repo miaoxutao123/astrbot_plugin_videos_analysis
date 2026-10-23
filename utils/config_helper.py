@@ -26,7 +26,8 @@ def _find_framework_gemini(context):
 def resolve_gemini_config(plugin) -> GeminiConfig | None:
     """解析 Gemini 配置：插件配置的 key 优先，其次复用框架里的 Gemini Provider。"""
     model = plugin.gemini_model or ""
-    common = {"inline_limit_mb": plugin.gemini_inline_limit_mb}
+    fallbacks = [m.strip() for m in str(plugin.config.get("gemini_fallback_models", "") or "").replace("，", ",").split(",") if m.strip()]
+    common = {"inline_limit_mb": plugin.gemini_inline_limit_mb, "fallback_models": fallbacks}
     if plugin.gemini_api_key:
         return GeminiConfig(
             api_key=plugin.gemini_api_key,

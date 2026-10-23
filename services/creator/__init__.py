@@ -1,10 +1,12 @@
 from .base import Comment, CreatorPlatform, OpResult, Work
+from .bilibili import BilibiliCreator
 from .douyin import DouyinCreator
 
 REGISTRY: dict[str, type[CreatorPlatform]] = {
     "douyin": DouyinCreator,
+    "bilibili": BilibiliCreator,
 }
-ALIASES = {"dy": "douyin", "抖音": "douyin"}
+ALIASES = {"dy": "douyin", "抖音": "douyin", "bili": "bilibili", "b站": "bilibili", "B站": "bilibili"}
 
 
 def normalize_platform(name: str) -> str | None:

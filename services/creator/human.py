@@ -20,8 +20,14 @@ WRITE_LIMITS = {
         "delete": {"daily": 10, "interval": 60},
         "reply": {"daily": 30, "interval": 20},
     },
+    "bilibili": {
+        "reply": {"daily": 30, "interval": 20},
+        "comment": {"daily": 10, "interval": 60},
+        "watch": {"daily": 300, "interval": 3},
+        "profile": {"daily": 5, "interval": 60},
+    },
 }
-OP_LABEL = {"upload": "发布", "delete": "删除", "reply": "回复评论"}
+OP_LABEL = {"upload": "发布", "delete": "删除", "reply": "回复评论", "comment": "发评论", "watch": "观看上报", "profile": "修改资料"}
 # 间隔不足但差得不多时直接等，超过这个时长才拒绝
 MAX_WAIT = 90
 QUOTA_FILE = os.path.join(DATA_DIR, "creator_quota.json")

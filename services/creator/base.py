@@ -17,6 +17,9 @@ class Work:
     digg: int = 0
     comments: int = 0
     url: str = ""
+    author: str = ""
+    views: int = 0
+    duration: int = 0
 
 
 @dataclass
@@ -76,3 +79,11 @@ class CreatorPlatform(ABC):
     @abstractmethod
     async def reply_comment(self, work_id: str, comment_id: str, text: str) -> OpResult:
         """回复一条评论（只能由二次确认流程调用）。"""
+
+    async def post_comment(self, work_id: str, text: str) -> OpResult:
+        """在任意作品下发一条一级评论（只能由二次确认流程调用）。"""
+        return OpResult(False, f"{self.label or self.name}暂不支持发评论")
+
+    async def fetch_video(self, work_id: str, ctx: dict) -> str | None:
+        """把作品视频下载到本地，供视频理解使用；不支持返回 None。"""
+        return None

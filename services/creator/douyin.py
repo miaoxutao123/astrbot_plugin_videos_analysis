@@ -16,7 +16,7 @@ import time
 
 from astrbot.api import logger
 
-from ...utils.paths import IMAGE_DIR
+from ...utils.paths import DOWNLOAD_DIR_DY, IMAGE_DIR
 from .base import Comment, CreatorPlatform, OpResult, Work
 from .human import GUARD, human_click, human_fill, human_hover, human_type, pause
 
@@ -155,6 +155,17 @@ class DouyinCreator(CreatorPlatform):
             "author": info.get("author_nickname") or "",
             "media_url": urls[0] if info.get("type") == "video" and urls else "",
         }
+
+    async def fetch_video(self, work_id: str, ctx: dict) -> str | None:
+        if not ctx.get("media_url"):
+            return None
+        from ..douyin_service import download
+
+        os.makedirs(DOWNLOAD_DIR_DY, exist_ok=True)
+        path = os.path.join(DOWNLOAD_DIR_DY, f"{work_id}.mp4")
+        if not os.path.exists(path):
+            await download(ctx["media_url"], path, self.plugin.effective_douyin_cookie)
+        return path if os.path.exists(path) else None
 
     async def list_comments(self, work_id: str, max_count: int = 60) -> list[Comment]:
         out, cursor = [], 0

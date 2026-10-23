@@ -18,6 +18,7 @@ log_callback = logger.info
 
 # 路径常量
 from ..utils.paths import BILI_COOKIE_FILE as COOKIE_FILE
+from .bili_account import REFRESH_KEY, cookie_header, ensure_buvid
 from ..utils.paths import DOWNLOAD_DIR_BILI as BILI_DOWNLOAD_DIR
 from ..utils.paths import IMAGE_DIR
 
@@ -132,7 +133,7 @@ async def check_cookie_valid():
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://space.bilibili.com/",
         "Origin": "https://space.bilibili.com",
-        "Cookie": "; ".join([f"{k}={v}" for k, v in cookies.items()])
+        "Cookie": cookie_header(cookies)
     }
 
     try:
@@ -176,7 +177,7 @@ async def get_login_info(cookies: dict | None = None) -> dict | None:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://www.bilibili.com/",
-        "Cookie": "; ".join(f"{k}={v}" for k, v in cookies.items()),
+        "Cookie": cookie_header(cookies),
     }
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
@@ -443,10 +444,10 @@ async def bili_login(event=None):
     return login_task
 
 
-async def check_login_status_loop(qrcode_key):
-    """循环检查登录状态，直到登录成功或超时"""
-    logger.info("等待登录...（最多40秒）")
-    for _ in range(40):  # 最多等待90秒
+async def check_login_status_loop(qrcode_key, timeout_seconds: int = 150):
+    """循环检查登录状态，直到登录成功或超时（B站二维码本身 180 秒过期）"""
+    logger.info(f"等待登录...（最多{timeout_seconds}秒）")
+    for _ in range(timeout_seconds):
         await asyncio.sleep(1)
         status = await check_login_status(qrcode_key)
 
@@ -479,7 +480,12 @@ async def check_login_status_loop(qrcode_key):
                         if not cookies.get("SESSDATA") or not cookies.get("DedeUserID"):
                             raise ValueError("获取的Cookie格式异常")
 
-                        log_callback(f"获取到的Cookie: {cookies}")
+                        if data.get("refresh_token"):
+                            cookies[REFRESH_KEY] = data["refresh_token"]
+                        else:
+                            log_callback("扫码结果里没有 refresh_token，cookie 到期后需要重新扫码")
+                        cookies = await ensure_buvid(cookies)
+                        log_callback(f"B站登录成功: DedeUserID={cookies.get('DedeUserID')}")
 
                         await save_cookies_dict(cookies)
                         return cookies
@@ -540,7 +546,7 @@ async def get_video_download_url_with_cookie(bvid, quality=80, event=None):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:137.0) Gecko/20100101 Firefox/137.0",
         "Referer": "https://www.bilibili.com/",
-        "Cookie": "; ".join([f"{k}={v}" for k, v in cookies.items()])
+        "Cookie": cookie_header(cookies)
     }
 
     try:

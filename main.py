@@ -320,6 +320,70 @@ class hybird_videos_analysis(Star):
             yield response
 
     @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_comment")
+    async def creator_comment_command(self, event):
+        """对任意作品发评论：/va_comment [平台] <序号|链接|BV号> [内容]，不写内容由 AI 起草"""
+        from .handlers.account_ops_handler import handle_comment
+        async for response in handle_comment(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("bili_refresh")
+    async def bili_refresh_command(self, event):
+        """B站 cookie 续期：/bili_refresh [force]（平时由定时巡检自动处理）"""
+        from .handlers.account_ops_handler import handle_bili_refresh
+        async for response in handle_bili_refresh(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("bili_feed")
+    async def bili_feed_command(self, event):
+        """B站首页推荐/热门：/bili_feed [hot]"""
+        from .handlers.account_ops_handler import handle_bili_feed
+        async for response in handle_bili_feed(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("bili_search")
+    async def bili_search_command(self, event):
+        """B站搜索视频：/bili_search <关键词>"""
+        from .handlers.account_ops_handler import handle_bili_search
+        async for response in handle_bili_search(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("bili_watch")
+    async def bili_watch_command(self, event):
+        """浏览B站视频（抽帧+语音转写总结，并记入观看历史）：/bili_watch <序号|BV号|链接>"""
+        from .handlers.account_ops_handler import handle_bili_watch
+        async for response in handle_bili_watch(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("bili_profile")
+    async def bili_profile_command(self, event):
+        """查看B站账号资料"""
+        from .handlers.account_ops_handler import handle_bili_profile
+        async for response in handle_bili_profile(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("bili_sign")
+    async def bili_sign_command(self, event):
+        """修改B站签名（需确认）：/bili_sign <新签名>"""
+        from .handlers.account_ops_handler import handle_bili_sign
+        async for response in handle_bili_sign(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("bili_avatar")
+    async def bili_avatar_command(self, event):
+        """更换B站头像（需确认）：/bili_avatar 附带或引用图片"""
+        from .handlers.account_ops_handler import handle_bili_avatar
+        async for response in handle_bili_avatar(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("va_confirm")
     async def creator_confirm_command(self, event):
         """执行待确认操作：/va_confirm <确认码> [序号...]"""

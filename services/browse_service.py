@@ -1,0 +1,221 @@
+"""
+视频"浏览"：抽帧 + 语音转写 → 文字概要（不把整段视频交给多模态模型，省钱也省算力）
+
+转写按机器压力从轻到重依次尝试：
+1. 平台自带字幕（B站 CC / AI 字幕）——零算力
+2. 线上 ASR（OpenAI 兼容 /audio/transcriptions，如 SiliconFlow 免费的 SenseVoiceSmall）
+3. AstrBot 框架里配置的 STT Provider
+4. 本地 funasr（仅在已安装时，最重）
+音频统一压成 16kHz 单声道 32kbps，并按 browse_asr_max_minutes 截断，线上接口传输量很小。
+
+抽帧用 video_analysis.extract_smart_frames（场景切换 + 均匀补帧），再把关键帧 + 转写
+交给 Gemini 图文理解（只发几张小图）；Gemini 不可用时退化为只用转写和标题让框架 LLM 总结。
+"""
+
+import asyncio
+import os
+import time
+
+import aiohttp
+
+from astrbot.api import logger
+
+from . import bili_account, bilibili_service
+from .video_analysis import extract_smart_frames, local_asr_available
+
+SUMMARY_PROMPT = (
+    "下面是一个视频的元信息、语音转写和若干关键帧（按时间顺序）。"
+    "请用中文写出：1) 一句话概括；2) 主要内容 3~5 条要点；3) 视频风格与情绪。不要编造转写和画面里没有的信息。"
+)
+
+
+async def _run(cmd: list[str]) -> bool:
+    proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+    _, err = await proc.communicate()
+    if proc.returncode != 0:
+        logger.warning(f"[browse] ffmpeg 失败: {err.decode(errors='ignore')[-200:]}")
+    return proc.returncode == 0
+
+
+async def compress_audio(video_path: str, max_minutes: float) -> str | None:
+    out = os.path.splitext(video_path)[0] + "_asr.mp3"
+    ok = await _run([
+        "ffmpeg", "-y", "-loglevel", "error", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000",
+        "-b:a", "32k", "-t", str(int(max_minutes * 60)), out,
+    ])
+    return out if ok and os.path.exists(out) else None
+
+
+# ── 转写各档 ─────────────────────────────────────────────
+
+
+async def bili_subtitle(bvid: str) -> str:
+    """B站字幕（需要登录 cookie 才返回字幕列表）；优先人工中文字幕，其次 AI 字幕。"""
+    cookies = await bilibili_service.load_cookies() or {}
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as s:
+        async with s.get("https://api.bilibili.com/x/web-interface/view", params={"bvid": bvid},
+                         headers=bili_account.headers(cookies)) as r:
+            view = (await r.json(content_type=None)).get("data") or {}
+        if not view:
+            return ""
+        params = await bili_account.wbi_sign({"aid": view["aid"], "cid": view["cid"]}, cookies)
+        async with s.get("https://api.bilibili.com/x/player/wbi/v2", params=params,
+                         headers=bili_account.headers(cookies, f"https://www.bilibili.com/video/{bvid}")) as r:
+            subs = (((await r.json(content_type=None)).get("data") or {}).get("subtitle") or {}).get("subtitles") or []
+        if not subs:
+            return ""
+        subs.sort(key=lambda x: (not x.get("lan", "").startswith("zh"), x.get("lan", "").startswith("ai-")))
+        url = subs[0].get("subtitle_url", "")
+        if not url:
+            return ""
+        async with s.get("https:" + url if url.startswith("//") else url) as r:
+            body = (await r.json(content_type=None)).get("body") or []
+    return "".join(seg.get("content", "") + "，" for seg in body).strip("，")
+
+
+async def online_asr(audio_path: str, base: str, key: str, model: str) -> str:
+    form = aiohttp.FormData()
+    form.add_field("model", model)
+    form.add_field("file", open(audio_path, "rb"), filename=os.path.basename(audio_path), content_type="audio/mpeg")
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=180)) as s:
+        async with s.post(f"{base.rstrip('/')}/audio/transcriptions", data=form,
+                          headers={"Authorization": f"Bearer {key}"}) as r:
+            data = await r.json(content_type=None)
+    if r.status != 200:
+        raise RuntimeError(f"HTTP {r.status}: {str(data)[:200]}")
+    return (data.get("text") or "").strip()
+
+
+async def framework_stt(plugin, audio_path: str) -> str:
+    insts = getattr(plugin.context.provider_manager, "stt_provider_insts", []) or []
+    for prov in insts:
+        try:
+            text = await prov.get_text(os.path.abspath(audio_path))
+            if text:
+                return text.strip()
+        except Exception as e:
+            logger.info(f"[browse] 框架 STT {prov.meta().id} 失败: {e}")
+    return ""
+
+
+async def local_asr(audio_path: str) -> str:
+    from .video_analysis import transcribe_audio
+
+    res = await transcribe_audio(audio_path)
+    return (res or {}).get("text", "") if isinstance(res, dict) else ""
+
+
+async def transcribe(plugin, video_path: str, platform: str = "", work_id: str = "") -> tuple[str, str]:
+    """返回 (转写文本, 来源)。全部失败返回 ("", 原因)。"""
+    errors = []
+    if platform == "bilibili" and work_id:
+        try:
+            text = await bili_subtitle(work_id)
+            if text:
+                return text, "B站字幕"
+            errors.append("无字幕")
+        except Exception as e:
+            errors.append(f"字幕: {e}")
+
+    cfg = plugin.config
+    base, key = cfg.get("browse_asr_api_base", ""), cfg.get("browse_asr_api_key", "")
+    model = cfg.get("browse_asr_model", "") or "FunAudioLLM/SenseVoiceSmall"
+    audio = await compress_audio(video_path, float(cfg.get("browse_asr_max_minutes", 15) or 15))
+    if not audio:
+        return "", "音频提取失败（视频可能无声）"
+    try:
+        if base and key:
+            try:
+                text = await online_asr(audio, base, key, model)
+                if text:
+                    return text, f"线上ASR({model})"
+                errors.append("线上ASR 返回空")
+            except Exception as e:
+                errors.append(f"线上ASR: {e}")
+        text = await framework_stt(plugin, audio)
+        if text:
+            return text, "框架STT"
+        if local_asr_available():
+            text = await local_asr(audio)
+            if text:
+                return text, "本地ASR"
+        return "", "；".join(errors) or "未配置线上 ASR（browse_asr_api_base/key），也没有框架 STT"
+    finally:
+        try:
+            os.remove(audio)
+        except OSError:
+            pass
+
+
+# ── 总结 ─────────────────────────────────────────────────
+
+
+async def summarize(plugin, event, meta: dict, transcript: str, frames: list[str]) -> tuple[str, str]:
+    """关键帧+转写 → 概要。返回 (概要, 方式)。"""
+    info = (
+        f"标题：{meta.get('title', '')}\nUP/作者：{meta.get('author', '')}\n简介：{(meta.get('desc') or '')[:300]}\n\n"
+        f"语音转写：{transcript[:6000] or '（无）'}"
+    )
+    from ..utils.config_helper import resolve_gemini_config
+    from .gemini_service import process_images_with_gemini
+
+    gcfg = resolve_gemini_config(plugin)
+    if gcfg and frames:
+        text, _ = await process_images_with_gemini(gcfg, f"{SUMMARY_PROMPT}\n\n{info}", frames)
+        if text:
+            return text, f"关键帧×{len(frames)}+转写 → Gemini"
+    try:
+        ctx = plugin.context
+        provider_id = await ctx.get_current_chat_provider_id(event.unified_msg_origin)
+        resp = await ctx.llm_generate(chat_provider_id=provider_id, prompt=f"{SUMMARY_PROMPT}（本次没有画面，只有文字）\n\n{info}")
+        if resp.completion_text:
+            return resp.completion_text.strip(), "仅转写 → 框架LLM"
+    except Exception as e:
+        logger.warning(f"[browse] 框架 LLM 总结失败: {e}")
+    if transcript:
+        return f"（AI 总结暂不可用，以下为语音转写节选）\n{transcript[:500]}", "仅转写节选"
+    return "", "无可用的总结方式"
+
+
+async def browse(plugin, event, video_path: str, meta: dict, platform: str = "", work_id: str = "") -> dict:
+    """完整浏览流程，返回 {summary, method, transcript_source, transcript_len, frames, seconds}。"""
+    start = time.monotonic()
+    max_frames = int(plugin.config.get("browse_max_frames", 6) or 6)
+    (transcript, source), frames = await asyncio.gather(
+        transcribe(plugin, video_path, platform, work_id),
+        extract_smart_frames(video_path, max_frames=max_frames),
+    )
+    summary, method = await summarize(plugin, event, meta, transcript, frames or [])
+    return {
+        "summary": summary, "method": method, "transcript_source": source,
+        "transcript_len": len(transcript), "transcript": transcript, "frames": frames or [],
+        "seconds": round(time.monotonic() - start, 1),
+    }
+
+
+async def browse_work(plugin, event, platform: str, work_id: str, ctx: dict, report_seconds: int = 0) -> dict:
+    """下载作品 → 浏览 → 缓存概要；可选把观看写进账号历史。临时文件全部清理。"""
+    import shutil
+
+    from .creator import get_creator
+
+    creator = get_creator(plugin, platform)
+    path = await creator.fetch_video(work_id, ctx)
+    if not path or not os.path.exists(path):
+        raise RuntimeError("视频下载失败")
+    try:
+        res = await browse(plugin, event, path, ctx, platform, work_id)
+    finally:
+        shutil.rmtree(os.path.splitext(path)[0] + "_smart_frames", ignore_errors=True)
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    if res.get("summary"):
+        plugin.creator_ops.cache_summary(platform, work_id, res["summary"])
+    if report_seconds and hasattr(creator, "report_watch"):
+        try:
+            res["watch_report"] = (await creator.report_watch(work_id, report_seconds)).message
+        except Exception as e:
+            res["watch_report"] = f"上报失败: {e}"
+    return res
