@@ -192,6 +192,16 @@ class BilibiliCreator(CreatorPlatform):
     async def post_comment(self, work_id: str, text: str) -> OpResult:
         return await self._add_reply(work_id, text, op="comment")
 
+    async def delete_comment(self, work_id: str, rpid: str) -> OpResult:
+        """删除自己发的评论/回复（或自己稿件下的评论）。"""
+        try:
+            aid = await self._aid(work_id)
+            data = await self._post(f"{API}/x/v2/reply/del", {"type": 1, "oid": aid, "rpid": rpid},
+                                    referer=f"https://www.bilibili.com/video/{work_id}")
+        except Exception as e:
+            return OpResult(False, f"请求失败: {e}")
+        return OpResult(data.get("code") == 0, "已删除" if data.get("code") == 0 else self._err(data), data)
+
     # ── 浏览 ─────────────────────────────────────────────
 
     @staticmethod

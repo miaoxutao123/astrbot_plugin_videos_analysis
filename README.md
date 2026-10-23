@@ -55,7 +55,19 @@
 - **WebUI 状态页**：AstrBot WebUI → 插件页面 → 账号运维：平台状态、上次巡检结果、账号池（可切换）、待确认操作（可取消）。
   接口需 WebUI 登录，返回内容不含 cookie / key
 
-### 🎬 创作者操作（抖音，平台可扩展）
+### 📺 B站账号运维
+- **登录与续期**：`/bili_login` 扫码后保存 cookie、`refresh_token` 并补齐 buvid3/4；定时巡检时按 B站提示自动续期并写回账号池，
+  `/bili_refresh [force]` 可手动续期；`/va_accounts` 显示过期时间和"自动续期: 可用/不可用"
+- **浏览**：`/bili_feed [hot]` 首页推荐（登录后按账号口味）/热门，`/bili_search <关键词>`，
+  `/bili_watch <序号|BV|链接>` 下载 360P → **抽帧 + 语音转写** → 图文总结，附 3 条热评，并（可选）写入观看历史
+  - 转写按机器压力从轻到重：B站字幕（零算力，会校验字幕确实属于本视频）→ 线上 ASR（`browse_asr_*`，如 SiliconFlow 免费 SenseVoiceSmall）
+    → AstrBot 框架 STT → 本地 funasr
+- **评论**：`/va_works bili` 我的稿件，`/va_reply bili <序号>` 精选回复，`/va_comment <序号|BV> [内容]` 对任意视频发评论，
+  不写内容时结合浏览结果由 AI 起草；全部走预览 + `/va_confirm`
+- **资料**：`/bili_profile` 查看头像/签名/等级/粉丝，`/bili_sign <新签名>`、`/bili_avatar`（附带或引用图片，自动裁成方形）均需确认
+- 写操作有频率闸门：回复 30 次/天、发评论 10 次/天、改资料 5 次/天
+
+### 🎬 创作者操作（抖音 / B站，平台可扩展）
 > 发布、删除、回复评论都是**危险操作**：命令只生成预览和 4 位确认码，管理员发送 `/va_confirm <码>` 后才执行（默认 60 秒内有效）。
 > 操作作用于账号池里**当前使用中**的账号，预览里会写明账号名。
 
@@ -200,7 +212,15 @@ Bot：这个视频展示了...（AI详细分析）
 /va_pool use|del <平台> <名称>            → 切换 / 删除
                        添加第二个号：/va_logout douyin → /dy_login 扫新号 → /va_pool save douyin 小号
 
-# 创作者操作（[平台] 可省略，默认 douyin）
+# B站
+/bili_refresh [force]               → cookie 续期（平时巡检自动处理）
+/bili_feed [hot] · /bili_search <词> → 推荐/热门/搜索（带序号）
+/bili_watch <序号|BV|链接>           → 浏览：抽帧 + 语音转写总结，记入观看历史
+/bili_profile                       → 账号资料
+/bili_sign <新签名> · /bili_avatar   → 改签名 / 换头像（需确认）
+/va_comment [平台] <序号|链接|BV> [内容] → 发评论（不写内容由 AI 起草，需确认）
+
+# 创作者操作（[平台] 可省略，默认 douyin；B站链接/BV 号会自动识别为 bilibili）
 /va_works [平台]                    → 最近作品（带序号）
 /va_upload [平台] <标题> #话题       → 发布（附带/引用视频，或随后补发）
 /va_delete [平台] <序号|链接|ID>     → 删除作品
@@ -276,7 +296,13 @@ astrbot_plugin_videos_analysis/
 
 ## 🔄 更新日志
 
-### v0.5.0（当前版本）
+### v0.6.0（当前版本）
+- 🐛 修复 B站扫码登录：新版接口通过 Set-Cookie 下发登录态，旧代码从 URL 取 cookie 必然失败
+- 🐛 B站无登录下载改为流式写盘（长视频不再 30 秒超时）
+- 🔑 B站 refresh_token 自动续期；BilibiliCreator（稿件/评论/回复/发评论）；浏览（推荐/热门/搜索/抽帧+ASR）；资料（签名/头像）
+- ♻️ Gemini 备用模型 `gemini_fallback_models`；浏览总结逐级降级
+
+### v0.5.0
 - 🛠️ 账号运维：定时巡检 + 状态变化告警（`/va_check` `/va_notify`），登录过期提前提醒
 - 🔁 多账号池（`/va_pool`），抖音/B站风控或 cookie 失效连续失败时自动轮换
 - 📊 WebUI 插件页「账号运维」

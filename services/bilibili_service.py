@@ -241,17 +241,20 @@ async def download_video(aid, cid, bvid, quality=16):
         return None
 
     video_url = data["data"]["durl"][0]["url"]
-    video_data = await bili_request(video_url, return_json=False)
-
-    if isinstance(video_data, dict):
-        return None
-
     filename = f"{BILI_DOWNLOAD_DIR}/{bvid}.mp4"
     os.makedirs(os.path.dirname(filename), exist_ok=True)
-    async with aiofiles.open(filename, "wb") as f:
-        await f.write(video_data)
-
-    return filename
+    headers = {
+        "Referer": "https://www.bilibili.com/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    }
+    # 流式写盘，长视频不会因为 30 秒总超时或整段读进内存而失败
+    try:
+        await download_file(video_url, filename, headers)
+    except Exception:
+        if os.path.exists(filename):
+            os.remove(filename)
+        return None
+    return filename if os.path.getsize(filename) > 0 else None
 
 async def get_video_download_url_by_bvid(bvid, quality=16):
     """获取视频下载链接（无需Cookie的备用方法）"""
@@ -371,6 +374,8 @@ async def check_login_status(qrcode_key):
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.get(url, headers=headers)
             result = response.json()
+            # 新版接口扫码成功后通过 Set-Cookie 下发登录 cookie（URL 里只剩 crossDomain ticket）
+            result["_set_cookies"] = {k: v for k, v in response.cookies.items()}
             return result
     except Exception as e:
         log_callback(f"检查登录状态失败: {str(e)}")
@@ -444,6 +449,26 @@ async def bili_login(event=None):
     return login_task
 
 
+_LOGIN_COOKIE_KEYS = {
+    "_uuid", "DedeUserID", "DedeUserID__ckMd5", "SESSDATA", "bili_jct", "sid",
+    "bili_ticket", "bili_ticket_expires", "buvid_fp", "buvid3", "buvid4",
+}
+
+
+def _login_cookies(status: dict, data: dict) -> dict:
+    """扫码成功后的登录 cookie：新版在 Set-Cookie 里，旧版拼在跳转 URL 的参数里。"""
+    cookies = {k: unquote(v) for k, v in (status.get("_set_cookies") or {}).items() if v and k in _LOGIN_COOKIE_KEYS}
+    if cookies.get("SESSDATA"):
+        return cookies
+    url = data.get("url", "")
+    for param in (url.split("?", 1)[1] if "?" in url else "").split("&"):
+        if "=" in param:
+            key, value = param.split("=", 1)
+            if key in _LOGIN_COOKIE_KEYS:
+                cookies[key] = unquote(value)
+    return cookies
+
+
 async def check_login_status_loop(qrcode_key, timeout_seconds: int = 150):
     """循环检查登录状态，直到登录成功或超时（B站二维码本身 180 秒过期）"""
     logger.info(f"等待登录...（最多{timeout_seconds}秒）")
@@ -458,43 +483,19 @@ async def check_login_status_loop(qrcode_key, timeout_seconds: int = 150):
                 log_callback("\n登录成功!")
 
                 try:
-                    # 优先从URL参数获取Cookie
-                    url = data.get("url", "")
-                    if "?" in url:
-                        url_params = url.split("?")[1]
-                        cookies = {}
-                        for param in url_params.split("&"):
-                            if "=" in param:
-                                key, value = param.split("=", 1)
-                                useful_keys = [
-                                    "_uuid", "DedeUserID", "DedeUserID__ckMd5", "SESSDATA", "bili_jct",
-                                    "bili_ticket", "bili_ticket_expires", "CURRENT_FNVAL", "CURRENT_QUALITY",
-                                    "enable_feed_channel", "enable_web_push", "header_theme_version",
-                                    "home_feed_column", "LIVE_BUVID", "PVID", "browser_resolution",
-                                    "buvid_fp", "buvid3", "fingerprint"
-                                ]
-                                if key in useful_keys:
-                                    cookies[key] = unquote(value)
-
-                        # 验证提取的Cookie是否完整
-                        if not cookies.get("SESSDATA") or not cookies.get("DedeUserID"):
-                            raise ValueError("获取的Cookie格式异常")
-
-                        if data.get("refresh_token"):
-                            cookies[REFRESH_KEY] = data["refresh_token"]
-                        else:
-                            log_callback("扫码结果里没有 refresh_token，cookie 到期后需要重新扫码")
-                        cookies = await ensure_buvid(cookies)
-                        log_callback(f"B站登录成功: DedeUserID={cookies.get('DedeUserID')}")
-
-                        await save_cookies_dict(cookies)
-                        return cookies
+                    cookies = _login_cookies(status, data)
+                    if not cookies.get("SESSDATA") or not cookies.get("DedeUserID"):
+                        raise ValueError("扫码成功但没有拿到 SESSDATA/DedeUserID（接口可能又改版了）")
+                    if data.get("refresh_token"):
+                        cookies[REFRESH_KEY] = data["refresh_token"]
                     else:
-                        raise ValueError("URL格式异常，无法提取参数")
-
+                        log_callback("扫码结果里没有 refresh_token，cookie 到期后需要重新扫码")
+                    cookies = await ensure_buvid(cookies)
+                    log_callback(f"B站登录成功: DedeUserID={cookies.get('DedeUserID')}")
+                    await save_cookies_dict(cookies)
+                    return cookies
                 except Exception as e:
-                    log_callback(f"登录异常: {str(e)}")
-                    log_callback(f"原始响应数据: {data}")
+                    log_callback(f"登录异常: {e}（响应字段: {sorted(data)}，Set-Cookie: {sorted(status.get('_set_cookies') or {})}）")
                     return None
 
             elif data.get("code") == -2:
