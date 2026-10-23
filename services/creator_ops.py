@@ -21,6 +21,7 @@ import aiohttp
 from astrbot.api import logger
 
 from ..utils.paths import CREATOR_DIR, UPLOAD_DIR
+from . import audit_log
 from .creator import Comment, OpResult, get_creator
 
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".flv", ".avi"}
@@ -68,6 +69,7 @@ class CreatorOps:
         self._upload_waiters: dict[str, dict] = {}
         # 最近一次列表（作品/搜索/推荐）按"会话+平台"分别保存，群里多人同时用也不会串号
         self.last_works: dict[str, list] = {}
+        self.last_list_platform: dict[str, str] = {}
         # 待确认操作只在内存里，重载后之前暂存的发布素材都已无主，直接清掉
         shutil.rmtree(UPLOAD_DIR, ignore_errors=True)
 
@@ -77,11 +79,16 @@ class CreatorOps:
 
     def remember_list(self, event, platform: str, works: list) -> None:
         self.last_works[self._list_key(event, platform)] = works
+        self.last_list_platform[event.unified_msg_origin] = platform
         if len(self.last_works) > 500:  # 防止长期运行无限增长
             self.last_works.pop(next(iter(self.last_works)))
 
     def recall_list(self, event, platform: str) -> list:
         return self.last_works.get(self._list_key(event, platform)) or []
+
+    def recall_platform(self, event) -> str:
+        """当前会话最近一次列表来自哪个平台（用于"看第 2 个"这类按序号引用）。"""
+        return self.last_list_platform.get(event.unified_msg_origin, "")
 
     # ── 二次确认 ─────────────────────────────────────────
 
@@ -103,14 +110,15 @@ class CreatorOps:
             expires=time.time() + (ttl or self.confirm_timeout), payload=payload,
         )
         self._pending[code] = op
+        audit_log.record("created", op, summary=self._summary(op), admin=op.requester_admin)
         return op
 
     def _gc(self) -> None:
         now = time.time()
         for code in [c for c, op in self._pending.items() if op.expires < now]:
             op = self._pending.pop(code)
-            if op.kind in ("upload", "avatar"):
-                self._remove_staged(op.payload.get("path", ""))
+            audit_log.record("expired", op)
+            self._remove_op_files(op)
 
     def pending_list(self) -> list[dict]:
         self._gc()
@@ -124,12 +132,14 @@ class CreatorOps:
         self._gc()
         return code in self._pending
 
-    def cancel(self, code: str) -> str:
+    def cancel(self, code: str, event=None, via: str = "") -> str:
         op = self._pending.pop(code, None)
         if not op:
             return f"没有待确认的操作 {code}（可能已过期）"
-        if op.kind in ("upload", "avatar"):
-            self._remove_staged(op.payload.get("path", ""))
+        by, by_name = self._who(event)
+        by_name = by_name or via
+        audit_log.record("rejected", op, by=by, by_name=by_name)
+        self._remove_op_files(op)
         if not op.requester_admin:
             asyncio.create_task(self._send(op.umo, f"你提交的申请 [{code}]（{self._summary(op)}）未获管理员批准，已取消。"))
         return f"已取消 {code}"
@@ -169,8 +179,8 @@ class CreatorOps:
                 sent += 1
         if not sent:
             self._pending.pop(op.code, None)
-            if op.kind in ("upload", "avatar"):
-                self._remove_staged(op.payload.get("path", ""))
+            audit_log.record("dropped", op, error="管理员未设置审批通知会话（/va_notify）")
+            self._remove_op_files(op)
             return {"status": "rejected", "error": "该操作需要管理员批准，但管理员还没有设置审批通知会话（管理员私聊发送 /va_notify），已取消。"}
         logger.info(f"[creator] 申请 {op.code}（{op.kind}，来自 {op.requester}）已推送给 {sent} 个管理员会话")
         await self._send(op.umo, f"已提交管理员审批（申请码 {op.code}），管理员批准前不会执行。")
@@ -190,12 +200,37 @@ class CreatorOps:
         items[index - 1]["reply"] = text
         return f"已修改 {code} 第 {index} 条回复，发送 /va_confirm {code} 执行"
 
-    async def confirm(self, code: str, picks: list[int] | None = None) -> str:
+    @staticmethod
+    def _who(event) -> tuple[str, str]:
+        if event is None:
+            return "", ""
+        uid = str(event.get_sender_id())
+        return uid, str(event.get_sender_name() or uid)
+
+    @staticmethod
+    def _classify(text: str) -> tuple[str, str]:
+        """执行结果文本 → (ok/failed/partial, 失败原因)。"""
+        if m := re.match(r"评论回复完成 (\d+)/(\d+)", text):
+            done, total = int(m.group(1)), int(m.group(2))
+            fails = "；".join(re.findall(r"（([^）]+)）$", text, re.M))[:200]
+            if done == total and total:
+                return "ok", ""
+            return ("partial" if done else "failed"), fails or "全部失败"
+        if text.startswith("✅"):
+            return "ok", ""
+        first = text.splitlines()[0] if text else "无结果"
+        return "failed", re.sub(r"^❌\s*", "", first)[:200]
+
+    async def confirm(self, code: str, picks: list[int] | None = None, event=None) -> str:
         self._gc()
         op = self._pending.get(code)
         if not op:
             return f"没有待确认的操作 {code}（可能已过期，超时 {self.confirm_timeout} 秒）"
         result = await self._execute(op, picks)
+        status, error = self._classify(result)
+        approver, approver_name = self._who(event)
+        audit_log.record("approved", op, approver=approver, approver_name=approver_name,
+                         result=status, error=error, summary=self._summary(op))
         if not op.requester_admin:
             await self._send(op.umo, f"你提交的申请 [{code}] 已由管理员批准并执行：\n{result}")
         return result
@@ -212,10 +247,12 @@ class CreatorOps:
             creator = get_creator(self.plugin, op.platform, op.account_key or None)
             if op.kind == "upload":
                 p = op.payload
+                opts = dict(p.get("opts") or {})
                 try:
-                    res = await creator.upload(p["path"], p["title"], p["tags"])
+                    res = await creator.upload(p["path"], p["title"], p["tags"], **opts)
                 finally:
                     self._remove_staged(p["path"])  # 失败也清理，重发视频即可重试
+                    self._remove_staged(opts.get("cover", ""))
                 return self._render_result(f"发布《{p['title']}》", res)
             if op.kind == "delete":
                 res = await creator.delete(op.payload["work_id"], op.payload.get("title", ""))
@@ -249,7 +286,12 @@ class CreatorOps:
     def _summary(self, op: PendingOp) -> str:
         p = op.payload
         if op.kind == "upload":
-            return f"发布《{p['title']}》 {' '.join('#' + t for t in p['tags'])}（{p['size_mb']:.1f}MB）"
+            extra = ""
+            if op.platform == "bilibili":
+                o = p.get("opts") or {}
+                tid = o.get("tid") or self.plugin.config.get("bili_upload_tid", 21)
+                extra = f"，分区 {tid}，{'自定义封面' if o.get('cover') else '封面取视频第 1 秒'}"
+            return f"发布《{p['title']}》 {' '.join('#' + t for t in p['tags'])}（{p['size_mb']:.1f}MB{extra}）"
         if op.kind == "delete":
             return f"删除作品 {p['work_id']}" + (f"《{p['title']}》" if p.get("title") else "")
         if op.kind == "comment":
@@ -290,6 +332,11 @@ class CreatorOps:
 
     # ── 发布 ─────────────────────────────────────────────
 
+    def _remove_op_files(self, op: PendingOp) -> None:
+        if op.kind in ("upload", "avatar"):
+            self._remove_staged(op.payload.get("path", ""))
+            self._remove_staged((op.payload.get("opts") or {}).get("cover", ""))
+
     def _remove_staged(self, path: str) -> None:
         if path and os.path.abspath(path).startswith(os.path.abspath(UPLOAD_DIR)) and os.path.exists(path):
             os.remove(path)
@@ -314,12 +361,46 @@ class CreatorOps:
             raise ValueError("视频文件为空或下载失败")
         return dest
 
-    async def prepare_upload(self, event, platform: str, source: str, title: str, tags: list[str], account: str | None = None) -> PendingOp:
+    async def prepare_upload(self, event, platform: str, source: str, title: str, tags: list[str],
+                             account: str | None = None, opts: dict | None = None) -> PendingOp:
+        """opts（平台特有，目前 B站用）：cover=封面图路径/链接，tid=分区 ID，desc=简介。"""
         if not title:
             raise ValueError("缺少标题")
+        if platform == "bilibili" and not tags:
+            raise ValueError("B站投稿至少需要 1 个标签（#话题）")
+        opts = {k: v for k, v in (opts or {}).items() if k in ("cover", "tid", "desc", "copyright", "source") and v}
+        if platform != "bilibili":
+            opts = {}  # 抖音发布页暂不支持这些参数
+        if opts.get("cover"):
+            opts["cover"] = await self.stage_image(opts["cover"], "cover")
         path = await self.stage_video(source)
         size_mb = os.path.getsize(path) / 1048576
-        return self._new_op("upload", platform, event, {"path": path, "title": title, "tags": tags, "size_mb": size_mb}, account=account)
+        payload = {"path": path, "title": title, "tags": tags, "size_mb": size_mb, "opts": opts}
+        return self._new_op("upload", platform, event, payload, account=account)
+
+    async def stage_image(self, source: str, prefix: str) -> str:
+        """把图片（本地路径或 URL）复制到 UPLOAD_DIR 并转成 JPEG。"""
+        from PIL import Image
+
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        dest = os.path.join(UPLOAD_DIR, f"{prefix}_{int(time.time())}_{secrets.token_hex(3)}.jpg")
+        src = source
+        if source.startswith(("http://", "https://")):
+            src = dest + ".src"
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as s:
+                async with s.get(source) as r:
+                    r.raise_for_status()
+                    with open(src, "wb") as f:
+                        f.write(await r.read())
+        elif not os.path.isfile(source):
+            raise ValueError(f"找不到图片: {source[:100]}")
+        try:
+            with Image.open(src) as im:
+                im.convert("RGB").save(dest, "JPEG", quality=92)
+        finally:
+            if src != source and os.path.exists(src):
+                os.remove(src)
+        return dest
 
     def wait_for_upload(self, event, platform: str, title: str, tags: list[str]) -> None:
         key = f"{event.unified_msg_origin}|{event.get_sender_id()}"

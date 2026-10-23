@@ -58,11 +58,17 @@ def register_web_apis(plugin) -> None:
 
     async def pending_cancel(**kwargs):
         body = await request.json({}) or {}
-        return _ok({"message": ops.cancel(str(body.get("code", "")))})
+        return _ok({"message": ops.cancel(str(body.get("code", "")), via="WebUI")})
+
+    async def audit(**kwargs):
+        from ..services import audit_log
+
+        return _ok({"items": audit_log.recent(limit=50)})
 
     base = f"/{PLUGIN_NAME}"
     ctx = plugin.context
     ctx.register_web_api(f"{base}/overview", overview, ["GET"], "账号运维概览")
     ctx.register_web_api(f"{base}/check", check, ["POST"], "立即巡检账号")
     ctx.register_web_api(f"{base}/pool/use", pool_use, ["POST"], "切换账号池账号")
+    ctx.register_web_api(f"{base}/audit", audit, ["GET"], "操作审计日志")
     ctx.register_web_api(f"{base}/pending/cancel", pending_cancel, ["POST"], "取消待确认操作")

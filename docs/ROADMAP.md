@@ -4,7 +4,7 @@
 > 以及**主动浏览、评论、下载发给用户**的能力；面向小白用户，一切都能用自然语言完成，危险操作必须经管理员批准。
 > 后期与视频生成插件联动，形成“生成 → 审核 → 发布 → 互动 → 复盘”的闭环。
 
-本文档描述 v0.8 的现状、整体架构、分阶段计划和对外接口约定。
+本文档描述 v0.9 的现状、整体架构、分阶段计划和对外接口约定。
 
 ---
 
@@ -27,6 +27,7 @@ LLM 工具层 (tools/ops_tools.py)        video_browse · video_download · vide
 命令层     (handlers/*)                /bili_* /va_* /dy_* 「确认 1234」
 ───────────────────────────────────────────────────────────────────────────────
 审批层     (services/creator_ops.py)   PendingOp：记录申请人/账号/内容 → submit 推送 → 管理员确认 → _execute
+审计       (services/audit_log.py)     每个 PendingOp 的 created / approved(结果) / rejected / expired / dropped → audit.jsonl
 浏览理解层 (services/browse_service)   转写(字幕/线上ASR/STT/本地) → 按转写挑帧 → 对话模型看图总结 → 缓存
 下载分发层 (services/deliver_service)  下载 → 按大小发视频/文件 → 定时清理
 设置层     (services/settings_service) 中文设置目录 · 模糊匹配 · 体检 · 预设
@@ -45,13 +46,13 @@ LLM 工具层 (tools/ops_tools.py)        video_browse · video_download · vide
 | `list_comments(id)` / `reply_comment(id, cid, text)` | 读评论 / 回复 | 必须 |
 | `post_comment(id, text)` | 在任意作品下发评论 | 可选 |
 | `fetch_video(id, ctx, max_seconds)` | 下载（长视频只取开头） | 浏览需要 |
-| `upload(...)` / `delete(...)` | 发布 / 删除 | 可选 |
-| `feed()` / `search()` / `hot_comments()` / `report_watch()` | 浏览类 | 可选 |
+| `upload(path, title, tags, **opts)` / `delete(...)` | 发布 / 删除（opts 为平台参数，如 B站 cover/tid/desc） | 可选 |
+| `feed()` / `search()` / `hot_comments()` / `report_watch()` | 浏览类（抖音另有 `hot_words()` 热搜词） | 可选 |
 | `profile()` / `update_sign()` / `update_avatar()` | 资料 | 可选 |
 
 ---
 
-## 3. 能力矩阵（v0.8 现状）
+## 3. 能力矩阵（v0.9 现状）
 
 | 能力 | 抖音 | B站 | 说明 |
 |------|:---:|:---:|------|
@@ -59,25 +60,31 @@ LLM 工具层 (tools/ops_tools.py)        video_browse · video_download · vide
 | 自动续期 | 浏览器保持 | ✅ refresh_token | 巡检时对账号池逐个续期 |
 | 多账号池 / 指定账号执行 / 故障轮换 | ✅ | ✅ | 操作记录发起时的账号 |
 | 风控熔断 / 频率闸门 / 去重 | ✅ | ✅ | 写操作遇风控码暂停该账号 |
-| 浏览（推荐/热门/搜索） | ❌ | ✅ | 抖音待做 |
+| 浏览（推荐/热门/搜索） | ✅ | ✅ | 抖音热门为热搜词；抖音搜索需登录 |
 | 看视频（抽帧+转写） | ✅ 链接 | ✅ | 长视频只看开头、超时转后台 |
 | 下载发送给用户 | ✅ | ✅ | |
 | 我的作品 / 评论读取 / 回复 | ✅ | ✅ | |
-| 对任意视频发评论 | ❌ | ✅ | |
-| 资料（签名/头像） | ❌ | ✅ | |
-| 发布 / 删除 | ✅ | ❌ | B站投稿需分片上传 |
+| 对任意视频发评论 | ✅ | ✅ | 抖音首次写操作需"原设备扫码"验证一次 |
+| 资料（签名/头像） | ✅ | ✅ | 抖音走浏览器"编辑资料"，同上需设备验证 |
+| 发布 / 删除 | ✅ | ✅ / ⚠️ | B站分片投稿；B站 Web 删稿需短信验证码，提示手动删除 |
+| 操作审计 | ✅ | ✅ | `/va_audit`、`video_account audit`、WebUI 接口 |
 | LLM 调用 + 审批 | ✅ | ✅ | |
 
 ---
 
 ## 4. 分阶段计划
 
-### P1 · 基础运维补齐（下一版本）
-- **抖音浏览**：推荐流 / 搜索 / 热榜（复用 BrowserSigner 页面内 fetch 签名）；抖音发评论、改签名/头像/昵称
-- **B站投稿**：分片上传（`preupload` → 分片 PUT → `add/v3`），封面、分区、标签、定时发布
-- **操作审计**：每个 PendingOp 的申请人、批准人、执行结果、失败原因写入审计日志；`/va_audit` 与 WebUI 页面查看
-- **审批体验**：WebUI 审批页（列表 + 一键批准/拒绝）；批量审批；审批超时提醒
-- **账号健康分**：综合登录有效期、近 24h 风控次数、写操作成功率，低分自动降权/暂停
+### P1 · 基础运维补齐（v0.9 已完成主体）
+- ✅ **抖音浏览**：推荐流（`tab/feed`）/ 热搜词（`hot/search/list`）/ 搜索（`search/item`，需登录），全部走 BrowserSigner 页面内 fetch 签名
+- ✅ **抖音发评论、改签名/头像**：评论走 `comment/publish`；资料走个人主页"编辑资料"弹窗（提交接口 `commit/user`）。
+  实测：新设备上的抖音写操作都会弹"短信验证码 / 原设备扫码"，插件识别后点取消退出（不触发短信），提示管理员扫一次码；验证后评论、签名、头像均可正常执行
+- ✅ **B站投稿**：`preupload` → upos 初始化（需带 `filesize/partsize/biz_id`）→ 分片 PUT → 合并 → 封面上传 → `add/v3`；封面、分区、标签
+- ✅ **操作审计**：`audit.jsonl` 记录申请人、批准人、执行结果、失败原因；`/va_audit`、`video_account audit`、WebUI 接口 `audit`
+- ⏳ 抖音改昵称、B站定时发布（`dtime`）
+- ⏳ **设备验证引导**：检测到抖音"本人验证"时，把"原设备扫码"二维码推给管理员（目前需要人工操作一次浏览器）
+- ⏳ **B站删稿**：短信验证码由管理员回传（`340022`），或引导到 App 删除
+- ⏳ **审批体验**：WebUI 审批页（列表 + 一键批准/拒绝 + 审计列表）；批量审批；审批超时提醒
+- ⏳ **账号健康分**：综合登录有效期、近 24h 风控次数、写操作成功率（审计日志已提供数据），低分自动降权/暂停
 
 ### P2 · 多平台
 | 平台 | 登录 | 读 | 写 | 难点 |
@@ -128,7 +135,7 @@ LLM 工具层 (tools/ops_tools.py)        video_browse · video_download · vide
 | 项目 | v0.7 | v0.8 |
 |------|------|------|
 | 工具数量 | 16 | 5 |
-| 工具 schema（o200k 估算） | ≈1974 tokens | ≈931 tokens |
+| 工具 schema（o200k 估算） | ≈1974 tokens | ≈931 tokens（v0.9 加浏览平台参数与 audit 后 ≈1000） |
 | `watch` 结果 | 概要 + 1500 字转写节选 + 热评 | 概要 + 3 条热评（转写不进上下文） |
 | 评论列表 | 最多 40 条 × 200 字 | 最多 20 条 × 80 字 |
 | 设置列表 | — | 仅在调用 `show` 时返回；找不到设置时只返回 3 个候选 |
@@ -150,3 +157,5 @@ LLM 工具层 (tools/ops_tools.py)        video_browse · video_download · vide
 - 每次改动在临时 `qqsum-astrbot:playwright` 容器中测试，绝不在线上 bot 上测试；
 - 用真实对话模型（如 deepseek-v4.1-flash）跑自然语言用例：浏览、下载、配置、审批（含非管理员路径）；
 - 写操作只在自己的稿件上测试，测试后删除；签名等资料改完即改回。
+- v0.9 实测记录（测试容器 + deepseek-v4.1-flash）：抖音推荐/热搜/搜索/按序号观看、抖音评论（发后删除）、签名与头像（改后改回）、
+  B站 23MB 视频 3 分片投稿成功；B站删稿因短信验证码失败，需手动删除；审计覆盖成功/失败/拒绝/过期。

@@ -27,7 +27,7 @@ _BOGUS_GEMINI_BASE = "https://generative-api.google.com/v1alpha2"
     "astrbot_plugin_videos_analysis",
     "视频解析与理解",
     "抖音/B站/MC百科视频自动解析与AI理解",
-    "0.8.0",
+    "0.9.0",
     "https://github.com/Zhalslar/astrbot_plugin_videos_analysis",
 )
 class hybird_videos_analysis(Star):
@@ -154,7 +154,7 @@ class hybird_videos_analysis(Star):
     # ==================== 对其他插件开放的接口（如视频生成插件） ====================
 
     async def publish_request(self, event, video_path: str, title: str, tags: list[str] | None = None,
-                              platform: str = "douyin", account: str | None = None) -> dict:
+                              platform: str = "douyin", account: str | None = None, **opts) -> dict:
         """
         其他插件申请把视频发布到机器人的平台账号（与 LLM 工具同样走审批，管理员确认后才发布）。
 
@@ -165,6 +165,7 @@ class hybird_videos_analysis(Star):
             # res["status"] in {"pending_confirmation", "pending_admin_approval", "rejected"}
 
         video_path 可以是本地文件或 http(s) 直链；返回 dict，不会抛异常。
+        B站可选 opts：cover=封面图路径/直链，tid=分区 ID，desc=简介（不给封面就取视频第 1 秒）。
         """
         from .services.creator import normalize_platform
 
@@ -172,7 +173,7 @@ class hybird_videos_analysis(Star):
         if not plat:
             return {"status": "rejected", "error": f"不支持的平台: {platform}"}
         try:
-            op = await self.creator_ops.prepare_upload(event, plat, video_path, title, list(tags or []), account)
+            op = await self.creator_ops.prepare_upload(event, plat, video_path, title, list(tags or []), account, opts)
         except Exception as e:
             return {"status": "rejected", "error": f"准备发布失败: {e}"}
         return await self.creator_ops.submit(op)
@@ -423,10 +424,10 @@ class hybird_videos_analysis(Star):
             return  # 不是待审批的码，交给其他插件/LLM 正常处理
         verb, code = m.group(1), m.group(2)
         if verb in ("拒绝", "取消", "驳回"):
-            result = self.creator_ops.cancel(code)
+            result = self.creator_ops.cancel(code, event)
         else:
             picks = [int(x) for x in m.group(3).split()] or None
-            result = await self.creator_ops.confirm(code, picks)
+            result = await self.creator_ops.confirm(code, picks, event)
         # 结果发完再停止事件：提前 stop 会让 AstrBot 在第一条消息后就不再执行本 handler；
         # 停止事件也避免这条"确认"被当成普通对话交给 LLM
         yield event.plain_result(result)
@@ -477,6 +478,14 @@ class hybird_videos_analysis(Star):
         async for response in handle_pending(self, event):
             yield response
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_audit", alias={"操作记录"})
+    async def creator_audit_command(self, event):
+        """操作审计：/va_audit [条数] [平台] [申请码]"""
+        from .handlers.account_ops_handler import handle_audit
+        async for response in handle_audit(self, event):
+            yield response
+
     # ==================== 主动触发命令 ====================
 
     @filter.command("理解视频")
@@ -501,16 +510,17 @@ class hybird_videos_analysis(Star):
         return json.dumps(result, ensure_ascii=False, default=str, separators=(",", ":"))
 
     @filter.llm_tool(name="video_browse")
-    async def llm_video_browse(self, event, action: str, query: str = "", question: str = ""):
-        """浏览视频平台。search=搜索B站；recommend=首页推荐；hot=热门；watch=真正看视频内容（抽帧+语音转写后总结，附热评），用户问“讲了什么/内容/怎么样”时必须用 watch；info=只查标题、播放量、直链等信息，不含内容。列表结果带序号 i，后续可直接用序号。
+    async def llm_video_browse(self, event, action: str, query: str = "", question: str = "", platform: str = ""):
+        """浏览B站或抖音。search=搜索；recommend=首页推荐；hot=热门（抖音为热搜词）；watch=真正看视频内容（抽帧+语音转写后总结，附热评），用户问“讲了什么/内容/怎么样”时必须用 watch；info=只查标题、播放量、直链等信息，不含内容。列表结果带序号 i，后续可直接用序号。
 
         Args:
             action(string): search / recommend / hot / watch / info
             query(string): search 填关键词；watch/info 填 BV号、B站或抖音链接、或列表序号
             question(string): 可选，watch 时用户特别想了解的问题
+            platform(string): search/recommend/hot 用：bilibili 或 douyin，默认 bilibili；watch 自动识别
         """
         from .tools import ops_tools
-        return await self._run_tool(ops_tools.video_browse, event, action, query, question)
+        return await self._run_tool(ops_tools.video_browse, event, action, query, question, platform)
 
     @filter.llm_tool(name="video_download")
     async def llm_video_download(self, event, video: str):
@@ -524,12 +534,12 @@ class hybird_videos_analysis(Star):
 
     @filter.llm_tool(name="video_account")
     async def llm_video_account(self, event, action: str, platform: str = "", target: str = "", account: str = ""):
-        """查看机器人自己的平台账号（仅管理员）。status=各平台登录状态与账号池；works=最近作品；comments=某作品的评论；profile=B站资料。
+        """查看机器人自己的平台账号（仅管理员）。status=各平台登录状态与账号池；works=最近作品；comments=某作品的评论；profile=账号资料；audit=最近的操作申请与审批记录。
 
         Args:
-            action(string): status / works / comments / profile
+            action(string): status / works / comments / profile / audit
             platform(string): bilibili 或 douyin，默认 bilibili
-            target(string): comments 时填作品序号/BV号/链接
+            target(string): comments 时填作品序号/BV号/链接；audit 可填申请码
             account(string): 账号池里的账号名，留空=当前账号
         """
         from .tools import ops_tools
@@ -538,7 +548,7 @@ class hybird_videos_analysis(Star):
     @filter.llm_tool(name="video_action")
     async def llm_video_action(self, event, action: str, target: str = "", text: str = "", platform: str = "", account: str = "", title: str = "", tags: str = ""):
         """用机器人的平台账号执行操作。不会立即执行，只提交申请，管理员本人确认后才执行；拿到结果后如实告诉用户“已提交审批”，不要说已完成，也不要替用户确认。
-comment=在视频下发评论（text 留空则自动起草）；reply=回复自己作品的评论（text 可填只回复某人的昵称/UID）；sign=改B站签名；avatar=换B站头像（用用户发的图）；delete=删除作品；switch_account=切换当前账号；upload=发布视频。
+comment=在视频下发评论（text 留空则自动起草）；reply=回复自己作品的评论（text 可填只回复某人的昵称/UID）；sign=改签名；avatar=换头像（用用户发的图）；delete=删除作品；switch_account=切换当前账号；upload=发布视频。
 
         Args:
             action(string): comment / reply / sign / avatar / delete / switch_account / upload

@@ -3,9 +3,9 @@ LLM 工具实现（main.py 只做注册）——5 个按 action 路由的工具�
 
 | 工具                    | 权限         | action |
 |-------------------------|--------------|--------|
-| video_browse            | 所有人       | search / recommend / hot / watch / info |
+| video_browse            | 所有人       | search / recommend / hot / watch / info（B站 + 抖音）|
 | video_download          | 所有人(限频) | —（下载并发到当前会话）|
-| video_account           | 仅管理员     | status / works / comments / profile |
+| video_account           | 仅管理员     | status / works / comments / profile / audit |
 | video_action            | 申请→管理员批准 | comment / reply / sign / avatar / delete / switch_account / upload |
 | video_plugin_settings   | 仅管理员     | show / check / set（set 需批准）|
 
@@ -17,6 +17,7 @@ LLM 工具实现（main.py 只做注册）——5 个按 action 路由的工具�
 
 import json
 import os
+import re
 
 from ..handlers.account_ops_handler import _BILI_REF, _work_from_index
 from ..services.creator import get_creator, normalize_platform
@@ -29,8 +30,41 @@ def _cut(text: str, n: int) -> str:
     return text if len(text) <= n else text[:n] + "…"
 
 
-def _platform(name: str, ref: str = "") -> str:
-    return normalize_platform(name) if name else ("bilibili" if _BILI_REF.search(ref or "") else "douyin")
+def _is_index(ref: str) -> bool:
+    return bool(ref) and ref.isdigit() and len(ref) <= 2
+
+
+def _platform(name: str, ref: str = "", plugin=None, event=None) -> str:
+    """显式平台 > 列表序号跟随最近一次列表的平台 > 按链接识别（B站链接/BV/av → bilibili，其余 → douyin）。"""
+    if name and normalize_platform(name):
+        return normalize_platform(name)
+    if _is_index(ref) and plugin is not None and (last := plugin.creator_ops.recall_platform(event)):
+        return last
+    return "bilibili" if _BILI_REF.search(ref or "") else "douyin"
+
+
+_DY_PREFIX = re.compile(r"^\s*(抖音|douyin|dy)[\s:：]+", re.I)
+_BILI_PREFIX = re.compile(r"^\s*(b站|bilibili|哔哩哔哩|bili)[\s:：]+", re.I)
+
+
+_DY_WORD = re.compile(r"抖音|douyin", re.I)
+_BILI_WORD = re.compile(r"b站|bilibili|哔哩|bili", re.I)
+
+
+def _browse_platform(platform: str, query: str, user_text: str = "") -> tuple[str, str]:
+    """
+    浏览默认 B站。依次看：关键词前缀（如“抖音 猫咪”）> platform 参数 > 用户原话只提到抖音。
+    模型经常不填 platform，所以用户说“刷一下抖音推荐”时也能自动切到抖音。
+    """
+    if m := _DY_PREFIX.match(query or ""):
+        return "douyin", query[m.end():].strip()
+    if m := _BILI_PREFIX.match(query or ""):
+        return "bilibili", query[m.end():].strip()
+    if plat := normalize_platform(platform):
+        return plat, query
+    if _DY_WORD.search(user_text or "") and not _BILI_WORD.search(user_text or ""):
+        return "douyin", query
+    return "bilibili", query
 
 
 def _works_view(works, with_stats: bool = False) -> list[dict]:
@@ -50,7 +84,7 @@ def _works_view(works, with_stats: bool = False) -> list[dict]:
 
 
 async def _resolve(plugin, event, platform: str, ref: str, account: str | None):
-    work = _work_from_index(plugin, event, platform, ref) if ref and ref.isdigit() and len(ref) <= 2 else None
+    work = _work_from_index(plugin, event, platform, ref) if _is_index(ref) else None
     creator = get_creator(plugin, platform, account)
     return creator, (work.id if work else await creator.resolve_work(ref))
 
@@ -64,13 +98,18 @@ def _allow_request(plugin, event) -> dict | None:
 # ── video_browse ─────────────────────────────────────────
 
 
-async def video_browse(plugin, event, action: str, query: str = "", question: str = "") -> dict:
+async def video_browse(plugin, event, action: str, query: str = "", question: str = "", platform: str = "") -> dict:
     action = (action or "").strip().lower()
-    creator = get_creator(plugin, "bilibili")
+    plat, kw = _browse_platform(platform, query, event.message_str)
+    creator = get_creator(plugin, plat)
     if action == "search":
-        if not query:
+        if not kw:
             return {"error": "search 需要 query（关键词）"}
-        works = await creator.search(query, limit=10)
+        works = await creator.search(kw, limit=10)
+    elif action == "hot" and plat == "douyin":
+        words = await creator.hot_words(limit=10)
+        return {"platform": "douyin", "hot_words": [{"i": i, **w} for i, w in enumerate(words, 1)],
+                "tip": "这是热搜词；想看相关视频用 search 搜该词"}
     elif action in ("recommend", "hot"):
         works = await creator.feed("hot" if action == "hot" else "rcmd", limit=10)
     elif action == "watch":
@@ -82,8 +121,8 @@ async def video_browse(plugin, event, action: str, query: str = "", question: st
         return {k: v for k, v in res.items() if k not in ("cover",)}
     else:
         return {"error": "action 只能是 search / recommend / hot / watch / info"}
-    plugin.creator_ops.remember_list(event, "bilibili", works)
-    return {"platform": "bilibili", "results": _works_view(works), "tip": "watch/download/comment 可直接用 i 序号"}
+    plugin.creator_ops.remember_list(event, plat, works)
+    return {"platform": plat, "results": _works_view(works), "tip": "watch/download/comment 可直接用 i 序号"}
 
 
 async def _watch(plugin, event, video: str, question: str = "") -> dict:
@@ -99,7 +138,7 @@ async def _watch(plugin, event, video: str, question: str = "") -> dict:
 
     if not video:
         return {"error": "watch 需要 query（BV号/链接/序号）"}
-    platform = _platform("", video)
+    platform = _platform("", video, plugin, event)
     creator, work_id = await _resolve(plugin, event, platform, video, None)
     if not work_id:
         return {"error": f"无法识别视频: {video}"}
@@ -153,9 +192,10 @@ async def video_download(plugin, event, video: str) -> dict:
     if not video:
         return {"error": "需要视频链接/BV号/序号"}
     ref = video
-    if video.isdigit() and len(video) <= 2:
+    if _is_index(video):
         w = None
-        for plat in ("bilibili", "douyin"):
+        last = plugin.creator_ops.recall_platform(event)
+        for plat in dict.fromkeys(p for p in (last, "bilibili", "douyin") if p):
             try:
                 w = _work_from_index(plugin, event, plat, video)
             except ValueError:
@@ -182,7 +222,12 @@ async def video_account(plugin, event, action: str, platform: str = "", target: 
         sts = await plugin.accounts.status_all(deep=False)
         return {"accounts": [{"platform": st.platform, "ok": st.ok, "summary": st.summary} for st in sts],
                 "pool": {k: [a["name"] + ("(当前)" if a["active"] else "") for a in v] for k, v in plugin.accounts.pool_list().items()}}
-    plat = _platform(platform or "bilibili", target)
+    if action == "audit":
+        from ..services import audit_log
+
+        code = target if target.isdigit() and len(target) == 4 else ""
+        return {"audit": audit_log.compact(audit_log.recent(limit=10, code=code, platform=normalize_platform(platform) or ""))}
+    plat = _platform(platform, target, plugin, event) if (platform or target) else "bilibili"
     if action == "works":
         works = await get_creator(plugin, plat, account or None).list_works(limit=10)
         plugin.creator_ops.remember_list(event, plat, works)
@@ -196,9 +241,9 @@ async def video_account(plugin, event, action: str, platform: str = "", target: 
             {"user": c.user, "uid": c.user_id, "likes": c.digg, "text": _cut(c.text, 80)} for c in comments[:20]
         ]}
     if action == "profile":
-        p = await get_creator(plugin, "bilibili", account or None).profile()
-        return {k: v for k, v in p.items() if k != "face"}
-    return {"error": "action 只能是 status / works / comments / profile"}
+        p = await get_creator(plugin, plat, account or None).profile()
+        return {k: v for k, v in p.items() if k not in ("face", "avatar")}
+    return {"error": "action 只能是 status / works / comments / profile / audit"}
 
 
 # ── video_action（危险写：只提交申请） ─────────────────────
@@ -212,13 +257,13 @@ async def video_action(plugin, event, action: str, target: str = "", text: str =
     ops = plugin.creator_ops
     acc = account or None
     if action == "comment":
-        plat = _platform(platform, target)
+        plat = _platform(platform, target, plugin, event)
         _, work_id = await _resolve(plugin, event, plat, target, acc)
         if not work_id:
             return {"error": f"无法识别视频: {target}"}
         res = await ops.prepare_comment(event, plat, work_id, text, acc)
     elif action == "reply":
-        plat = _platform(platform, target)
+        plat = _platform(platform, target, plugin, event)
         ref = target
         if target and target.isdigit() and len(target) <= 2:
             w = _work_from_index(plugin, event, plat, target)
@@ -227,7 +272,7 @@ async def video_action(plugin, event, action: str, target: str = "", text: str =
     elif action == "sign":
         if not text:
             return {"error": "sign 需要 text（新签名）"}
-        res = await ops.prepare_sign(event, "bilibili", text, acc)
+        res = await ops.prepare_sign(event, normalize_platform(platform) or "bilibili", text, acc)
     elif action == "avatar":
         from ..handlers.account_ops_handler import _extract_image
 
@@ -236,9 +281,9 @@ async def video_action(plugin, event, action: str, target: str = "", text: str =
             return {"error": "没有找到图片：请让用户在消息里附带或引用一张图片"}
         if not source.startswith(("http://", "https://")) and not os.path.isfile(source):
             return {"error": "图片必须是 http(s) 链接或用户发送的图片"}
-        res = await ops.prepare_avatar(event, "bilibili", source, acc)
+        res = await ops.prepare_avatar(event, normalize_platform(platform) or "bilibili", source, acc)
     elif action == "delete":
-        plat = _platform(platform, target)
+        plat = _platform(platform, target, plugin, event)
         _, work_id = await _resolve(plugin, event, plat, target, acc)
         if not work_id:
             return {"error": f"无法识别作品: {target}"}

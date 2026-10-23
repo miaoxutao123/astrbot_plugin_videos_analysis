@@ -1,14 +1,15 @@
 """
-B站创作者操作：我的稿件 / 评论读取 / 回复评论 / 对任意视频发评论
+B站创作者操作：我的稿件 / 评论读取 / 回复评论 / 对任意视频发评论 / 投稿 / 删除稿件
 
 全部走 Web 接口 + 扫码登录的 cookie（不需要浏览器）：
 - 稿件列表：member.bilibili.com 创作中心接口
 - 评论：api.bilibili.com/x/v2/reply（type=1 视频，oid=aid）
 - 写操作带 csrf=bili_jct，并过 WriteGuard 频率闸门；-352/-412 等风控码会上报账号池
-发布/删除稿件暂不支持（B站投稿需分片上传，风险和复杂度都高）。
+- 投稿：preupload 拿上传凭证 → upos 分片 PUT → 合并 → 上传封面 → add/v3 提交稿件（封面、分区、标签）
 """
 
 import asyncio
+import base64
 import json
 import os
 import random
@@ -432,10 +433,159 @@ class BilibiliCreator(CreatorPlatform):
         await self._check_risk(data, write=True)
         return OpResult(False, self._err(data), data)
 
-    # ── 不支持的写操作 ───────────────────────────────────
+    # ── 投稿 / 删除稿件 ─────────────────────────────────
 
-    async def upload(self, video_path: str, title: str, tags: list[str]) -> OpResult:
-        return OpResult(False, "B站投稿暂不支持")
+    async def _upos_upload(self, video_path: str, cookies: dict) -> tuple[str, int]:
+        """分片上传视频，返回 (filename, biz_id)，供 add/v3 引用。"""
+        name = os.path.basename(video_path)
+        size = os.path.getsize(video_path)
+        headers = bili_account.headers(cookies, f"{MEMBER}/platform/upload/video/frame")
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as s:
+            async with s.get(f"{MEMBER}/preupload", params={
+                "name": name, "r": "upos", "profile": "ugcfx/bup", "ssl": 0, "version": "2.14.0.0",
+                "build": 2140000, "size": size, "upcdn": "bda2", "probe_version": 20221109,
+            }, headers=headers) as r:
+                pre = await r.json(content_type=None)
+        if pre.get("OK") != 1:
+            raise RuntimeError(f"申请上传失败: {pre.get('message') or pre}")
+        url = f"https:{pre['endpoint']}/{pre['upos_uri'].removeprefix('upos://')}"
+        up_headers = {"X-Upos-Auth": pre["auth"], "User-Agent": bili_account.UA, "Referer": "https://member.bilibili.com/"}
+        chunk_size = int(pre.get("chunk_size") or 10 * 1024 * 1024)
+        chunks = max(1, -(-size // chunk_size))
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=300)) as s:
+            init_q = f"uploads&output=json&profile=ugcfx%2Fbup&filesize={size}&partsize={chunk_size}&biz_id={pre['biz_id']}"
+            async with s.post(f"{url}?{init_q}", headers=up_headers) as r:
+                init = await r.json(content_type=None)
+            upload_id = init.get("upload_id")
+            if not upload_id:
+                raise RuntimeError(f"初始化分片上传失败: {init}")
+            with open(video_path, "rb") as f:
+                for i in range(chunks):
+                    start = i * chunk_size
+                    data = f.read(chunk_size)
+                    params = {"partNumber": i + 1, "uploadId": upload_id, "chunk": i, "chunks": chunks,
+                              "size": len(data), "start": start, "end": start + len(data), "total": size}
+                    for attempt in range(3):
+                        try:
+                            async with s.put(url, params=params, data=data, headers=up_headers) as r:
+                                if r.status == 200:
+                                    break
+                                err = f"HTTP {r.status} {(await r.text())[:100]}"
+                        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                            err = str(e) or type(e).__name__
+                        await asyncio.sleep(2 * (attempt + 1))
+                    else:
+                        raise RuntimeError(f"分片 {i + 1}/{chunks} 上传失败: {err}")
+                    logger.info(f"[bili] 投稿分片 {i + 1}/{chunks} 已上传")
+            parts = {"parts": [{"partNumber": i + 1, "eTag": "etag"} for i in range(chunks)]}
+            async with s.post(url, params={"output": "json", "name": name, "profile": "ugcfx/bup",
+                                           "uploadId": upload_id, "biz_id": pre["biz_id"]},
+                              json=parts, headers=up_headers) as r:
+                done = await r.json(content_type=None)
+        if done.get("OK") != 1:
+            raise RuntimeError(f"合并分片失败: {done}")
+        filename = os.path.splitext(os.path.basename(pre["upos_uri"]))[0]
+        return filename, int(pre["biz_id"])
+
+    @staticmethod
+    async def _make_cover(video_path: str) -> str:
+        """没给封面就从第 1 秒截一帧，补成 16:10 的 1280x800。"""
+        out = os.path.splitext(video_path)[0] + "_cover.jpg"
+        vf = "scale=1280:800:force_original_aspect_ratio=decrease,pad=1280:800:(ow-iw)/2:(oh-ih)/2"
+        for ss in ("1", "0"):
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y", "-loglevel", "error", "-ss", ss, "-i", video_path, "-frames:v", "1", "-vf", vf, "-q:v", "3", out,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+            if proc.returncode == 0 and os.path.exists(out) and os.path.getsize(out) > 1024:
+                return out
+        raise RuntimeError("无法从视频截取封面")
+
+    async def _upload_cover(self, path: str) -> str:
+        with open(path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        mime = "image/png" if path.lower().endswith(".png") else "image/jpeg"
+        data = await self._post(f"{MEMBER}/x/vu/web/cover/up", {"cover": f"data:{mime};base64,{b64}"},
+                                referer=f"{MEMBER}/platform/upload/video/frame")
+        if data.get("code") != 0:
+            await self._check_risk(data, write=True)
+            raise RuntimeError(f"上传封面失败: {self._err(data)}")
+        return data["data"]["url"]
+
+    async def upload(self, video_path: str, title: str, tags: list[str], **opts) -> OpResult:
+        """
+        投稿（只能由审批流程调用）。opts：cover=封面图路径，tid=分区 ID，desc=简介，
+        copyright=1 自制 / 2 转载（转载需 source）。
+        """
+        if reason := self._write_precheck():
+            return OpResult(False, f"已拦截：{reason}")
+        title = (title or "").strip()[:80]
+        tags = [t.strip().lstrip("#")[:20] for t in tags if t.strip().lstrip("#")][:10]
+        if not title:
+            return OpResult(False, "缺少标题")
+        if not tags:
+            return OpResult(False, "B站投稿至少需要 1 个标签（#话题）")
+        if refused := await GUARD.acquire(self.name, "upload", self._sent_key()):
+            return self._guard_refused(refused)
+        cover_tmp = ""
+        try:
+            cookies = await self._cookies()
+            filename, biz_id = await self._upos_upload(video_path, cookies)
+            cover_path = opts.get("cover") or ""
+            if not cover_path or not os.path.isfile(cover_path):
+                cover_path = cover_tmp = await self._make_cover(video_path)
+            cover_url = await self._upload_cover(cover_path)
+            copyright_ = 2 if int(opts.get("copyright") or 1) == 2 else 1
+            body = {
+                "cover": cover_url, "title": title, "copyright": copyright_,
+                "tid": int(opts.get("tid") or self.plugin.config.get("bili_upload_tid", 21) or 21),
+                "tag": ",".join(tags), "desc_format_id": 9999, "desc": (opts.get("desc") or "")[:2000],
+                "recreate": -1, "dynamic": "", "interactive": 0,
+                "videos": [{"filename": filename, "title": "", "desc": "", "cid": biz_id}],
+                "act_reserve_create": 0, "no_disturbance": 0, "no_reprint": 1,
+                "subtitle": {"open": 0, "lan": ""}, "dolby": 0, "lossless_music": 0,
+                "up_selection_reply": False, "up_close_reply": False, "up_close_danmu": False, "web_os": 3,
+            }
+            if copyright_ == 2:
+                body["source"] = (opts.get("source") or "")[:200]
+            await _pace()
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as s:
+                async with s.post(f"{MEMBER}/x/vu/web/add/v3", params={"ts": int(time.time() * 1000), "csrf": cookies.get("bili_jct", "")},
+                                  json=body, headers=bili_account.headers(cookies, f"{MEMBER}/platform/upload/video/frame")) as r:
+                    data = await r.json(content_type=None)
+        except Exception as e:
+            logger.warning(f"[bili] 投稿失败: {e}")
+            return OpResult(False, f"投稿失败: {e}")
+        finally:
+            if cover_tmp and os.path.exists(cover_tmp):
+                os.remove(cover_tmp)
+        if data.get("code") == 0:
+            d = data.get("data") or {}
+            return OpResult(True, f"已用「{self.account_label}」投稿 {d.get('bvid', '')}，B站审核通过后公开", {"bvid": d.get("bvid"), "aid": d.get("aid")})
+        await self._check_risk(data, write=True)
+        return OpResult(False, f"提交稿件失败: {self._err(data)}", data)
 
     async def delete(self, work_id: str, title: str = "") -> OpResult:
-        return OpResult(False, "B站删除稿件暂不支持")
+        if reason := self._write_precheck():
+            return OpResult(False, f"已拦截：{reason}")
+        try:
+            aid = await self._aid(work_id)
+        except RuntimeError:
+            # 审核中/未通过的稿件公开接口查不到，到自己的稿件列表里找
+            works = await self._get(f"{MEMBER}/x/web/archives", {"status": "is_pubing,pubed,not_pubed", "pn": 1, "ps": 50},
+                                    referer=f"{MEMBER}/platform/upload-manager/article")
+            arcs = [(i.get("Archive") or {}) for i in ((works.get("data") or {}).get("arc_audits") or [])]
+            aid = next((a.get("aid") for a in arcs if a.get("bvid") == work_id), None)
+            if not aid:
+                return OpResult(False, f"在自己的稿件里没找到 {work_id}")
+        if refused := await GUARD.acquire(self.name, "delete", self._sent_key()):
+            return self._guard_refused(refused)
+        data = await self._post(f"{MEMBER}/x/web/archive/delete", {"aid": aid}, referer=f"{MEMBER}/platform/upload-manager/article")
+        if data.get("code") == 0:
+            return OpResult(True, f"已删除稿件 {work_id}")
+        if data.get("code") == 340022:
+            # Web 端删稿要先给绑定手机发短信验证码，机器人不代收验证码
+            return OpResult(False, f"B站删除稿件需要短信验证码，机器人无法代为完成；请在 B站 App 或创作中心手动删除 {work_id}", data)
+        await self._check_risk(data, write=True)
+        return OpResult(False, f"删除失败: {self._err(data)}", data)

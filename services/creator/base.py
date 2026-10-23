@@ -65,8 +65,8 @@ class CreatorPlatform(ABC):
         """作品标题/文案等，供 LLM 回复时参考：{"title", "desc", "media_url"}。"""
 
     @abstractmethod
-    async def upload(self, video_path: str, title: str, tags: list[str]) -> OpResult:
-        """发布视频（危险操作，只能由二次确认流程调用）。"""
+    async def upload(self, video_path: str, title: str, tags: list[str], **opts) -> OpResult:
+        """发布视频（危险操作，只能由二次确认流程调用）。opts 为平台特有参数（如 B站 cover/tid/desc）。"""
 
     @abstractmethod
     async def delete(self, work_id: str, title: str = "") -> OpResult:

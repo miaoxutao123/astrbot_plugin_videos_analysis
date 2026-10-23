@@ -952,6 +952,7 @@ class BrowserSigner:
             "desc": aweme_detail.get("desc"),
             "create_time": aweme_detail.get("create_time"),
             "author_nickname": aweme_detail.get("author", {}).get("nickname"),
+            "duration": int((aweme_detail.get("video") or {}).get("duration") or 0) // 1000,
             "media_urls": media_urls,
         }
 

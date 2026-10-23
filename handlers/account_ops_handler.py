@@ -151,30 +151,44 @@ def _work_from_index(plugin, event, platform: str, ref: str):
     return None
 
 
+_TID_RE = re.compile(r"^(?:tid|分区)[=:：](\d+)$", re.I)
+
+
 async def handle_upload(plugin, event):
     platform, args = _take_platform(command_args(event, "va_upload"))
+    opts = {}
+    for a in list(args):
+        if m := _TID_RE.match(a):
+            opts["tid"] = int(m.group(1))
+            args.remove(a)
     title, tags = split_title_tags(" ".join(args))
     if not title:
-        yield event.plain_result(f"用法: /va_upload [平台] <标题> #话题1 #话题2\n可同时附带视频或引用一条视频消息；否则在 2 分钟内补发视频。\n支持平台: {', '.join(REGISTRY)}")
+        yield event.plain_result(
+            f"用法: /va_upload [平台] <标题> #话题1 #话题2 [tid=分区ID]\n可同时附带视频或引用一条视频消息；否则在 2 分钟内补发视频。\n"
+            f"B站：同一条消息里带一张图片作为封面（不带就取视频第 1 秒），至少 1 个 #话题。\n支持平台: {', '.join(REGISTRY)}"
+        )
         return
+    if cover := await _extract_image(event):
+        opts["cover"] = cover
     source = await plugin.creator_ops.extract_video(event)
     if not source:
         plugin.creator_ops.wait_for_upload(event, platform, title, tags)
+        plugin.creator_ops.peek_upload_waiter(event)["opts"] = opts
         yield event.plain_result(f"请在 2 分钟内发送要发布到 {platform} 的视频。")
         return
-    async for r in _prepare_upload(plugin, event, platform, source, title, tags):
+    async for r in _prepare_upload(plugin, event, platform, source, title, tags, opts):
         yield r
 
 
 async def handle_upload_video_arrived(plugin, event, waiter: dict, source: str):
     """/va_upload 之后补发的视频。"""
-    async for r in _prepare_upload(plugin, event, waiter["platform"], source, waiter["title"], waiter["tags"]):
+    async for r in _prepare_upload(plugin, event, waiter["platform"], source, waiter["title"], waiter["tags"], waiter.get("opts")):
         yield r
 
 
-async def _prepare_upload(plugin, event, platform, source, title, tags):
+async def _prepare_upload(plugin, event, platform, source, title, tags, opts=None):
     try:
-        op = await plugin.creator_ops.prepare_upload(event, platform, source, title, tags)
+        op = await plugin.creator_ops.prepare_upload(event, platform, source, title, tags, opts=opts)
     except Exception as e:
         yield event.plain_result(f"准备发布失败: {e}")
         return
@@ -261,7 +275,7 @@ async def handle_confirm(plugin, event):
         return
     picks = [int(a) for a in args[1:] if a.isdigit()]
     yield event.plain_result("执行中...")
-    text = await plugin.creator_ops.confirm(args[0], picks or None)
+    text = await plugin.creator_ops.confirm(args[0], picks or None, event)
     yield event.plain_result(text)
     shot = text.split("失败截图: ", 1)[1].strip() if "失败截图: " in text else ""
     if shot:
@@ -271,7 +285,7 @@ async def handle_confirm(plugin, event):
 
 async def handle_cancel(plugin, event):
     args = command_args(event, "va_cancel")
-    yield event.plain_result(plugin.creator_ops.cancel(args[0]) if args else "用法: /va_cancel <确认码>")
+    yield event.plain_result(plugin.creator_ops.cancel(args[0], event) if args else "用法: /va_cancel <确认码>")
 
 
 async def handle_edit(plugin, event):
@@ -288,6 +302,23 @@ async def handle_pending(plugin, event):
         yield event.plain_result("没有待确认的操作")
         return
     yield event.plain_result("\n".join(f"[{o['code']}] {o['platform']}·{o['account']} {o['summary']}（剩 {o['expires_in']} 秒）" for o in ops))
+
+
+async def handle_audit(plugin, event):
+    """/va_audit [条数] [平台] [申请码]"""
+    from ..services import audit_log
+
+    args = command_args(event, "va_audit")
+    limit, platform, code = 10, "", ""
+    for a in args:
+        if normalize_platform(a):
+            platform = normalize_platform(a)
+        elif a.isdigit() and len(a) == 4:
+            code = a
+        elif a.isdigit():
+            limit = max(1, min(50, int(a)))
+    items = audit_log.recent(limit=limit, code=code, platform=platform)
+    yield event.plain_result(("操作审计（新→旧）：\n" if items else "") + audit_log.render(items))
 
 
 # ── B站浏览 / 账号资料 ───────────────────────────────────

@@ -72,18 +72,33 @@
   （回复 30 次/天、发评论 10 次/天、改资料 5 次/天）；同一账号 24 小时内不发重复内容；内容带链接直接拦截；
   写操作遇到 -352/-412/验证码/重复评论等风控码时，该账号写操作熔断 `risk_cooldown_minutes`（默认 60 分钟）并推送告警
 
+### 🎵 抖音账号运维
+- **浏览**：推荐流、热搜词不需要登录；搜索需要 `/dy_login`。对机器人说"刷一下抖音推荐""抖音热榜有什么""在抖音搜猫咪"即可，
+  列表同样带序号，"看第 3 个"会跟随最近一次列表的平台
+- **评论**：`/va_comment douyin <序号|链接|ID> [内容]` 或让 AI 发评论，走审批；按账号计频（10 次/天，间隔 ≥60 秒）
+- **资料**：`video_action` 的 `sign` / `avatar` 传 `platform=douyin`（或对 AI 说"把我抖音签名改成…"），在已登录的浏览器里打开"编辑资料"
+  弹窗、逐字输入后保存（5 次/天，间隔 ≥5 分钟——抖音在上次修改后约 2 分钟内会忽略保存）
+- **本人验证**：抖音把机器人浏览器当作新设备，**首次写操作（评论、改资料）会要求短信验证码或"原设备扫码"**。
+  插件检测到后会点取消退出（不会触发发短信），返回提示并暂停该账号写操作；管理员用抖音 App 扫一次"原设备扫码"后即可正常使用
+- 写接口返回空响应 / 验证码时，该账号写操作熔断 `risk_cooldown_minutes` 分钟并推送告警
+
+### 🧾 操作审计
+每个待审批操作从申请到结束都写入 `data/plugin_data/astrbot_plugin_videos_analysis/audit.jsonl`：申请人、平台/账号、操作摘要、
+批准/拒绝人、执行结果（成功 / 失败 / 部分成功）和失败原因，过期、无人可审批被取消也有记录。
+`/va_audit [条数] [平台] [申请码]`（别名「操作记录」）查看；AI 可用 `video_account` 的 `audit` 查询；WebUI 接口 `GET .../audit`。
+
 ### 🤖 全部功能支持 LLM 调用（危险操作需管理员审批）
 面向小白设计：直接对机器人说"搜一下罗翔的视频""看看这个讲了什么""把这个视频发我""插件还缺什么配置"即可。
 
 | 工具 | 权限 | action |
 |------|------|--------|
-| `video_browse` | 所有人 | `search` 搜索 · `recommend` 推荐 · `hot` 热门 · `watch` 看视频（抽帧+转写总结）· `info` 链接信息 |
+| `video_browse` | 所有人 | `search` 搜索 · `recommend` 推荐 · `hot` 热门（抖音为热搜词）· `watch` 看视频（抽帧+转写总结）· `info` 链接信息；B站 / 抖音 |
 | `video_download` | 所有人（30 秒限频） | 下载视频/抖音图文并发到当前聊天 |
-| `video_account` | 仅管理员 | `status` 账号状态 · `works` 我的作品 · `comments` 评论 · `profile` 资料 |
+| `video_account` | 仅管理员 | `status` 账号状态 · `works` 我的作品 · `comments` 评论 · `profile` 资料 · `audit` 操作记录 |
 | `video_action` | 只能**提交申请** | `comment` · `reply` · `sign` · `avatar` · `delete` · `switch_account` · `upload` |
 | `video_plugin_settings` | 仅管理员 | `show` 查看 · `check` 体检 · `set` 修改（需确认） |
 
-5 个工具的定义合计约 930 tokens（原 16 个约 1970），描述为静态文本，不影响模型的提示词缓存；详见 [docs/ROADMAP.md](docs/ROADMAP.md#6-上下文与缓存评估结论v08-实测)。
+5 个工具的定义合计约 1000 tokens（原 16 个约 1970），描述为静态文本，不影响模型的提示词缓存；详见 [docs/ROADMAP.md](docs/ROADMAP.md#6-上下文与缓存评估结论v08-实测)。
 
 **提权审批**：
 - 管理员自己让 AI 操作 → 预览发回当前会话，管理员本人回复「确认 1234」（或 `/va_confirm 1234`）才执行，「拒绝 1234」取消
@@ -98,8 +113,10 @@
 > 发布、删除、回复评论都是**危险操作**：命令只生成预览和 4 位确认码，管理员发送 `/va_confirm <码>` 后才执行（默认 60 秒内有效）。
 > 操作作用于账号池里**当前使用中**的账号，预览里会写明账号名。
 
-- **发布视频**：`/va_upload 标题 #话题` 时附带视频、引用一条视频消息，或在 2 分钟内补发视频；也可让 Agent 通过 `creator_upload_video` 发起
-- **删除作品**：`/va_works` 列出最近作品，`/va_delete <序号|链接|ID>`
+- **发布视频**：`/va_upload 标题 #话题` 时附带视频、引用一条视频消息，或在 2 分钟内补发视频；也可让 Agent 通过 `video_action upload` 发起
+  - **B站投稿**：`/va_upload bilibili 标题 #话题 [tid=分区]`，preupload → upos 分片上传（失败自动重试 3 次）→ 上传封面 → `add/v3` 提交；
+    同一条消息里带一张图片作为封面，不带就取视频第 1 秒；至少 1 个话题；分区默认 `bili_upload_tid`（21=日常）；按账号 5 次/天、间隔 ≥10 分钟
+- **删除作品**：`/va_works` 列出最近作品，`/va_delete <序号|链接|ID>`。B站 Web 端删稿要求短信验证码，插件会提示到 App / 创作中心手动删除
 - **评论精选回复**：`/va_reply [序号|链接|ID]`（默认最新作品）读取 48 小时内的一级评论，按点赞取前 10 条、随机挑 1~5 条，
   结合视频内容（复用 `understand_video` 的分析流程，按作品缓存）和 `creator_reply_style` 账号风格由 LLM 起草回复；
   可 `/va_edit <码> <序号> <新回复>` 修改、`/va_confirm <码> 1 3` 只发部分。作者本人、已回复过的评论自动跳过，多条之间随机间隔 4~9 秒
@@ -197,6 +214,7 @@
 | `creator_reply_style` | 账号回复风格（给 LLM 的人设/语气） | `""` |
 | `creator_reply_provider_id` | 起草回复用的模型提供商，留空用会话默认 | `""` |
 | `creator_reply_video_understanding` | 起草前先理解视频内容 | `true` |
+| `bili_upload_tid` | B站投稿默认分区 ID（21=日常 17=单机游戏 138=搞笑 201=科学科普 95=数码） | `21` |
 
 ## 🎯 使用示例
 
@@ -249,12 +267,13 @@ Bot：这个视频展示了...（AI详细分析）
 
 # 创作者操作（[平台] 可省略，默认 douyin；B站链接/BV 号会自动识别为 bilibili）
 /va_works [平台]                    → 最近作品（带序号）
-/va_upload [平台] <标题> #话题       → 发布（附带/引用视频，或随后补发）
+/va_upload [平台] <标题> #话题 [tid=分区] → 发布（附带/引用视频，或随后补发；B站可带一张图当封面）
 /va_delete [平台] <序号|链接|ID>     → 删除作品
 /va_reply [平台] [序号|链接|ID] [@抖音号] → 评论精选回复（LLM 起草；带 @ 时只回复这个人）
 /va_confirm <码> [序号...]          → 执行待确认操作（评论回复可只发部分）
 /va_edit <码> <序号> <新回复>        → 修改待发送的回复
 /va_cancel <码> · /va_pending       → 取消 / 查看待确认操作
+/va_audit [条数] [平台] [申请码]     → 操作审计（申请人、批准人、结果、失败原因）
 ```
 
 评论精选回复示例：
@@ -303,7 +322,8 @@ astrbot_plugin_videos_analysis/
 │   ├── gemini_service   # Gemini REST 客户端
 │   ├── account_manager  # 账号状态 / 注销 / 账号池轮换 / 定时巡检
 │   ├── creator_ops      # 二次确认、评论挑选、LLM 起草（平台无关）
-│   ├── creator/         # 创作者平台实现：base.CreatorPlatform + douyin
+│   ├── audit_log        # 操作审计日志（audit.jsonl）
+│   ├── creator/         # 创作者平台实现：base.CreatorPlatform + douyin + bilibili
 │   ├── mimo_service     # MiMo 多模态
 │   └── video_analysis   # 本地 ASR + 抽帧
 ├── utils/               # 工具函数
@@ -323,7 +343,14 @@ astrbot_plugin_videos_analysis/
 
 ## 🔄 更新日志
 
-### v0.8.0（当前版本）
+### v0.9.0（当前版本）
+- 🎵 抖音浏览：推荐流 / 热搜词 / 搜索（登录后）接入 `video_browse`，平台可由参数、关键词前缀或用户原话自动识别；按序号观看跟随最近列表的平台
+- 💬 抖音发评论、改签名、换头像（浏览器内"编辑资料"）；识别"短信验证 / 原设备扫码"本人验证并安全退出
+- 📤 B站投稿：分片上传 + 封面（自定义或自动截帧）+ 分区 + 标签；`publish_request` 支持 `cover / tid / desc`
+- 🧾 操作审计：`/va_audit`、`video_account audit`、WebUI 接口；记录申请人、批准人、结果与失败原因
+- 🛡️ 抖音写操作改为按账号计频，并接入账号级风控熔断
+
+### v0.8.0
 - 🧭 面向小白：自然语言配置（`video_plugin_settings`：查看 / 体检 / 修改需确认，改完自动重载）；审批可直接回复「确认 1234」
 - 🎞️ 看视频：按转写挑帧（对话模型判断哪些时刻要看画面），无转写按时长切帧；临时文件独立目录、用完即删；长视频截取开头、超时转后台
 - 📥 下载发送：`/va_download`（别名「下载视频」）与 `video_download` 工具，B站/抖音

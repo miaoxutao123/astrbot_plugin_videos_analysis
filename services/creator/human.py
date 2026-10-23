@@ -19,8 +19,13 @@ WRITE_LIMITS = {
         "upload": {"daily": 3, "interval": 600},
         "delete": {"daily": 10, "interval": 60},
         "reply": {"daily": 30, "interval": 20},
+        "comment": {"daily": 10, "interval": 60},
+        # 抖音网页在上次改资料后约 2 分钟内会忽略“保存”，间隔放宽到 5 分钟
+        "profile": {"daily": 5, "interval": 300},
     },
     "bilibili": {
+        "upload": {"daily": 5, "interval": 600},
+        "delete": {"daily": 10, "interval": 60},
         "reply": {"daily": 30, "interval": 20},
         "comment": {"daily": 10, "interval": 60},
         "watch": {"daily": 300, "interval": 3},

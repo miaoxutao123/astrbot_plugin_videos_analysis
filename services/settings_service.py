@@ -27,6 +27,7 @@ CATALOG: dict[str, tuple[str, str, str, bool]] = {
     # B站
     "bili_quality": ("B站下载清晰度", "int", "画质/分辨率：16=360P 32=480P 64=720P 80=1080P", False),
     "bili_use_login": ("B站用登录态下载", "bool", "登录后可下高清", False),
+    "bili_upload_tid": ("B站投稿分区", "int", "分区 ID：21=日常 17=单机游戏 138=搞笑 201=科学科普 95=数码", False),
     # 账号运维与审批
     "llm_allow_non_admin_requests": ("允许普通用户申请操作", "bool", "普通用户让 AI 发评论等，会推送给管理员审批", False),
     "max_pending_per_user": ("每人待审批上限", "int", "", False),
