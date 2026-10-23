@@ -27,7 +27,7 @@ _BOGUS_GEMINI_BASE = "https://generative-api.google.com/v1alpha2"
     "astrbot_plugin_videos_analysis",
     "视频解析与理解",
     "抖音/B站/MC百科视频自动解析与AI理解",
-    "0.6.0",
+    "0.7.0",
     "https://github.com/Zhalslar/astrbot_plugin_videos_analysis",
 )
 class hybird_videos_analysis(Star):
@@ -452,17 +452,166 @@ class hybird_videos_analysis(Star):
         result = await handle_understand_video(self, video_source, prompt or None)
         return json.dumps(result, ensure_ascii=False)
 
+    async def _run_tool(self, fn, event, *args):
+        """统一执行运维类 LLM 工具：异常转成 error 返回，结果序列化为 JSON。"""
+        try:
+            result = await fn(self, event, *args)
+        except Exception as e:
+            logger.warning(f"[llm_tool] {fn.__name__} 失败: {e}")
+            result = {"error": str(e)[:300]}
+        return json.dumps(result, ensure_ascii=False, default=str)
+
+    @filter.llm_tool(name="bili_search_videos")
+    async def llm_bili_search_videos(self, event, keyword: str):
+        """在B站搜索视频，返回带序号的结果（序号可直接用于 browse_video / post_comment）。
+
+        Args:
+            keyword(string): 搜索关键词
+        """
+        from .tools import ops_tools
+        return await self._run_tool(ops_tools.search_videos, event, keyword)
+
+    @filter.llm_tool(name="bili_feed")
+    async def llm_bili_feed(self, event, kind: str = ""):
+        """获取B站首页推荐或热门视频列表（带序号）。
+
+        Args:
+            kind(string): rcmd=首页推荐（默认），hot=热门
+        """
+        from .tools import ops_tools
+        return await self._run_tool(ops_tools.feed, event, kind)
+
+    @filter.llm_tool(name="browse_video")
+    async def llm_browse_video(self, event, video: str):
+        """浏览一个视频：抽取关键帧 + 语音转写（优先平台字幕），总结视频内容并附热门评论。比 understand_video 便宜，适合“看看这个视频讲了什么”。
+
+        Args:
+            video(string): B站 BV号/链接/b23短链、抖音链接，或上一次列表里的序号
+        """
+        from .tools import ops_tools
+        return await self._run_tool(ops_tools.browse_video, event, video)
+
+    @filter.llm_tool(name="video_account_status")
+    async def llm_video_account_status(self, event):
+        """查看机器人各平台账号（抖音/B站）的登录、过期时间、账号池与 AI 服务状态。仅管理员。
+        """
+        from .tools import ops_tools
+        return await self._run_tool(ops_tools.account_status, event)
+
+    @filter.llm_tool(name="list_my_works")
+    async def llm_list_my_works(self, event, platform: str = "", account: str = ""):
+        """列出机器人账号最近发布的作品（带序号）。仅管理员。
+
+        Args:
+            platform(string): bilibili 或 douyin，默认 bilibili
+            account(string): 账号池里的账号名，留空=当前账号
+        """
+        from .tools import ops_tools
+        return await self._run_tool(ops_tools.list_works, event, platform, account)
+
+    @filter.llm_tool(name="list_work_comments")
+    async def llm_list_work_comments(self, event, work: str, platform: str = "", account: str = ""):
+        """读取某个作品的一级评论列表。仅管理员。
+
+        Args:
+            work(string): 作品序号/BV号/链接
+            platform(string): 可留空自动识别
+            account(string): 账号名，留空=当前账号
+        """
+        from .tools import ops_tools
+        return await self._run_tool(ops_tools.list_comments, event, work, platform, account)
+
+    @filter.llm_tool(name="bili_account_profile")
+    async def llm_bili_account_profile(self, event, account: str = ""):
+        """查看B站账号资料：昵称、签名、等级、粉丝、硬币。仅管理员。
+
+        Args:
+            account(string): 账号名，留空=当前账号
+        """
+        from .tools import ops_tools
+        return await self._run_tool(ops_tools.profile, event, account)
+
+    @filter.llm_tool(name="post_comment")
+    async def llm_post_comment(self, event, video: str, text: str = "", account: str = ""):
+        """用机器人的账号在视频下发表评论。不会立即执行：只提交申请，管理员亲自发送 /va_confirm 批准后才执行。拿到结果后如实告诉用户“已提交审批”，不要说已完成。
+
+        Args:
+            video(string): 目标视频：BV号/链接/列表序号
+            text(string): 评论内容，留空则结合视频内容自动起草
+            account(string): 用哪个账号发，留空=当前账号
+        """
+        from .tools import ops_tools
+        return await self._run_tool(ops_tools.request_comment, event, video, text, account)
+
+    @filter.llm_tool(name="reply_comments")
+    async def llm_reply_comments(self, event, work: str = "", target: str = "", platform: str = "", account: str = ""):
+        """为自己作品下的评论起草回复（精选或指定某人）。不会立即执行：只提交申请，管理员亲自发送 /va_confirm 批准后才执行。拿到结果后如实告诉用户“已提交审批”，不要说已完成。
+
+        Args:
+            work(string): 自己的作品序号/ID/链接，留空=最新作品
+            target(string): 只回复某人：@昵称/抖音号/UID，留空=自动精选
+            platform(string): bilibili 或 douyin，可留空自动识别
+            account(string): 账号名，留空=当前账号
+        """
+        from .tools import ops_tools
+        return await self._run_tool(ops_tools.request_reply, event, work, target, platform, account)
+
+    @filter.llm_tool(name="update_bili_signature")
+    async def llm_update_bili_signature(self, event, text: str, account: str = ""):
+        """修改B站账号签名。不会立即执行：只提交申请，管理员亲自发送 /va_confirm 批准后才执行。拿到结果后如实告诉用户“已提交审批”，不要说已完成。
+
+        Args:
+            text(string): 新签名，70字以内
+            account(string): 账号名，留空=当前账号
+        """
+        from .tools import ops_tools
+        return await self._run_tool(ops_tools.request_sign, event, text, account)
+
+    @filter.llm_tool(name="update_bili_avatar")
+    async def llm_update_bili_avatar(self, event, image: str = "", account: str = ""):
+        """更换B站头像。不会立即执行：只提交申请，管理员亲自发送 /va_confirm 批准后才执行。拿到结果后如实告诉用户“已提交审批”，不要说已完成。
+
+        Args:
+            image(string): 图片链接；留空则使用用户当前消息里附带或引用的图片
+            account(string): 账号名，留空=当前账号
+        """
+        from .tools import ops_tools
+        return await self._run_tool(ops_tools.request_avatar, event, image, account)
+
+    @filter.llm_tool(name="delete_work")
+    async def llm_delete_work(self, event, work: str, platform: str = "", account: str = ""):
+        """删除机器人账号的作品。不会立即执行：只提交申请，管理员亲自发送 /va_confirm 批准后才执行。拿到结果后如实告诉用户“已提交审批”，不要说已完成。
+
+        Args:
+            work(string): 作品序号/ID/链接
+            platform(string): 目前仅 douyin 支持删除
+            account(string): 账号名
+        """
+        from .tools import ops_tools
+        return await self._run_tool(ops_tools.request_delete, event, work, platform, account)
+
+    @filter.llm_tool(name="switch_account")
+    async def llm_switch_account(self, event, platform: str, name: str):
+        """把某平台的当前使用账号切换为账号池里的另一个账号。不会立即执行：只提交申请，管理员亲自发送 /va_confirm 批准后才执行。拿到结果后如实告诉用户“已提交审批”，不要说已完成。
+
+        Args:
+            platform(string): douyin 或 bilibili
+            name(string): 账号池里的账号名
+        """
+        from .tools import ops_tools
+        return await self._run_tool(ops_tools.request_switch_account, event, platform, name)
+
     @filter.llm_tool(name="creator_upload_video")
-    async def creator_upload_video(self, event, video_source: str, title: str, tags: str = "", platform: str = "douyin"):
-        """把视频发布到管理员的短视频账号（仅管理员可用）。不会立即发布：会生成确认码，管理员发送 /va_confirm <确认码> 后才真正发布。
+    async def creator_upload_video(self, event, video_source: str, title: str, tags: str = "", platform: str = "douyin", account: str = ""):
+        """把视频发布到机器人的短视频账号。不会立即执行：只提交申请，管理员亲自发送 /va_confirm 批准后才执行。拿到结果后如实告诉用户“已提交审批”，不要说已完成。
 
         Args:
             video_source(string): 视频直链URL或 AstrBot data 目录下的本地路径（例如用户发来视频时上下文里给出的直链）
             title(string): 作品标题/文案，30 字以内
             tags(string): 话题，空格分隔，不带 #
             platform(string): 平台，目前支持 douyin
+            account(string): 账号池里的账号名，留空=当前账号
         """
         from .tools.creator_tool import handle_creator_upload
-        result = await handle_creator_upload(self, event, video_source, title, tags, platform)
+        result = await handle_creator_upload(self, event, video_source, title, tags, platform, account)
         return json.dumps(result, ensure_ascii=False)
-

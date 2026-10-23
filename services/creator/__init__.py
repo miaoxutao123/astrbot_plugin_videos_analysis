@@ -15,7 +15,10 @@ def normalize_platform(name: str) -> str | None:
     return name if name in REGISTRY else None
 
 
-def get_creator(plugin, platform: str) -> CreatorPlatform:
+def get_creator(plugin, platform: str, account: str | None = None) -> CreatorPlatform:
+    """account：账号池里的账号名，None 表示当前使用中的账号（抖音只能用当前账号）。"""
+    if platform == "bilibili":
+        return BilibiliCreator(plugin, account)
     return REGISTRY[platform](plugin)
 
 

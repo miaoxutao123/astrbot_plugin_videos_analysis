@@ -59,13 +59,32 @@
 - **登录与续期**：`/bili_login` 扫码后保存 cookie、`refresh_token` 并补齐 buvid3/4；定时巡检时按 B站提示自动续期并写回账号池，
   `/bili_refresh [force]` 可手动续期；`/va_accounts` 显示过期时间和"自动续期: 可用/不可用"
 - **浏览**：`/bili_feed [hot]` 首页推荐（登录后按账号口味）/热门，`/bili_search <关键词>`，
-  `/bili_watch <序号|BV|链接>` 下载 360P → **抽帧 + 语音转写** → 图文总结，附 3 条热评，并（可选）写入观看历史
+  `/bili_watch <序号|BV|链接>` 下载 360P → **抽帧 + 语音转写** → 关键帧图片和转写一起交给**当前对话模型**（如新版 DeepSeek，可看图）总结，
+  附 3 条热评，并（可选）写入观看历史；模型不支持图片时改用 Gemini 看图，再不行只用转写
   - 转写按机器压力从轻到重：B站字幕（零算力，会校验字幕确实属于本视频）→ 线上 ASR（`browse_asr_*`，如 SiliconFlow 免费 SenseVoiceSmall）
     → AstrBot 框架 STT → 本地 funasr
 - **评论**：`/va_works bili` 我的稿件，`/va_reply bili <序号>` 精选回复，`/va_comment <序号|BV> [内容]` 对任意视频发评论，
   不写内容时结合浏览结果由 AI 起草；全部走预览 + `/va_confirm`
 - **资料**：`/bili_profile` 查看头像/签名/等级/粉丝，`/bili_sign <新签名>`、`/bili_avatar`（附带或引用图片，自动裁成方形）均需确认
-- 写操作有频率闸门：回复 30 次/天、发评论 10 次/天、改资料 5 次/天
+- **多账号**：`/va_pool save bilibili <名称>` 存多个号；命令加 `-a <名称>`、LLM 工具传 `account` 即可指定账号，
+  待确认操作会记住发起时的账号，确认时仍用那个号执行；定时巡检对池里每个号分别续期
+- **抗风控**：所有请求串行并随机间隔；自动补 buvid3/4 与 bili_ticket；写操作前随机停顿；按账号计的频率闸门
+  （回复 30 次/天、发评论 10 次/天、改资料 5 次/天）；同一账号 24 小时内不发重复内容；内容带链接直接拦截；
+  写操作遇到 -352/-412/验证码/重复评论等风控码时，该账号写操作熔断 `risk_cooldown_minutes`（默认 60 分钟）并推送告警
+
+### 🤖 全部功能支持 LLM 调用（危险操作需管理员审批）
+| 级别 | 工具 | 说明 |
+|------|------|------|
+| 公开读 | `bili_search_videos` `bili_feed` `browse_video` `parse_video_link` `understand_video` | 任何人都能让 AI 调用 |
+| 管理员读 | `video_account_status` `list_my_works` `list_work_comments` `bili_account_profile` | 涉及账号隐私，非管理员会被拒绝 |
+| 危险写 | `post_comment` `reply_comments` `update_bili_signature` `update_bili_avatar` `delete_work` `switch_account` `creator_upload_video` | **只提交申请** |
+
+危险写的"提权"流程：
+- 管理员自己让 AI 操作 → 预览发回当前会话，管理员本人 `/va_confirm <码>` 才执行
+- 普通用户让 AI 操作 → 申请推送到管理员的审批会话（管理员私聊发 `/va_notify` 设置），申请人只收到"已提交审批"；
+  管理员 `/va_confirm` 批准或 `/va_cancel` 拒绝后，结果会回告申请人
+- 没有任何工具能代为确认；每人最多 `max_pending_per_user`（默认 3）个待审批，防止被提示词注入刷屏；
+  `llm_allow_non_admin_requests=false` 可禁止普通用户发起申请
 
 ### 🎬 创作者操作（抖音 / B站，平台可扩展）
 > 发布、删除、回复评论都是**危险操作**：命令只生成预览和 4 位确认码，管理员发送 `/va_confirm <码>` 后才执行（默认 60 秒内有效）。
@@ -296,7 +315,14 @@ astrbot_plugin_videos_analysis/
 
 ## 🔄 更新日志
 
-### v0.6.0（当前版本）
+### v0.7.0（当前版本）
+- 🖼️ 浏览总结改为"关键帧 + 转写"交给当前对话模型（适配可看图的新版 DeepSeek），Gemini/纯文字逐级降级
+- 👥 B站多账号：操作绑定账号、确认时用发起时的账号；账号池逐个续期
+- 🛡️ 抗风控：bili_ticket、请求节流、按账号频率闸门、风控熔断、重复内容/链接拦截
+- 🤖 全部功能注册为 LLM 工具；危险操作走管理员审批（提权）流程，结果回告申请人
+- 🐛 WBI 签名空格编码修正（含空格的搜索词不再返回空结果）
+
+### v0.6.0
 - 🐛 修复 B站扫码登录：新版接口通过 Set-Cookie 下发登录态，旧代码从 URL 取 cookie 必然失败
 - 🐛 B站无登录下载改为流式写盘（长视频不再 30 秒超时）
 - 🔑 B站 refresh_token 自动续期；BilibiliCreator（稿件/评论/回复/发评论）；浏览（推荐/热门/搜索/抽帧+ASR）；资料（签名/头像）

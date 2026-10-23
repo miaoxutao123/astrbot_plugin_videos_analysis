@@ -257,5 +257,32 @@
         "description": "上报的观看时长（秒）",
         "type": "int",
         "default": 60
+    },
+    "browse_summary_by": {
+        "description": "浏览总结由谁看图",
+        "type": "string",
+        "default": "llm",
+        "options": [
+            "llm",
+            "gemini"
+        ],
+        "hint": "llm：关键帧+转写直接交给当前对话模型（如新版 DeepSeek，可看图）；gemini：优先用 Gemini 看图。都会自动降级到纯文字"
+    },
+    "llm_allow_non_admin_requests": {
+        "description": "允许非管理员通过 LLM 申请危险操作",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后普通用户也能让 AI 发起评论/改资料等申请，但都会推送给管理员（/va_notify 会话）审批，管理员 /va_confirm 才执行"
+    },
+    "max_pending_per_user": {
+        "description": "每人最多待审批操作数",
+        "type": "int",
+        "default": 3
+    },
+    "risk_cooldown_minutes": {
+        "description": "风控熔断时长（分钟）",
+        "type": "int",
+        "default": 60,
+        "hint": "账号写操作遇到 -352/-412/验证码/重复评论等风控码后，该账号暂停写操作的时长（读操作不受影响）"
     }
 }

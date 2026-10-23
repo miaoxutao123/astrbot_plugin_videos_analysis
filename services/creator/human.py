@@ -108,7 +108,7 @@ class WriteGuard:
             json.dump(data, f)
         os.replace(tmp, self.path)
 
-    async def acquire(self, platform: str, op: str) -> str:
+    async def acquire(self, platform: str, op: str, account: str = "") -> str:
         """
         检查并占用一次写操作额度。间隔不足 MAX_WAIT 秒时等待；
         超出每日上限或需要等太久时返回拒绝原因，允许执行返回空串。
@@ -118,7 +118,8 @@ class WriteGuard:
             return ""
         async with self._lock:
             data = self._load()
-            rec = data.setdefault(platform, {}).setdefault(op, {})
+            # 有账号名时按账号分别计数（多账号各自的额度互不占用）
+            rec = data.setdefault(f"{platform}:{account}" if account else platform, {}).setdefault(op, {})
             now = time.time()
             if rec.get("day") != _today(now):
                 rec.update(day=_today(now), count=0)

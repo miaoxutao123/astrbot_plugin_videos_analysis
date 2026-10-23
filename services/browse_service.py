@@ -9,7 +9,7 @@
 音频统一压成 16kHz 单声道 32kbps，并按 browse_asr_max_minutes 截断，线上接口传输量很小。
 
 抽帧用 video_analysis.extract_smart_frames（场景切换 + 均匀补帧），再把关键帧 + 转写
-交给 Gemini 图文理解（只发几张小图）；Gemini 不可用时退化为只用转写和标题让框架 LLM 总结。
+交给用户当前的对话模型（如 DeepSeek，可看图）一起总结；不支持图片时用 Gemini 看图，再不行只用转写。
 """
 
 import asyncio
@@ -175,8 +175,40 @@ async def transcribe(plugin, video_path: str, platform: str = "", work_id: str =
 # ── 总结 ─────────────────────────────────────────────────
 
 
+def _provider_sees_images(prov) -> bool:
+    """provider 的 modalities 没配置时按"支持"处理（与 AstrBot 自身的默认一致）。"""
+    mods = (getattr(prov, "provider_config", None) or {}).get("modalities") or []
+    return not mods or "image" in mods
+
+
+async def _shrink_frames(frames: list[str], width: int = 640) -> list[str]:
+    """把关键帧缩到 640 宽的 JPEG，减少多模态 token。失败就用原图。"""
+    out = []
+    try:
+        from PIL import Image
+    except ImportError:
+        return frames
+    for f in frames:
+        small = os.path.splitext(f)[0] + "_s.jpg"
+        try:
+            with Image.open(f) as im:
+                im = im.convert("RGB")
+                if im.width > width:
+                    im = im.resize((width, int(im.height * width / im.width)))
+                im.save(small, "JPEG", quality=80)
+            out.append(small)
+        except Exception:
+            out.append(f)
+    return out
+
+
 async def summarize(plugin, event, meta: dict, transcript: str, frames: list[str]) -> tuple[str, str]:
-    """关键帧+转写 → 概要。返回 (概要, 方式)。"""
+    """
+    关键帧 + 转写 → 概要，返回 (概要, 方式)。
+
+    默认交给用户当前的对话模型（如 DeepSeek，新版可直接看图）；
+    browse_summary_by=gemini 时优先 Gemini。逐级降级：图文 → 另一种图文 → 纯文字 → 转写节选。
+    """
     info = (
         f"标题：{meta.get('title', '')}\nUP/作者：{meta.get('author', '')}\n简介：{(meta.get('desc') or '')[:300]}\n\n"
         f"语音转写：{transcript[:6000] or '（无）'}"
@@ -184,19 +216,53 @@ async def summarize(plugin, event, meta: dict, transcript: str, frames: list[str
     from ..utils.config_helper import resolve_gemini_config
     from .gemini_service import process_images_with_gemini
 
-    gcfg = resolve_gemini_config(plugin)
-    if gcfg and frames:
-        text, _ = await process_images_with_gemini(gcfg, f"{SUMMARY_PROMPT}\n\n{info}", frames)
-        if text:
-            return text, f"关键帧×{len(frames)}+转写 → Gemini"
+    ctx = plugin.context
+    frames = await _shrink_frames(frames) if frames else []
+    provider_id, prov = "", None
     try:
-        ctx = plugin.context
         provider_id = await ctx.get_current_chat_provider_id(event.unified_msg_origin)
-        resp = await ctx.llm_generate(chat_provider_id=provider_id, prompt=f"{SUMMARY_PROMPT}（本次没有画面，只有文字）\n\n{info}")
-        if resp.completion_text:
-            return resp.completion_text.strip(), "仅转写 → 框架LLM"
+        prov = await ctx.provider_manager.get_provider_by_id(provider_id)
     except Exception as e:
-        logger.warning(f"[browse] 框架 LLM 总结失败: {e}")
+        logger.info(f"[browse] 取当前对话模型失败: {e}")
+
+    async def by_llm(with_images: bool) -> str:
+        if not prov:
+            return ""
+        try:
+            resp = await ctx.llm_generate(
+                chat_provider_id=provider_id,
+                prompt=f"{SUMMARY_PROMPT}{'' if with_images else '（本次没有画面，只有文字）'}\n\n{info}",
+                image_urls=[os.path.abspath(f) for f in frames] if with_images else None,
+            )
+            return (resp.completion_text or "").strip()
+        except Exception as e:
+            logger.warning(f"[browse] 对话模型总结失败（{'图文' if with_images else '纯文字'}）: {e}")
+            return ""
+
+    async def by_gemini() -> str:
+        gcfg = resolve_gemini_config(plugin)
+        if not (gcfg and frames):
+            return ""
+        text, _ = await process_images_with_gemini(gcfg, f"{SUMMARY_PROMPT}\n\n{info}", frames)
+        return text or ""
+
+    model = prov.get_model() if prov else ""
+    llm_vision = bool(frames) and prov is not None and _provider_sees_images(prov)
+    steps = [("gemini", by_gemini), ("llm_vision", lambda: by_llm(True))]
+    if plugin.config.get("browse_summary_by", "llm") != "gemini":
+        steps.reverse()
+    steps.append(("llm_text", lambda: by_llm(False)))
+    labels = {
+        "llm_vision": f"关键帧×{len(frames)}+转写 → {model or '对话模型'}",
+        "gemini": f"关键帧×{len(frames)}+转写 → Gemini",
+        "llm_text": f"仅转写 → {model or '对话模型'}",
+    }
+    for name, fn in steps:
+        if name == "llm_vision" and not llm_vision:
+            continue
+        text = await fn()
+        if text:
+            return text, labels[name]
     if transcript:
         return f"（AI 总结暂不可用，以下为语音转写节选）\n{transcript[:500]}", "仅转写节选"
     return "", "无可用的总结方式"

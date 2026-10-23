@@ -184,22 +184,78 @@ class AccountManager:
             return AccountStatus("bilibili", True, f"已登录: {info.get('uname')}", details, warn=warn)
         return AccountStatus("bilibili", False, "cookie 已失效", {"处理": "发送 /bili_login 重新扫码"})
 
-    async def refresh_bilibili(self, force: bool = False) -> str:
-        """按需续期当前 B站 cookie，成功后写回 cookie 文件和账号池里的当前账号。"""
-        cookies = await bilibili_service.load_cookies()
+    # ── B站多账号凭据 ─────────────────────────────────────
+
+    async def bili_cookies_for(self, name: str | None = None) -> dict | None:
+        """取指定账号的 cookie；不指定或就是当前账号时用当前登录态（cookie 文件）。"""
+        if name and name != self.active_name("bilibili"):
+            acc = self._find("bilibili", name)
+            if not acc:
+                raise RuntimeError(f"B站账号池里没有「{name}」，可用: {', '.join(a['name'] for a in self._accounts('bilibili')) or '无'}")
+            return dict(acc["secret"])
+        return await bilibili_service.load_cookies()
+
+    async def save_bili_cookies_for(self, name: str | None, cookies: dict) -> None:
+        """写回 cookie（续期、补 ticket 后），当前账号同时写 cookie 文件。"""
+        active = self.active_name("bilibili")
+        target = name or active
+        acc = self._find("bilibili", target) if target else None
+        if acc:
+            acc.update(secret=cookies, saved_at=time.time(), valid=True)
+            self._save_pool()
+        if not name or name == active:
+            await bilibili_service.save_cookies_dict(cookies)
+
+    async def refresh_bilibili(self, force: bool = False, name: str | None = None) -> str:
+        """按需续期一个 B站账号（默认当前账号），成功后写回 cookie 文件/账号池。"""
+        cookies = await self.bili_cookies_for(name)
+        label = name or self.active_name("bilibili") or "当前账号"
         if not cookies:
             return "B站未登录，先 /bili_login 扫码"
         new, msg = await bili_account.refresh_cookies(cookies, force=force)
         if not new:
-            return msg
-        await bilibili_service.save_cookies_dict(new)
-        acc = self._find("bilibili", self.active_name("bilibili"))
-        if acc and str(acc.get("secret", {}).get("DedeUserID")) == str(new.get("DedeUserID")):
-            acc.update(secret=new, saved_at=time.time(), valid=True)
-            self._save_pool()
+            return f"{label}: {msg}"
+        await self.save_bili_cookies_for(name, new)
         expiry, _ = _fmt_expiry(_bili_expiry(new))
-        logger.info(f"[accounts] B站 cookie 已续期，新过期时间 {expiry}")
-        return f"B站 cookie {msg}，新过期时间 {expiry}"
+        logger.info(f"[accounts] B站「{label}」cookie 已续期，新过期时间 {expiry}")
+        return f"{label}: B站 cookie 已续期，新过期时间 {expiry}"
+
+    async def refresh_all_bilibili(self, force: bool = False) -> list[str]:
+        """当前账号 + 账号池里每个 B站账号都检查一遍续期（按 DedeUserID 去重）。"""
+        results, seen = [], set()
+        targets = [None] + [a["name"] for a in self._accounts("bilibili") if a["name"] != self.active_name("bilibili")]
+        for name in targets:
+            try:
+                cookies = await self.bili_cookies_for(name)
+            except Exception as e:
+                results.append(f"{name}: {e}")
+                continue
+            uid = (cookies or {}).get("DedeUserID")
+            if not uid or uid in seen:
+                continue
+            seen.add(uid)
+            results.append(await self.refresh_bilibili(force=force, name=name))
+        return results
+
+    # ── 风控熔断（按账号） ───────────────────────────────
+
+    def _risk_key(self, platform: str, account: str | None) -> str:
+        return f"{platform}:{account or self.active_name(platform) or '_active'}"
+
+    def write_blocked(self, platform: str, account: str | None = None) -> str:
+        """该账号写操作是否处于风控冷却中，返回原因（空串表示可写）。"""
+        rec = self._health.setdefault("risk", {}).get(self._risk_key(platform, account))
+        if rec and rec.get("until", 0) > time.time():
+            left = int(rec["until"] - time.time()) // 60 + 1
+            return f"账号触发风控（{rec.get('reason', '')}），写操作暂停约 {left} 分钟"
+        return ""
+
+    async def trip_risk(self, platform: str, account: str | None, reason: str) -> None:
+        minutes = int(self.plugin.config.get("risk_cooldown_minutes", 60) or 60)
+        key = self._risk_key(platform, account)
+        self._health.setdefault("risk", {})[key] = {"until": time.time() + minutes * 60, "reason": reason[:120]}
+        _save_json(HEALTH_FILE, self._health)
+        await self.notify(f"[视频解析] {key} 触发风控：{reason[:120]}，该账号写操作暂停 {minutes} 分钟（读操作不受影响）")
 
     async def _bili_pool_health(self) -> dict:
         """检查池里非当前的 B站账号是否还有效（便宜：一次 nav 请求/账号）。"""
@@ -440,9 +496,9 @@ class AccountManager:
     async def run_health_check(self, notify: bool = True) -> tuple[list[AccountStatus], list[str]]:
         """深度检查所有平台，与上次结果对比；状态变化时推送（仅变化时，不重复刷屏）。"""
         try:
-            msg = await self.refresh_bilibili()
-            if "已续期" in msg or "失败" in msg:
-                logger.info(f"[accounts] {msg}")
+            for msg in await self.refresh_all_bilibili():
+                if "已续期" in msg or "失败" in msg:
+                    logger.info(f"[accounts] {msg}")
         except Exception as e:
             logger.warning(f"[accounts] B站自动续期异常: {e}")
         statuses = await self.status_all(deep=True)

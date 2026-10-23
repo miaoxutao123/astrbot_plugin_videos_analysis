@@ -33,6 +33,15 @@ def _take_platform(args: list[str]) -> tuple[str, list[str]]:
     return "douyin", args
 
 
+def _take_account(args: list[str]) -> tuple[str | None, list[str]]:
+    """取出 "-a 账号名"（账号池里的名称），返回 (账号, 剩余参数)。"""
+    if "-a" in args:
+        i = args.index("-a")
+        if i + 1 < len(args):
+            return args[i + 1], args[:i] + args[i + 2:]
+    return None, args
+
+
 def _cmd_prefix(platform: str) -> str:
     return "" if platform == "douyin" else f"{platform} "
 
@@ -109,9 +118,10 @@ async def handle_pool(plugin, event):
 
 
 async def handle_works(plugin, event):
-    platform, _ = _take_platform(command_args(event, "va_works"))
+    account, args = _take_account(command_args(event, "va_works"))
+    platform, _ = _take_platform(args)
     try:
-        works = await get_creator(plugin, platform).list_works(limit=10)
+        works = await get_creator(plugin, platform, account).list_works(limit=10)
     except Exception as e:
         yield event.plain_result(f"读取作品失败: {e}")
         return
@@ -119,7 +129,7 @@ async def handle_works(plugin, event):
     if not works:
         yield event.plain_result("当前账号没有作品")
         return
-    lines = [f"{platform}·{plugin.accounts.active_name(platform) or '当前账号'} 最近作品："]
+    lines = [f"{platform}·{account or plugin.accounts.active_name(platform) or '当前账号'} 最近作品："]
     for i, w in enumerate(works, 1):
         ts = time.strftime("%m-%d %H:%M", time.localtime(w.create_time)) if w.create_time else ""
         lines.append(f"{i}. {w.title[:30]}  👍{w.digg} 💬{w.comments}  {ts}\n   {w.id}")
@@ -191,7 +201,8 @@ async def handle_delete(plugin, event):
 
 
 async def handle_reply(plugin, event):
-    platform, args = _take_platform(command_args(event, "va_reply"))
+    account, args = _take_account(command_args(event, "va_reply"))
+    platform, args = _take_platform(args)
     # @抖音号/@昵称：只回复这个人的评论
     target = next((a for a in args if a.startswith(("@", "＠"))), "")
     args = [a for a in args if a != target]
@@ -203,7 +214,7 @@ async def handle_reply(plugin, event):
         return
     yield event.plain_result("正在读取评论并起草回复（可能需要分析视频，约 10~60 秒）...")
     try:
-        res = await plugin.creator_ops.prepare_replies(event, platform, work.id if work else ref, target)
+        res = await plugin.creator_ops.prepare_replies(event, platform, work.id if work else ref, target, account)
     except Exception as e:
         yield event.plain_result(f"起草失败: {e}")
         return
@@ -211,10 +222,11 @@ async def handle_reply(plugin, event):
 
 
 async def handle_comment(plugin, event):
-    platform, args = _take_platform(command_args(event, "va_comment"))
+    account, args = _take_account(command_args(event, "va_comment"))
+    platform, args = _take_platform(args)
     if not args:
         yield event.plain_result(
-            "用法: /va_comment [平台] <序号|链接|BV号> [评论内容]\n"
+            "用法: /va_comment [平台] [-a 账号名] <序号|链接|BV号> [评论内容]\n"
             "不写内容时会结合视频内容由 AI 起草，确认前可 /va_edit <确认码> 1 <新内容> 修改。"
         )
         return
@@ -227,7 +239,7 @@ async def handle_comment(plugin, event):
     if not text:
         yield event.plain_result("正在理解视频并起草评论（约 10~60 秒）...")
     try:
-        res = await plugin.creator_ops.prepare_comment(event, platform, work.id if work else ref, text)
+        res = await plugin.creator_ops.prepare_comment(event, platform, work.id if work else ref, text, account)
     except Exception as e:
         yield event.plain_result(f"准备评论失败: {e}")
         return
@@ -236,7 +248,7 @@ async def handle_comment(plugin, event):
 
 async def handle_bili_refresh(plugin, event):
     force = "force" in command_args(event, "bili_refresh")
-    yield event.plain_result(await plugin.accounts.refresh_bilibili(force=force))
+    yield event.plain_result("\n".join(await plugin.accounts.refresh_all_bilibili(force=force)) or "B站未登录")
 
 
 async def handle_confirm(plugin, event):
@@ -361,8 +373,9 @@ async def handle_bili_watch(plugin, event):
 
 
 async def handle_bili_profile(plugin, event):
+    account, _ = _take_account(command_args(event, "bili_profile"))
     try:
-        p = await get_creator(plugin, "bilibili").profile()
+        p = await get_creator(plugin, "bilibili", account).profile()
     except Exception as e:
         yield event.plain_result(f"读取资料失败: {e}")
         return
@@ -378,16 +391,13 @@ async def handle_bili_profile(plugin, event):
 
 
 async def handle_bili_sign(plugin, event):
-    text = (event.message_str or "").strip()
-    for prefix in ("/bili_sign", "bili_sign"):
-        if text.startswith(prefix):
-            text = text[len(prefix):].strip()
-            break
+    account, args = _take_account(command_args(event, "bili_sign"))
+    text = " ".join(args).strip()
     if not text:
         yield event.plain_result("用法: /bili_sign <新签名>（70 字以内）")
         return
     try:
-        res = await plugin.creator_ops.prepare_sign(event, "bilibili", text)
+        res = await plugin.creator_ops.prepare_sign(event, "bilibili", text, account)
     except Exception as e:
         yield event.plain_result(f"准备失败: {e}")
         return
@@ -416,7 +426,8 @@ async def handle_bili_avatar(plugin, event):
         yield event.plain_result("请在 /bili_avatar 消息里附带一张图片，或引用一条图片消息再发 /bili_avatar")
         return
     try:
-        op = await plugin.creator_ops.prepare_avatar(event, "bilibili", source)
+        account, _ = _take_account(command_args(event, "bili_avatar"))
+        op = await plugin.creator_ops.prepare_avatar(event, "bilibili", source, account)
     except Exception as e:
         yield event.plain_result(f"处理图片失败: {e}")
         return

@@ -8,7 +8,10 @@ B站创作者操作：我的稿件 / 评论读取 / 回复评论 / 对任意视�
 发布/删除稿件暂不支持（B站投稿需分片上传，风险和复杂度都高）。
 """
 
+import asyncio
+import json
 import os
+import random
 import re
 import time
 
@@ -16,6 +19,7 @@ import aiohttp
 
 from astrbot.api import logger
 
+from ...utils.paths import CREATOR_DIR
 from .. import bili_account, bilibili_service
 from .base import Comment, CreatorPlatform, OpResult, Work
 from .human import GUARD
@@ -24,6 +28,9 @@ API = "https://api.bilibili.com"
 MEMBER = "https://member.bilibili.com"
 BV_RE = re.compile(r"BV1[0-9A-Za-z]{9}")
 AV_RE = re.compile(r"(?:^|[^0-9A-Za-z])av(\d+)", re.I)
+
+# 写操作遇到这些码就熔断该账号的写操作
+WRITE_RISK_CODES = {-352, -412, 12015, 12051, 12053, 12073}
 
 # 常见错误码 → 说明
 ERRORS = {
@@ -40,18 +47,48 @@ ERRORS = {
 }
 
 
+LINK_RE = re.compile(r"https?://|www\.|\.com\b|\.cn\b|b23\.tv", re.I)
+SENT_FILE = os.path.join(CREATOR_DIR, "bili_sent.json")
+_pace_lock = asyncio.Lock()
+_last_call = [0.0]
+
+
+async def _pace() -> None:
+    """所有 B站请求串行并留 0.6~1.6 秒间隔，避免脚本式的密集请求。"""
+    async with _pace_lock:
+        wait = _last_call[0] + random.uniform(0.6, 1.6) - time.time()
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _last_call[0] = time.time()
+
+
 class BilibiliCreator(CreatorPlatform):
     name = "bilibili"
     label = "B站"
 
+    def __init__(self, plugin, account: str | None = None):
+        super().__init__(plugin)
+        # None/"" = 当前使用中的账号；指定名称则直接用账号池里该账号的 cookie
+        self.account = account or None
+
+    @property
+    def account_label(self) -> str:
+        return self.account or (self.plugin.accounts.active_name("bilibili") if self.plugin else "") or "当前账号"
+
     async def _cookies(self) -> dict:
-        cookies = await bilibili_service.load_cookies()
+        cookies = await self.plugin.accounts.bili_cookies_for(self.account)
         if not cookies or not cookies.get("SESSDATA"):
             raise RuntimeError("B站未登录，先 /bili_login 扫码")
-        return cookies
+        # 补齐 buvid3/4 和 bili_ticket，有变化就写回，下次直接用
+        fixed = await bili_account.ensure_buvid(cookies)
+        fixed, _ = await bili_account.ensure_ticket(fixed)
+        if fixed != cookies:
+            await self.plugin.accounts.save_bili_cookies_for(self.account, fixed)
+        return fixed
 
     async def _get(self, url: str, params: dict | None = None, cookies: dict | None = None, referer: str | None = None) -> dict:
         cookies = cookies if cookies is not None else await self._cookies()
+        await _pace()
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as s:
             async with s.get(url, params=params, headers=bili_account.headers(cookies, referer or "https://www.bilibili.com/")) as r:
                 return await r.json(content_type=None)
@@ -59,6 +96,7 @@ class BilibiliCreator(CreatorPlatform):
     async def _post(self, url: str, form: dict, referer: str) -> dict:
         cookies = await self._cookies()
         form = {**form, "csrf": cookies.get("bili_jct", "")}
+        await _pace()
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as s:
             async with s.post(url, data=form, headers=bili_account.headers(cookies, referer)) as r:
                 return await r.json(content_type=None)
@@ -68,9 +106,46 @@ class BilibiliCreator(CreatorPlatform):
         code = data.get("code")
         return ERRORS.get(code) or f"{code} {data.get('message', '')}".strip()
 
-    async def _check_risk(self, data: dict) -> None:
-        if data.get("code") in bilibili_service.RISK_CODES:
-            await bilibili_service._report_failure(f"B站接口返回 {data.get('code')}")
+    async def _check_risk(self, data: dict, write: bool = False) -> None:
+        code = data.get("code")
+        if code in bilibili_service.RISK_CODES:
+            await bilibili_service._report_failure(f"B站接口返回 {code}")
+        # 写操作遇到风控/验证码：该账号的写操作熔断一段时间
+        if write and code in WRITE_RISK_CODES:
+            await self.plugin.accounts.trip_risk(self.name, self.account, f"{code} {ERRORS.get(code, data.get('message', ''))}")
+
+    def _write_precheck(self, text: str = "") -> str:
+        if blocked := self.plugin.accounts.write_blocked(self.name, self.account):
+            return blocked
+        if text and LINK_RE.search(text):
+            return "内容里有链接/网址，B站会判定为广告"
+        if text and self._recently_sent(text):
+            return "24 小时内已用这个账号发过同样的内容（B站会判重复刷屏）"
+        return ""
+
+    def _sent_key(self) -> str:
+        return self.account or self.plugin.accounts.active_name(self.name) or "_active"
+
+    def _recently_sent(self, text: str) -> bool:
+        try:
+            with open(SENT_FILE, encoding="utf-8") as f:
+                rec = json.load(f).get(self._sent_key(), [])
+        except (OSError, ValueError):
+            return False
+        return any(r["t"] == text.strip() and time.time() - r["at"] < 86400 for r in rec)
+
+    def _remember_sent(self, text: str) -> None:
+        try:
+            with open(SENT_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            data = {}
+        rec = [r for r in data.get(self._sent_key(), []) if time.time() - r["at"] < 86400][-200:]
+        rec.append({"t": text.strip(), "at": time.time()})
+        data[self._sent_key()] = rec
+        os.makedirs(CREATOR_DIR, exist_ok=True)
+        with open(SENT_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
 
     @staticmethod
     def _guard_refused(reason: str) -> OpResult:
@@ -78,10 +153,18 @@ class BilibiliCreator(CreatorPlatform):
 
     # ── 读 ───────────────────────────────────────────────
 
+    async def _cookies_optional(self) -> dict:
+        """浏览类接口：有登录态就带上（推荐更准、能拿字幕），没有也能用。"""
+        try:
+            return await self._cookies()
+        except RuntimeError:
+            return {}
+
     async def check_login(self) -> tuple[bool, str]:
-        info = await bilibili_service.get_login_info()
+        cookies = await self._cookies_optional()
+        info = await bilibili_service.get_login_info(cookies) if cookies else None
         if info and info.get("isLogin"):
-            return True, f"已登录: {info.get('uname')}"
+            return True, f"「{self.account_label}」已登录: {info.get('uname')}"
         return False, "未登录或 cookie 已失效"
 
     async def list_works(self, limit: int = 10) -> list[Work]:
@@ -169,8 +252,11 @@ class BilibiliCreator(CreatorPlatform):
     # ── 写（仅供二次确认后调用） ──────────────────────────
 
     async def _add_reply(self, work_id: str, text: str, root: str = "", op: str = "reply") -> OpResult:
-        if refused := await GUARD.acquire(self.name, op):
+        if reason := self._write_precheck(text):
+            return OpResult(False, f"已拦截：{reason}")
+        if refused := await GUARD.acquire(self.name, op, self._sent_key()):
             return self._guard_refused(refused)
+        await asyncio.sleep(random.uniform(1.5, 4.0))  # 模拟打字/思考时间
         try:
             aid = await self._aid(work_id)
             form = {"type": 1, "oid": aid, "message": text, "plat": 1}
@@ -180,9 +266,10 @@ class BilibiliCreator(CreatorPlatform):
         except Exception as e:
             return OpResult(False, f"请求失败: {e}")
         if data.get("code") == 0:
+            self._remember_sent(text)
             rpid = str(((data.get("data") or {}).get("rpid")) or "")
-            return OpResult(True, "已发送" + (f"（rpid={rpid}）" if rpid else ""), {"rpid": rpid})
-        await self._check_risk(data)
+            return OpResult(True, f"已用「{self.account_label}」发送" + (f"（rpid={rpid}）" if rpid else ""), {"rpid": rpid})
+        await self._check_risk(data, write=True)
         logger.warning(f"[bili] 发表评论失败: {data.get('code')} {data.get('message')}")
         return OpResult(False, self._err(data), data)
 
@@ -218,7 +305,7 @@ class BilibiliCreator(CreatorPlatform):
 
     async def feed(self, kind: str = "rcmd", limit: int = 10) -> list[Work]:
         """首页推荐（登录后按账号口味）或热门。"""
-        cookies = await bilibili_service.load_cookies() or {}
+        cookies = await self._cookies_optional()
         if kind == "hot":
             data = await self._get(f"{API}/x/web-interface/popular", {"pn": 1, "ps": limit}, cookies=cookies)
             items = (data.get("data") or {}).get("list") or []
@@ -232,7 +319,7 @@ class BilibiliCreator(CreatorPlatform):
         return [self._work_from_card(i["bvid"], i.get("title"), (i.get("owner") or {}).get("name", ""), i.get("stat") or {}, i.get("duration")) for i in items][:limit]
 
     async def search(self, keyword: str, limit: int = 10) -> list[Work]:
-        cookies = await bilibili_service.load_cookies() or {}
+        cookies = await self._cookies_optional()
         cookies = await bili_account.ensure_buvid(cookies)  # 搜索接口没有 buvid3 会 -412
         params = await bili_account.wbi_sign({"search_type": "video", "keyword": keyword, "page": 1}, cookies)
         data = await self._get(f"{API}/x/web-interface/wbi/search/type", params, cookies=cookies,
@@ -248,7 +335,7 @@ class BilibiliCreator(CreatorPlatform):
     async def hot_comments(self, work_id: str, n: int = 3) -> list[Comment]:
         aid = await self._aid(work_id)
         data = await self._get(f"{API}/x/v2/reply", {"type": 1, "oid": aid, "pn": 1, "ps": 20, "sort": 1},
-                               cookies=await bilibili_service.load_cookies() or {}, referer=f"https://www.bilibili.com/video/{work_id}")
+                               cookies=await self._cookies_optional(), referer=f"https://www.bilibili.com/video/{work_id}")
         out = []
         for c in ((data.get("data") or {}).get("replies") or [])[:n]:
             m = c.get("member") or {}
@@ -259,10 +346,10 @@ class BilibiliCreator(CreatorPlatform):
 
     async def report_watch(self, work_id: str, seconds: int) -> OpResult:
         """把这次"观看"写进账号的历史记录和播放心跳（登录时才有意义）。"""
-        cookies = await bilibili_service.load_cookies()
-        if not cookies or not cookies.get("SESSDATA"):
+        cookies = await self._cookies_optional()
+        if not cookies.get("SESSDATA"):
             return OpResult(False, "未登录，不上报观看记录")
-        if refused := await GUARD.acquire(self.name, "watch"):
+        if refused := await GUARD.acquire(self.name, "watch", self._sent_key()):
             return self._guard_refused(refused)
         v = await self._view(work_id)
         ref = f"https://www.bilibili.com/video/{work_id}"
@@ -293,16 +380,20 @@ class BilibiliCreator(CreatorPlatform):
         }
 
     async def update_sign(self, text: str) -> OpResult:
-        if refused := await GUARD.acquire(self.name, "profile"):
+        if reason := self._write_precheck():
+            return OpResult(False, f"已拦截：{reason}")
+        if refused := await GUARD.acquire(self.name, "profile", self._sent_key()):
             return self._guard_refused(refused)
         data = await self._post(f"{API}/x/member/web/sign/update", {"user_sign": text}, referer="https://account.bilibili.com/")
         if data.get("code") == 0:
-            return OpResult(True, "签名已更新（可能需要审核后才对外显示）")
-        await self._check_risk(data)
+            return OpResult(True, f"「{self.account_label}」签名已更新（可能需要审核后才对外显示）")
+        await self._check_risk(data, write=True)
         return OpResult(False, self._err(data), data)
 
     async def update_avatar(self, image_path: str) -> OpResult:
-        if refused := await GUARD.acquire(self.name, "profile"):
+        if reason := self._write_precheck():
+            return OpResult(False, f"已拦截：{reason}")
+        if refused := await GUARD.acquire(self.name, "profile", self._sent_key()):
             return self._guard_refused(refused)
         cookies = await self._cookies()
         form = aiohttp.FormData()
@@ -318,8 +409,8 @@ class BilibiliCreator(CreatorPlatform):
         except Exception as e:
             return OpResult(False, f"上传头像失败: {e}")
         if data.get("code") == 0:
-            return OpResult(True, "头像已提交（B站审核通过后生效）")
-        await self._check_risk(data)
+            return OpResult(True, f"「{self.account_label}」头像已提交（B站审核通过后生效）")
+        await self._check_risk(data, write=True)
         return OpResult(False, self._err(data), data)
 
     # ── 不支持的写操作 ───────────────────────────────────

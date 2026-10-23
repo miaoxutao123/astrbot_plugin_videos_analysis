@@ -37,6 +37,9 @@ class PendingOp:
     umo: str
     expires: float
     payload: dict = field(default_factory=dict)
+    account_key: str = ""  # 执行时用的账号池名称（空 = 当前账号）
+    requester_name: str = ""
+    requester_admin: bool = True
 
 
 def split_title_tags(text: str) -> tuple[str, list[str]]:
@@ -61,6 +64,7 @@ class CreatorOps:
         self.reply_provider = cfg.get("creator_reply_provider_id", "")
         self.reply_use_video = cfg.get("creator_reply_video_understanding", True)
         self._pending: dict[str, PendingOp] = {}
+        self.max_pending_per_user = int(cfg.get("max_pending_per_user", 3) or 3)
         self._upload_waiters: dict[str, dict] = {}
         self.last_works: dict[str, list] = {}  # /va_works 的结果，供按序号引用
         # 待确认操作只在内存里，重载后之前暂存的发布素材都已无主，直接清掉
@@ -68,15 +72,21 @@ class CreatorOps:
 
     # ── 二次确认 ─────────────────────────────────────────
 
-    def _new_op(self, kind: str, platform: str, event, payload: dict, ttl: int | None = None) -> PendingOp:
+    def _new_op(self, kind: str, platform: str, event, payload: dict, ttl: int | None = None, account: str | None = None) -> PendingOp:
         self._gc()
+        requester = str(event.get_sender_id())
+        mine = [o for o in self._pending.values() if o.requester == requester]
+        if len(mine) >= self.max_pending_per_user:
+            raise RuntimeError(f"你已有 {len(mine)} 个待审批的操作，请等管理员处理或 /va_cancel 后再提交")
         code = f"{secrets.randbelow(10000):04d}"
         while code in self._pending:
             code = f"{secrets.randbelow(10000):04d}"
+        key = account or self.plugin.accounts.active_name(platform) or ""
         op = PendingOp(
             code=code, kind=kind, platform=platform,
-            account=self.plugin.accounts.active_name(platform) or "当前登录账号",
-            requester=str(event.get_sender_id()), umo=event.unified_msg_origin,
+            account=key or "当前登录账号", account_key=key,
+            requester=requester, umo=event.unified_msg_origin,
+            requester_name=str(event.get_sender_name() or requester), requester_admin=bool(event.is_admin()),
             expires=time.time() + (ttl or self.confirm_timeout), payload=payload,
         )
         self._pending[code] = op
@@ -107,7 +117,52 @@ class CreatorOps:
             return f"没有待确认的操作 {code}（可能已过期）"
         if op.kind in ("upload", "avatar"):
             self._remove_staged(op.payload.get("path", ""))
+        if not op.requester_admin:
+            asyncio.create_task(self._send(op.umo, f"你提交的申请 [{code}]（{self._summary(op)}）未获管理员批准，已取消。"))
         return f"已取消 {code}"
+
+    # ── 提权审批 ─────────────────────────────────────────
+
+    async def _send(self, umo: str, text: str) -> bool:
+        from astrbot.core.message.message_event_result import MessageChain
+
+        try:
+            ok = await self.plugin.context.send_message(umo, MessageChain().message(text))
+            logger.info(f"[creator] 已推送到 {umo}: {text.splitlines()[0][:60]}")
+            return ok is not False
+        except Exception as e:
+            logger.warning(f"[creator] 发送到 {umo} 失败: {e}")
+            return False
+
+    async def submit(self, op: PendingOp) -> dict:
+        """
+        把待确认操作交给有权限的人：
+        - 申请人是管理员：预览发回当前会话，由管理员本人 /va_confirm
+        - 申请人不是管理员：预览推送到管理员告警会话（/va_notify），申请人只收到"已提交审批"
+        LLM 只能走到这里——批准必须由管理员亲自发送 /va_confirm，没有任何工具能代为确认。
+        """
+        preview = self.render_preview(op)
+        if op.requester_admin:
+            await self._send(op.umo, preview)
+            return {"status": "pending_confirmation", "code": op.code,
+                    "message": f"尚未执行。确认信息已发到当前会话，需要管理员本人发送 /va_confirm {op.code} 才会执行。请如实告知，不要声称已完成。"}
+        head = (
+            f"🔐 权限申请：{op.requester_name}（{op.requester}）请求执行以下操作\n"
+            f"来源会话：{op.umo}\n批准：/va_confirm {op.code} · 拒绝：/va_cancel {op.code}\n\n"
+        )
+        sent = 0
+        for umo in self.plugin.accounts.notify_targets():
+            if umo != op.umo and await self._send(umo, head + preview):
+                sent += 1
+        if not sent:
+            self._pending.pop(op.code, None)
+            if op.kind in ("upload", "avatar"):
+                self._remove_staged(op.payload.get("path", ""))
+            return {"status": "rejected", "error": "该操作需要管理员批准，但管理员还没有设置审批通知会话（管理员私聊发送 /va_notify），已取消。"}
+        logger.info(f"[creator] 申请 {op.code}（{op.kind}，来自 {op.requester}）已推送给 {sent} 个管理员会话")
+        await self._send(op.umo, f"已提交管理员审批（申请码 {op.code}），管理员批准前不会执行。")
+        return {"status": "pending_admin_approval", "code": op.code,
+                "message": "尚未执行。已推送给管理员审批，批准前不会执行。请如实告知用户，不要声称已完成。"}
 
     def edit_reply(self, code: str, index: int, text: str) -> str:
         op = self._pending.get(code)
@@ -124,10 +179,19 @@ class CreatorOps:
 
     async def confirm(self, code: str, picks: list[int] | None = None) -> str:
         self._gc()
-        op = self._pending.pop(code, None)
+        op = self._pending.get(code)
         if not op:
             return f"没有待确认的操作 {code}（可能已过期，超时 {self.confirm_timeout} 秒）"
-        creator = get_creator(self.plugin, op.platform)
+        result = await self._execute(op, picks)
+        if not op.requester_admin:
+            await self._send(op.umo, f"你提交的申请 [{code}] 已由管理员批准并执行：\n{result}")
+        return result
+
+    async def _execute(self, op: PendingOp, picks: list[int] | None) -> str:
+        self._pending.pop(op.code, None)
+        if op.platform == "douyin" and op.account_key != (self.plugin.accounts.active_name("douyin") or ""):
+            return f"❌ 申请时用的是抖音账号「{op.account}」，现在已切换到「{self.plugin.accounts.active_name('douyin') or '其他账号'}」，为避免发错账号已取消，请重新发起"
+        creator = get_creator(self.plugin, op.platform, op.account_key or None)
         try:
             if op.kind == "upload":
                 p = op.payload
@@ -147,6 +211,8 @@ class CreatorOps:
                 return self._render_result(f"评论《{p.get('title') or p['work_id']}》", res)
             if op.kind == "sign":
                 return self._render_result("修改签名", await creator.update_sign(op.payload["text"]))
+            if op.kind == "pool_use":
+                return await self.plugin.accounts.pool_use(op.platform, op.payload["name"])
             if op.kind == "avatar":
                 try:
                     res = await creator.update_avatar(op.payload["path"])
@@ -176,6 +242,8 @@ class CreatorOps:
             return f"评论作品 {p['work_id']}《{p.get('title', '')}》{who}"
         if op.kind == "sign":
             return f"把签名改为「{p['text']}」（原签名「{p.get('old', '')}」）"
+        if op.kind == "pool_use":
+            return f"把 {op.platform} 当前账号切换为「{p['name']}」"
         if op.kind == "avatar":
             return f"更换头像（{p['size_kb']:.0f}KB）"
         return f"回复作品 {p['work_id']} 的 {len(p['items'])} 条评论"
@@ -227,12 +295,12 @@ class CreatorOps:
             raise ValueError("视频文件为空或下载失败")
         return dest
 
-    async def prepare_upload(self, event, platform: str, source: str, title: str, tags: list[str]) -> PendingOp:
+    async def prepare_upload(self, event, platform: str, source: str, title: str, tags: list[str], account: str | None = None) -> PendingOp:
         if not title:
             raise ValueError("缺少标题")
         path = await self.stage_video(source)
         size_mb = os.path.getsize(path) / 1048576
-        return self._new_op("upload", platform, event, {"path": path, "title": title, "tags": tags, "size_mb": size_mb})
+        return self._new_op("upload", platform, event, {"path": path, "title": title, "tags": tags, "size_mb": size_mb}, account=account)
 
     def wait_for_upload(self, event, platform: str, title: str, tags: list[str]) -> None:
         key = f"{event.unified_msg_origin}|{event.get_sender_id()}"
@@ -270,8 +338,13 @@ class CreatorOps:
                     return getattr(seg, "url", "") or None
         return None
 
-    def prepare_delete(self, event, platform: str, work_id: str, title: str) -> PendingOp:
-        return self._new_op("delete", platform, event, {"work_id": work_id, "title": title})
+    def prepare_pool_use(self, event, platform: str, name: str) -> PendingOp:
+        if not self.plugin.accounts._find(platform, name):
+            raise ValueError(f"账号池里没有 {platform}/{name}")
+        return self._new_op("pool_use", platform, event, {"name": name})
+
+    def prepare_delete(self, event, platform: str, work_id: str, title: str, account: str | None = None) -> PendingOp:
+        return self._new_op("delete", platform, event, {"work_id": work_id, "title": title}, account=account)
 
     # ── 评论精选回复 ─────────────────────────────────────
 
@@ -386,8 +459,8 @@ class CreatorOps:
         t = target.lstrip("@＠").strip().lower()
         return [c for c in comments if c.text.strip() and t in (c.handle.lower(), c.user.lower(), c.user_id)]
 
-    async def prepare_replies(self, event, platform: str, work_ref: str, target: str = "") -> PendingOp | str:
-        creator = get_creator(self.plugin, platform)
+    async def prepare_replies(self, event, platform: str, work_ref: str, target: str = "", account: str | None = None) -> PendingOp | str:
+        creator = get_creator(self.plugin, platform, account)
         if work_ref:
             work_id = await creator.resolve_work(work_ref)
             if not work_id:
@@ -414,11 +487,11 @@ class CreatorOps:
             {"id": c.id, "user": c.user, "text": c.text, "digg": c.digg, "create_time": c.create_time, "reply": r}
             for c, r in zip(picked, drafts)
         ]
-        return self._new_op("reply", platform, event, {"work_id": work_id, "items": items}, ttl=max(self.confirm_timeout, 300))
+        return self._new_op("reply", platform, event, {"work_id": work_id, "items": items}, ttl=max(self.confirm_timeout, 300), account=account)
 
-    async def prepare_comment(self, event, platform: str, work_ref: str, text: str = "") -> PendingOp | str:
+    async def prepare_comment(self, event, platform: str, work_ref: str, text: str = "", account: str | None = None) -> PendingOp | str:
         """对任意作品发一级评论；不给内容时结合视频内容由 LLM 起草，确认前可 /va_edit 修改。"""
-        creator = get_creator(self.plugin, platform)
+        creator = get_creator(self.plugin, platform, account)
         logged_in, msg = await creator.check_login()
         if not logged_in:
             return f"{creator.label}未登录，无法发评论：{msg}"
@@ -432,16 +505,16 @@ class CreatorOps:
             text = await self._draft_comment(event, ctx, summary)
             drafted = True
         payload = {"work_id": work_id, "title": ctx.get("title", ""), "author": ctx.get("author", ""), "text": text, "drafted": drafted}
-        return self._new_op("comment", platform, event, payload, ttl=max(self.confirm_timeout, 300))
+        return self._new_op("comment", platform, event, payload, ttl=max(self.confirm_timeout, 300), account=account)
 
-    async def prepare_sign(self, event, platform: str, text: str) -> PendingOp | str:
-        creator = get_creator(self.plugin, platform)
+    async def prepare_sign(self, event, platform: str, text: str, account: str | None = None) -> PendingOp | str:
+        creator = get_creator(self.plugin, platform, account)
         if len(text) > 70:
             return f"签名最多 70 字，当前 {len(text)} 字"
         prof = await creator.profile()
-        return self._new_op("sign", platform, event, {"text": text, "old": prof.get("sign", "")})
+        return self._new_op("sign", platform, event, {"text": text, "old": prof.get("sign", "")}, account=account)
 
-    async def prepare_avatar(self, event, platform: str, source: str) -> PendingOp:
+    async def prepare_avatar(self, event, platform: str, source: str, account: str | None = None) -> PendingOp:
         from PIL import Image
 
         os.makedirs(UPLOAD_DIR, exist_ok=True)
@@ -466,7 +539,7 @@ class CreatorOps:
         finally:
             if tmp and os.path.exists(tmp):
                 os.remove(tmp)
-        return self._new_op("avatar", platform, event, {"path": dest, "size_kb": os.path.getsize(dest) / 1024})
+        return self._new_op("avatar", platform, event, {"path": dest, "size_kb": os.path.getsize(dest) / 1024}, account=account)
 
     async def _draft_comment(self, event, ctx: dict, summary: str) -> str:
         ctx_obj = self.plugin.context

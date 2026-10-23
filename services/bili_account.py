@@ -178,10 +178,42 @@ async def _mixin_key(cookies: dict | None) -> str:
 
 async def wbi_sign(params: dict, cookies: dict | None = None) -> dict:
     import hashlib
-    from urllib.parse import urlencode
+    from urllib.parse import quote, urlencode
 
     key = await _mixin_key(cookies)
     signed = {**params, "wts": int(time.time())}
     signed = {k: "".join(c for c in str(v) if c not in "!'()*") for k, v in sorted(signed.items())}
-    signed["w_rid"] = hashlib.md5((urlencode(signed) + key).encode()).hexdigest()
+    # 必须按 %20 编码空格（与实际请求一致），用默认的 "+" 会导致签名不匹配、搜索结果为空
+    signed["w_rid"] = hashlib.md5((urlencode(signed, quote_via=quote) + key).encode()).hexdigest()
     return signed
+
+
+# ── bili_ticket（网页端风控凭证，带上可显著降低 -352/-412） ─────────
+
+async def ensure_ticket(cookies: dict) -> tuple[dict, bool]:
+    """缺少或快过期时生成 bili_ticket，返回 (cookie, 是否有更新)。失败时原样返回。"""
+    import hashlib
+    import hmac
+
+    exp = int(cookies.get("bili_ticket_expires") or 0)
+    if cookies.get("bili_ticket") and exp - time.time() > 6 * 3600:
+        return cookies, False
+    ts = int(time.time())
+    sign = hmac.new(b"XgwSnGZ1p", f"ts{ts}".encode(), hashlib.sha256).hexdigest()
+    params = {"key_id": "ec02", "hexsign": sign, "context[ts]": ts, "csrf": cookies.get("bili_jct", "")}
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
+            async with s.post("https://api.bilibili.com/bapis/bilibili.api.ticket.v1.Ticket/GenWebTicket",
+                              params=params, headers=headers(cookies)) as r:
+                data = await r.json(content_type=None)
+        d = data.get("data") or {}
+        if data.get("code") != 0 or not d.get("ticket"):
+            logger.info(f"[bili] 生成 bili_ticket 失败: {data.get('code')} {data.get('message')}")
+            return cookies, False
+        out = dict(cookies)
+        out["bili_ticket"] = d["ticket"]
+        out["bili_ticket_expires"] = str(int(d.get("created_at") or ts) + int(d.get("ttl") or 259200))
+        return out, True
+    except Exception as e:
+        logger.info(f"[bili] 生成 bili_ticket 异常: {e}")
+        return cookies, False
