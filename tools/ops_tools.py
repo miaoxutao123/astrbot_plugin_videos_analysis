@@ -227,6 +227,13 @@ async def video_account(plugin, event, action: str, platform: str = "", target: 
 
         code = target if target.isdigit() and len(target) == 4 else ""
         return {"audit": audit_log.compact(audit_log.recent(limit=10, code=code, platform=normalize_platform(platform) or ""))}
+    if action in ("report", "inbox"):
+        from ..services import ops_monitor
+
+        plat = normalize_platform(platform) or ""
+        if action == "inbox":
+            return await ops_monitor.inbox_view(plugin, plat)
+        return await ops_monitor.report(plugin, plat, int(target) if target.isdigit() else 7)
     plat = _platform(platform, target, plugin, event) if (platform or target) else "bilibili"
     if action == "works":
         works = await get_creator(plugin, plat, account or None).list_works(limit=10)
@@ -243,7 +250,7 @@ async def video_account(plugin, event, action: str, platform: str = "", target: 
     if action == "profile":
         p = await get_creator(plugin, plat, account or None).profile()
         return {k: v for k, v in p.items() if k not in ("face", "avatar")}
-    return {"error": "action 只能是 status / works / comments / profile / audit"}
+    return {"error": "action 只能是 status / works / comments / profile / audit / report / inbox"}
 
 
 # ── video_action（危险写：只提交申请） ─────────────────────

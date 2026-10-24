@@ -58,8 +58,8 @@
 
 | # | 事项 | 做法 | 需要用户在场？ |
 |---|------|------|:---:|
-| 1 | **数据看板（只读）** | `stats()`：`overview/all` + `author_diagnosis` + `item_contribution_top`；B站对应 `member/x/web/index/stat`（已验证可用：总播放 10012、粉丝 73 等）+ `x/web/data/pandect` | 否，现在就能做 |
-| 2 | **消息巡检（只读）** | `unread_count` → 有变化再拉 `notice/comment` / `user_message/list`；B站 `x/msgfeed/unread` + `x/msgfeed/reply`（已验证可用） | 否 |
+| 1 | ✅ v0.10 **数据看板（只读）** | `stats()`：`overview/all` + `author_diagnosis` + `item_contribution_top`；B站对应 `member/x/web/index/stat`（已验证可用：总播放 10012、粉丝 73 等）+ `x/web/data/pandect` | 否，现在就能做 |
+| 2 | ✅ v0.10 **消息巡检（只读）** | `unread_count` → 有变化再拉 `notice/comment` / `user_message/list`；B站 `x/msgfeed/unread` + `x/msgfeed/reply`（已验证可用） | 否 |
 | 3 | 评论读取切到创作者接口 | `creator/item/list` 拿加密 ID → `creator/comment/list` | 否（只读） |
 | 4 | 删除作品走接口 | 页面内 fetch `/web/api/media/aweme/delete`，失败再回退页面点击 | **是**（要拿一条测试作品验证） |
 | 5 | 可见性（仅自己可见） | `update_v2` 改权限；作为独立审批操作 `video_action(action="hide")`，删除失败时同样回退 | **是** |

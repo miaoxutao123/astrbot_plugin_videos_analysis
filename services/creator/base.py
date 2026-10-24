@@ -84,6 +84,14 @@ class CreatorPlatform(ABC):
         """在任意作品下发一条一级评论（只能由二次确认流程调用）。"""
         return OpResult(False, f"{self.label or self.name}暂不支持发评论")
 
+    async def stats(self) -> dict:
+        """账号数据：{"totals": 累计值（英文键，用于按天对比）, "period": {中文指标: 近 7 天值}, "period_days", "diagnosis"?}。"""
+        raise RuntimeError(f"{self.label or self.name}暂不支持数据看板")
+
+    async def inbox(self) -> dict:
+        """消息：{"unread": {中文名: 数量}, "comments": [{id,user,text,title,time}], "notices": [{id,title,content,time}]}。"""
+        raise RuntimeError(f"{self.label or self.name}暂不支持消息巡检")
+
     async def fetch_video(self, work_id: str, ctx: dict, max_seconds: int = 0) -> str | None:
         """把作品视频下载到本地，供视频理解使用（max_seconds>0 时只要开头这么长）；不支持返回 None。"""
         return None

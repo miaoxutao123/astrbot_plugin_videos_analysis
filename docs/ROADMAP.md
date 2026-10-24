@@ -67,6 +67,7 @@ LLM 工具层 (tools/ops_tools.py)        video_browse · video_download · vide
 | 对任意视频发评论 | ✅ | ✅ | 抖音首次写操作需"原设备扫码"验证一次 |
 | 资料（签名/头像） | ✅ | ✅ | 抖音走浏览器"编辑资料"，同上需设备验证 |
 | 发布 / 删除 | ✅ | ✅ / ⚠️ | B站分片投稿；B站 Web 删稿需短信验证码，自动改为仅自己可见 |
+| 运营数据 / 消息巡检 | ✅ | ✅ | `/va_report`、`/va_inbox`，新消息定时推送（v0.10） |
 | 操作审计 | ✅ | ✅ | `/va_audit`、`video_account audit`、WebUI 接口 |
 | LLM 调用 + 审批 | ✅ | ✅ | |
 

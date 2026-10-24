@@ -442,6 +442,91 @@ class DouyinCreator(CreatorPlatform):
             "face": ((u.get("avatar_larger") or u.get("avatar_thumb") or {}).get("url_list") or [""])[0],
         }
 
+    # ── 数据看板 / 消息（只读，创作中心页面内 fetch，与页面自己的请求同源同 cookie） ──
+
+    _FETCH_JS = """async (r) => {
+        try {
+            const resp = await fetch(r.url, {method: r.method, credentials: 'include',
+                headers: r.method === 'POST' ? {'content-type': 'application/json'} : {},
+                body: r.method === 'POST' ? '{}' : undefined});
+            return await resp.json();
+        } catch (e) { return null; }
+    }"""
+
+    async def _creator_reads(self, reqs: list[tuple[str, str]]) -> list[dict]:
+        """打开创作中心首页，依次读取若干接口（像人打开首页后看各个卡片）。"""
+        if not self.signer.is_logged_in:
+            raise RuntimeError("抖音未登录，先 /dy_login 扫码")
+        page = await self._creator_page(f"{CREATOR}/creator-micro/home")
+        try:
+            if await self._is_login_page(page):
+                raise RuntimeError("创作者中心未登录或登录已失效，先 /dy_login 扫码")
+            out = []
+            for path, method in reqs:
+                await pause(0.3, 0.9)
+                out.append(await page.evaluate(self._FETCH_JS, {"url": CREATOR + path, "method": method}) or {})
+            return out
+        finally:
+            await page.close()
+
+    async def stats(self) -> dict:
+        info, overview, diag = await self._creator_reads([
+            ("/aweme/v1/creator/user/info/", "GET"),
+            ("/aweme/janus/creator/data/overview/all/?last_days_type=1", "GET"),  # 1=近7天 2=近30天
+            ("/dp/douyin/v1/creator/item/author_diagnosis", "POST"),
+        ])
+        if info.get("status_code") not in (0, None) or not info.get("user_profile"):
+            raise RuntimeError(f"读取抖音创作者数据失败: {info.get('status_msg') or info.get('status_code')}")
+        prof = info.get("user_profile") or {}
+        verify = info.get("douyin_user_verify_info") or {}
+        ov = overview.get("data") or {}
+
+        def num(key: str) -> int:
+            try:
+                return int(float((ov.get(key) or {}).get("current_count") or 0))
+            except ValueError:
+                return 0
+
+        labels = {"play": "播放", "digg": "点赞", "comment": "评论", "share": "分享", "profile": "主页访问",
+                  "new_fans": "新增粉丝", "cancel_fans": "取关", "post_search": "作品被搜索"}
+        out = {
+            "totals": {"fans": prof.get("follower_count") or verify.get("follower_count") or 0,
+                       "likes": verify.get("total_favorited") or 0, "following": prof.get("following_count") or 0},
+            "period_days": 7,
+            "period": {cn: num(k) for k, cn in labels.items() if k in ov},
+        }
+        names = {"PlayCnt": "播放", "Interact": "互动率", "NewFans": "新增粉丝", "PlayFinishRatio": "完播率", "PublishActivation": "发布数"}
+        dd = diag.get("data") or {}
+        if diag.get("code") == 0 and dd:
+            out["diagnosis"] = {cn: {"own": round((dd.get(k) or {}).get("OwnValue") or 0, 4),
+                                     "similar": round((dd.get(k) or {}).get("SimilarValue") or 0, 4)}
+                                for k, cn in names.items() if k in dd}
+        return out
+
+    async def inbox(self) -> dict:
+        unread, notice, msgs = await self._creator_reads([
+            ("/aweme/v1/creator/user_message/unread_count/", "GET"),
+            ("/aweme/v1/creator/notice/comment/", "GET"),
+            ("/aweme/v1/creator/user_message/list/?cursor=0&count=10", "GET"),
+        ])
+        comments = []
+        for c in notice.get("comments") or []:
+            cm = c.get("comment") if isinstance(c.get("comment"), dict) else c
+            user = cm.get("user") or c.get("user") or {}
+            aweme = c.get("aweme") or c.get("item") or {}
+            comments.append({
+                "id": str(cm.get("cid") or cm.get("comment_id") or c.get("id") or ""), "kind": "评论",
+                "user": user.get("nickname", "") if isinstance(user, dict) else "",
+                "text": cm.get("text") or cm.get("content") or "", "title": aweme.get("desc") or aweme.get("title") or "",
+                "time": int(cm.get("create_time") or 0),
+            })
+        notices = [{"id": str(m.get("user_message_id") or m.get("task_id")), "title": m.get("title", ""),
+                    "content": re.sub(r"<[^>]+>", "", m.get("content", "")), "time": int(m.get("create_time") or 0),
+                    "read": bool(m.get("is_read"))}
+                   for m in msgs.get("user_message_list") or []]
+        counts = {"系统通知": int(unread.get("count") or 0)}
+        return {"unread": {k: v for k, v in counts.items() if v}, "comments": [c for c in comments if c["id"]], "notices": notices}
+
     async def _open_profile_editor(self):
         """打开个人主页的“编辑资料”弹窗（昵称旁的铅笔图标），返回 (page, 保存时捕获的接口响应列表)。"""
         page = await self.signer.new_page()

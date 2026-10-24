@@ -186,6 +186,12 @@
         "hint": "0 关闭。巡检会深度检查抖音/B站登录与 Gemini/MiMo 连通性，状态变化时推送给 /va_notify 设置的会话",
         "default": 360
     },
+    "inbox_patrol_minutes": {
+        "description": "消息巡检间隔（分钟）",
+        "type": "int",
+        "hint": "0 关闭。定时查看抖音/B站的新评论、@我、系统通知，推送给 /va_notify 设置的会话（首次只记录不推送）；同时每天记录一次粉丝/播放等数据供 /va_report 对比",
+        "default": 30
+    },
     "rotate_fail_threshold": {
         "description": "连续失败几次后自动轮换账号",
         "type": "int",

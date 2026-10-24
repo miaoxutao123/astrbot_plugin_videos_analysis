@@ -33,6 +33,7 @@ CATALOG: dict[str, tuple[str, str, str, bool]] = {
     "max_pending_per_user": ("每人待审批上限", "int", "", False),
     "risk_cooldown_minutes": ("风控冷却(分钟)", "int", "账号触发风控后暂停写操作的时长", False),
     "health_check_interval_minutes": ("账号巡检间隔(分钟)", "int", "定时检查登录状态并自动续期，0 为关闭", False),
+    "inbox_patrol_minutes": ("消息巡检间隔(分钟)", "int", "新评论/@/系统通知推送给管理员，并每天记录运营数据；0 为关闭", False),
     "creator_reply_style": ("评论回复风格", "str", "AI 起草评论/回复时的语气", False),
     "reply_max_comments": ("每次最多回复几条", "int", "1~5", False),
     # 抖音

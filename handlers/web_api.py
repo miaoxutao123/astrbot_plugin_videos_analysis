@@ -259,6 +259,29 @@ def register_web_apis(plugin) -> None:
             return _ok({"result": await ops_tools.video_browse(plugin, ev, action, query, "", plat)})
         return _err("action 只能是 info / search / recommend / hot / watch")
 
+    # ── 数据 / 消息 ──────────────────────────────────────
+
+    async def report_get(**kwargs):
+        from ..services import ops_monitor
+
+        days = request.query.get("days", "7")
+        rep = await ops_monitor.report(plugin, request.query.get("platform", ""), int(days) if days.isdigit() else 7)
+        return _ok({"report": rep, "text": ops_monitor.render_report(rep)})
+
+    async def inbox_get(**kwargs):
+        from ..services import ops_monitor
+
+        view = await ops_monitor.inbox_view(plugin, request.query.get("platform", ""))
+        return _ok({"inbox": view, "text": ops_monitor.render_inbox(view)})
+
+    async def inbox_patrol(**kwargs):
+        from ..services import ops_monitor
+
+        pushed = await ops_monitor.patrol_inbox(plugin)
+        targets = len(plugin.accounts.notify_targets())
+        text = "\n\n".join(pushed) if pushed else "没有新消息（第一次巡检只记录现有消息，之后出现新的才推送）"
+        return _ok({"pushed": pushed, "text": text + (f"\n\n已推送到 {targets} 个告警会话" if pushed and targets else "")})
+
     async def job(**kwargs):
         jid = request.query.get("id", "")
         j = jobs.get(jid)
@@ -309,6 +332,9 @@ def register_web_apis(plugin) -> None:
         ("login/bilibili", login_bili, "POST", "B站扫码登录"),
         ("login/douyin", login_douyin, "POST", "抖音扫码登录"),
         ("debug/run", debug_run, "POST", "调试：解析/搜索/看视频"),
+        ("report", report_get, "GET", "运营数据报表"),
+        ("inbox", inbox_get, "GET", "消息概况"),
+        ("inbox/patrol", inbox_patrol, "POST", "立即巡检消息"),
         ("job", job, "GET", "后台任务状态"),
         ("cache", cache_get, "GET", "缓存占用"),
         ("cache/clear", cache_clear, "POST", "清理缓存"),

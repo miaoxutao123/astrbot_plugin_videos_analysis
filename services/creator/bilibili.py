@@ -399,6 +399,57 @@ class BilibiliCreator(CreatorPlatform):
             "following": rel.get("following"), "follower": rel.get("follower"),
         }
 
+    # ── 数据看板 / 消息（只读） ─────────────────────────
+
+    async def stats(self) -> dict:
+        cookies = await self._cookies()
+        ref = f"{MEMBER}/platform/home"
+        st = await self._get(f"{MEMBER}/x/web/index/stat", cookies=cookies, referer=ref)
+        if st.get("code") != 0:
+            await self._check_risk(st)
+            raise RuntimeError(f"读取B站数据失败: {self._err(st)}")
+        d = st.get("data") or {}
+        # pandect type=1：每日新增播放（最近 30 天左右）
+        pan = await self._get(f"{MEMBER}/x/web/data/pandect", {"type": 1}, cookies=cookies, referer=ref)
+        daily = [int(x.get("total_inc") or 0) for x in (pan.get("data") or [])] if pan.get("code") == 0 else []
+        totals = {
+            "fans": d.get("total_fans", 0), "plays": d.get("total_click", 0), "likes": d.get("total_like", 0),
+            "comments": d.get("total_reply", 0), "coins": d.get("total_coin", 0), "favs": d.get("total_fav", 0),
+            "shares": d.get("total_share", 0), "danmaku": d.get("total_dm", 0),
+        }
+        yesterday = {"播放": d.get("incr_click", 0), "粉丝": d.get("incr_fans", 0), "点赞": d.get("inc_like", 0),
+                     "评论": d.get("incr_reply", 0), "投币": d.get("inc_coin", 0), "收藏": d.get("inc_fav", 0)}
+        return {"totals": totals, "period_days": 7, "period": {"播放": sum(daily[-7:])} if daily else {},
+                "yesterday": {k: v for k, v in yesterday.items() if v}}
+
+    async def inbox(self) -> dict:
+        cookies = await self._cookies()
+        ref = "https://message.bilibili.com/"
+        unread = (await self._get(f"{API}/x/msgfeed/unread", cookies=cookies, referer=ref)).get("data") or {}
+        chat = (await self._get("https://api.vc.bilibili.com/session_svr/v1/session_svr/single_unread",
+                                {"unread_type": 0, "show_unfollow_list": 1, "build": 0, "mobi_app": "web"},
+                                cookies=cookies, referer=ref)).get("data") or {}
+        comments = []
+        for kind, url in (("回复", f"{API}/x/msgfeed/reply"), ("@", f"{API}/x/msgfeed/at")):
+            data = await self._get(url, cookies=cookies, referer=ref)
+            for it in ((data.get("data") or {}).get("items") or [])[:10]:
+                item = it.get("item") or {}
+                comments.append({
+                    "id": f"{kind}{it.get('id')}", "kind": kind, "user": (it.get("user") or {}).get("nickname", ""),
+                    "text": item.get("source_content", ""), "title": item.get("title", ""), "url": item.get("uri", ""),
+                    "time": int(it.get("reply_time") or it.get("at_time") or 0),
+                })
+        sysmsg = await self._get("https://message.bilibili.com/x/sys-msg/query_user_notify",
+                                 {"csrf": cookies.get("bili_jct", ""), "page_size": 10, "build": 0, "mobi_app": "web"},
+                                 cookies=cookies, referer=ref)
+        notices = [{"id": str(n.get("id")), "title": n.get("title", ""),
+                    "content": re.sub(r"#\{([^}]*)\}\{[^}]*\}", r"\1", n.get("content", "")), "time": n.get("time_at", "")}
+                   for n in ((sysmsg.get("data") or {}).get("system_notify_list") or [])]
+        counts = {"回复": unread.get("reply", 0), "@我": unread.get("at", 0), "点赞": unread.get("like", 0),
+                  "系统通知": unread.get("sys_msg", 0),
+                  "私信": int(chat.get("follow_unread") or 0) + int(chat.get("unfollow_unread") or 0)}
+        return {"unread": {k: v for k, v in counts.items() if v}, "comments": comments, "notices": notices}
+
     async def update_sign(self, text: str) -> OpResult:
         if reason := self._write_precheck():
             return OpResult(False, f"已拦截：{reason}")

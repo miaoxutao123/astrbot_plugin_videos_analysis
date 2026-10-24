@@ -27,7 +27,7 @@ _BOGUS_GEMINI_BASE = "https://generative-api.google.com/v1alpha2"
     "astrbot_plugin_videos_analysis",
     "视频解析与理解",
     "抖音/B站/MC百科视频自动解析与AI理解",
-    "0.9.2",
+    "0.10.0",
     "https://github.com/Zhalslar/astrbot_plugin_videos_analysis",
 )
 class hybird_videos_analysis(Star):
@@ -124,6 +124,9 @@ class hybird_videos_analysis(Star):
         from .handlers.web_api import register_web_apis
         register_web_apis(self)
         self.accounts.start_scheduler()
+        from .services.ops_monitor import OpsMonitor
+        self.monitor = OpsMonitor(self)
+        self.monitor.start()
 
     async def start_browser_signer(self) -> dict:
         """启动（或重启）抖音浏览器签名引擎，返回状态字典。"""
@@ -181,6 +184,8 @@ class hybird_videos_analysis(Star):
     async def terminate(self):
         """插件卸载/重载时关闭浏览器与 Xvfb，避免进程泄漏。"""
         await self.accounts.stop_scheduler()
+        if getattr(self, "monitor", None):
+            await self.monitor.stop()
         if self._browser_signer:
             await self._browser_signer.stop()
             self._browser_signer = None
@@ -486,6 +491,22 @@ class hybird_videos_analysis(Star):
         async for response in handle_audit(self, event):
             yield response
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_report", alias={"运营数据"})
+    async def ops_report_command(self, event):
+        """运营数据看板：/va_report [平台] [天数]"""
+        from .handlers.account_ops_handler import handle_report
+        async for response in handle_report(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_inbox", alias={"消息概况"})
+    async def ops_inbox_command(self, event):
+        """消息概况（未读、最新评论/@、系统通知）：/va_inbox [平台]"""
+        from .handlers.account_ops_handler import handle_inbox
+        async for response in handle_inbox(self, event):
+            yield response
+
     # ==================== 主动触发命令 ====================
 
     @filter.command("理解视频")
@@ -534,12 +555,12 @@ class hybird_videos_analysis(Star):
 
     @filter.llm_tool(name="video_account")
     async def llm_video_account(self, event, action: str, platform: str = "", target: str = "", account: str = ""):
-        """查看机器人自己的平台账号（仅管理员）。status=各平台登录状态与账号池；works=最近作品；comments=某作品的评论；profile=账号资料；audit=最近的操作申请与审批记录。
+        """查看机器人自己的平台账号（仅管理员）。status=各平台登录状态与账号池；works=最近作品；comments=某作品的评论；profile=账号资料；audit=最近的操作申请与审批记录；report=运营数据（粉丝/播放等及变化、同类对比）；inbox=未读消息与最新评论/@/系统通知。
 
         Args:
-            action(string): status / works / comments / profile / audit
-            platform(string): bilibili 或 douyin，默认 bilibili
-            target(string): comments 时填作品序号/BV号/链接；audit 可填申请码
+            action(string): status / works / comments / profile / audit / report / inbox
+            platform(string): bilibili 或 douyin，默认 bilibili；report/inbox 留空=全部平台
+            target(string): comments 时填作品序号/BV号/链接；audit 可填申请码；report 可填对比天数（默认 7）
             account(string): 账号池里的账号名，留空=当前账号
         """
         from .tools import ops_tools

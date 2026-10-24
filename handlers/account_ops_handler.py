@@ -321,6 +321,29 @@ async def handle_audit(plugin, event):
     yield event.plain_result(("操作审计（新→旧）：\n" if items else "") + audit_log.render(items))
 
 
+async def handle_report(plugin, event):
+    """/va_report [平台] [天数]"""
+    from ..services import ops_monitor
+
+    platform, days = "", 7
+    for a in command_args(event, "va_report", "运营数据"):
+        if normalize_platform(a):
+            platform = normalize_platform(a)
+        elif a.isdigit():
+            days = int(a)
+    yield event.plain_result("正在读取各平台数据…")
+    yield event.plain_result(ops_monitor.render_report(await ops_monitor.report(plugin, platform, days)))
+
+
+async def handle_inbox(plugin, event):
+    """/va_inbox [平台]"""
+    from ..services import ops_monitor
+
+    args = command_args(event, "va_inbox", "消息概况")
+    platform = normalize_platform(args[0]) if args else ""
+    yield event.plain_result(ops_monitor.render_inbox(await ops_monitor.inbox_view(plugin, platform or "")))
+
+
 # ── B站浏览 / 账号资料 ───────────────────────────────────
 
 

@@ -75,6 +75,7 @@
       <button data-tab="ov" class="on">概览</button>
       <button data-tab="ap">审批</button>
       <button data-tab="au">审计</button>
+      <button data-tab="da">数据</button>
       <button data-tab="st">设置</button>
       <button data-tab="lg">登录</button>
       <button data-tab="dbg">调试</button>
@@ -93,6 +94,18 @@
     </div>
 
     <div class="pane" id="pane-au"><div class="card" id="audit"></div></div>
+
+    <div class="pane" id="pane-da">
+      <div class="toolbar">
+        <select id="da-p"><option value="">全部平台</option><option value="bilibili">B站</option><option value="douyin">抖音</option></select>
+        <select id="da-d"><option value="7">对比 7 天前</option><option value="30">对比 30 天前</option><option value="1">对比昨天</option></select>
+        <button data-da="report">运营数据</button>
+        <button data-da="inbox" class="ghost">消息概况</button>
+        <button data-da="patrol" class="ghost">立即巡检消息</button>
+        <span class="meta" id="da-st">抖音需要打开一次创作中心页面，约 10~20 秒</span>
+      </div>
+      <div class="card"><pre id="da-out" class="empty">点上面的按钮读取</pre></div>
+    </div>
 
     <div class="pane" id="pane-st">
       <div class="toolbar"><button id="save">保存修改</button><span class="meta">保存后插件自动重载生效；密钥留空表示不修改，填 <code>__clear__</code> 清空</span></div>
@@ -300,8 +313,19 @@
     });
   }
 
+  // ── 数据 ──
+  function runData(kind, btn) {
+    var p = $('da-p').value, days = $('da-d').value;
+    btn.disabled = true; $('da-st').textContent = '读取中…';
+    var req = kind === 'patrol' ? bridge.apiPost('inbox/patrol', {}) : bridge.apiGet(kind, { platform: p, days: days });
+    req.then(function (d) {
+      $('da-out').className = ''; $('da-out').textContent = d.text; $('da-st').textContent = '完成 ' + new Date().toLocaleTimeString();
+    }).catch(function (e) { $('da-st').textContent = '失败：' + e.message; })
+      .then(function () { btn.disabled = false; });
+  }
+
   // ── 通用 ──
-  var LOADERS = { ov: loadOverview, ap: loadPending, au: loadAudit, st: loadSettings, lg: function () { return Promise.resolve(); }, dbg: loadCache };
+  var LOADERS = { ov: loadOverview, ap: loadPending, au: loadAudit, st: loadSettings, da: function () { return Promise.resolve(); }, lg: function () { return Promise.resolve(); }, dbg: loadCache };
   var current = 'ov';
   function show(tab) {
     current = tab;
@@ -337,6 +361,7 @@
       else if (d.cancel) { post('pending/cancel', { code: d.cancel }, t); }
       else if (d.login) { startLogin(d.login, t); }
       else if (d.dbg) { runDebug(d.dbg, t); }
+      else if (d.da) { runData(d.da, t); }
       else if (d.clear) { if (!armed(t)) return; post('cache/clear', { target: d.clear }, t); }
     });
   }
