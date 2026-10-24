@@ -1,5 +1,7 @@
 {
   "pages": {
-    "accounts": { "title": "Account Ops" }
+    "accounts": {
+      "title": "Video Plugin Panel"
+    }
   }
 }

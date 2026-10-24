@@ -315,5 +315,11 @@
         "type": "int",
         "default": 21,
         "hint": "21=日常（生活区）；常用：17=单机游戏 138=搞笑 201=科学科普 95=数码。投稿时可用 tid=xx 单独指定"
+    },
+    "debug_webui_enabled": {
+        "description": "调试管理面板（WebUI 插件页）",
+        "type": "bool",
+        "default": false,
+        "hint": "默认关闭。开启后在 AstrBot WebUI → 插件 → 本插件的页面里可以查看账号、审批、审计、修改设置、扫码登录、调试看视频。仅建议调试时开启"
     }
 }

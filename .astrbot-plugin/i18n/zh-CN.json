@@ -1,5 +1,7 @@
 {
   "pages": {
-    "accounts": { "title": "账号运维" }
+    "accounts": {
+      "title": "视频插件管理面板"
+    }
   }
 }

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>账号运维</title>
+<title>视频插件管理面板</title>
 <style>
   :root { --bg:#f5f6f8; --card:#fff; --text:#1f2329; --muted:#8a919f; --line:#e5e6eb;
           --accent:#3370ff; --ok:#00b578; --bad:#fa5151; --warn:#ff8f1f; }
@@ -12,78 +12,158 @@
   * { box-sizing:border-box; }
   body { margin:0; padding:16px; background:var(--bg); color:var(--text);
          font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif; }
-  .top { display:flex; align-items:center; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
+  .top { display:flex; align-items:center; gap:10px; margin-bottom:12px; flex-wrap:wrap; }
   .top h1 { font-size:17px; margin:0; }
   .meta { color:var(--muted); font-size:12px; }
-  button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:6px 12px;
-           font-size:13px; cursor:pointer; }
+  .tabs { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:14px; border-bottom:1px solid var(--line); }
+  .tabs button { background:transparent; color:var(--muted); border:0; border-bottom:2px solid transparent;
+                 border-radius:0; padding:6px 12px; font-size:14px; }
+  .tabs button.on { color:var(--accent); border-bottom-color:var(--accent); font-weight:600; }
+  .pane { display:none; } .pane.on { display:block; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:6px 12px; font-size:13px; cursor:pointer; }
   button:disabled { opacity:.5; cursor:wait; }
   button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); padding:2px 8px; font-size:12px; }
+  button.danger { background:var(--bad); }
   h2.sec { font-size:14px; margin:18px 0 8px; color:var(--muted); font-weight:600; }
   .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; min-width:0; }
   .card h3 { font-size:14px; margin:0 0 4px; display:flex; align-items:center; gap:8px; }
-  .dot { width:9px; height:9px; border-radius:50%; flex:none; }
+  .dot { width:9px; height:9px; border-radius:50%; flex:none; display:inline-block; }
   .dot.ok { background:var(--ok); } .dot.warn { background:var(--warn); } .dot.bad { background:var(--bad); }
-  .summary { margin:0 0 8px; }
   table { width:100%; border-collapse:collapse; font-size:13px; }
-  td { padding:3px 6px; border-bottom:1px dashed var(--line); vertical-align:top; word-break:break-all; }
+  td, th { padding:4px 6px; border-bottom:1px dashed var(--line); vertical-align:top; word-break:break-all; text-align:left; }
+  th { color:var(--muted); font-weight:600; white-space:nowrap; }
+  td.nw { white-space:nowrap; }
   td.k { color:var(--muted); white-space:nowrap; width:1%; }
-  .last { font-size:12px; color:var(--muted); margin-top:8px; }
   .empty { color:var(--muted); padding:8px 0; }
   .row { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px dashed var(--line); flex-wrap:wrap; }
   .row:last-child { border-bottom:0; }
   .tag { font-size:11px; padding:0 6px; border-radius:6px; border:1px solid var(--line); color:var(--muted); }
-  .tag.on { color:var(--ok); border-color:var(--ok); }
-  .tag.bad { color:var(--bad); border-color:var(--bad); }
+  .tag.on { color:var(--ok); border-color:var(--ok); } .tag.bad { color:var(--bad); border-color:var(--bad); }
   .banner { border:1px solid var(--bad); color:var(--bad); border-radius:10px; padding:10px 14px; margin-bottom:12px; }
+  .note { border:1px solid var(--warn); color:var(--text); border-radius:10px; padding:10px 14px; margin-bottom:12px; background:var(--card); }
+  .ok-msg { border:1px solid var(--ok); color:var(--ok); border-radius:10px; padding:8px 12px; margin:8px 0; white-space:pre-wrap; }
   code { font-size:12px; background:var(--bg); padding:1px 4px; border-radius:4px; }
+  input[type=text], input[type=number], input[type=password], select, textarea {
+    background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:4px 8px; font-size:13px; }
+  .set-row { display:grid; grid-template-columns:minmax(140px,220px) 1fr; gap:6px 12px; align-items:center;
+             padding:6px 0; border-bottom:1px dashed var(--line); }
+  .set-row .help { grid-column:2; color:var(--muted); font-size:12px; margin-top:-4px; }
+  .set-row input[type=text], .set-row input[type=password], .set-row input[type=number] { width:100%; max-width:480px; }
+  .qr { max-width:260px; border-radius:8px; border:1px solid var(--line); background:#fff; }
+  pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); padding:10px; border-radius:8px; font-size:12px; margin:6px 0; }
+  .toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
 </style>
 </head>
 <body>
   <div class="top">
-    <h1>账号运维</h1>
+    <h1>视频插件管理面板</h1>
+    <span class="tag">调试用</span>
     <span class="meta" id="meta">加载中…</span>
     <span style="flex:1"></span>
-    <button id="check">立即巡检</button>
     <button id="refresh" class="ghost">刷新</button>
   </div>
   <div id="banner"></div>
+  <div id="disabled" style="display:none" class="note">
+    管理面板默认关闭。需要调试时：在 AstrBot WebUI → 插件 → 本插件 → <b>插件配置</b> 里打开
+    <code>调试管理面板（debug_webui_enabled）</code>，保存后重载插件，再刷新本页。
+    <br>不调试时建议保持关闭（开源发布默认关闭）。
+  </div>
 
-  <h2 class="sec">平台状态</h2>
-  <div class="grid" id="status"></div>
+  <div id="app" style="display:none">
+    <div class="tabs" id="tabs">
+      <button data-tab="ov" class="on">概览</button>
+      <button data-tab="ap">审批</button>
+      <button data-tab="au">审计</button>
+      <button data-tab="st">设置</button>
+      <button data-tab="lg">登录</button>
+      <button data-tab="dbg">调试</button>
+    </div>
 
-  <h2 class="sec">账号池</h2>
-  <div class="grid" id="pool"></div>
+    <div class="pane on" id="pane-ov">
+      <div class="toolbar"><button id="check">立即巡检</button><span class="meta">巡检会自动续期 B站 cookie，状态变化时推送告警</span></div>
+      <h2 class="sec">体检</h2><div class="card" id="problems"></div>
+      <h2 class="sec">平台状态</h2><div class="grid" id="status"></div>
+      <h2 class="sec">账号池</h2><div class="grid" id="pool"></div>
+    </div>
 
-  <h2 class="sec">待确认操作</h2>
-  <div class="card" id="pending"></div>
+    <div class="pane" id="pane-ap">
+      <div class="note">在这里批准等同于管理员本人确认，会立即执行（发评论、改资料、删除等），请核对内容。</div>
+      <div class="card" id="pending"></div>
+    </div>
+
+    <div class="pane" id="pane-au"><div class="card" id="audit"></div></div>
+
+    <div class="pane" id="pane-st">
+      <div class="toolbar"><button id="save">保存修改</button><span class="meta">保存后插件自动重载生效；密钥留空表示不修改，填 <code>__clear__</code> 清空</span></div>
+      <div id="savemsg"></div>
+      <div class="card" id="settings"></div>
+    </div>
+
+    <div class="pane" id="pane-lg">
+      <div class="grid">
+        <div class="card"><h3>B站扫码登录</h3>
+          <div class="toolbar"><button data-login="bilibili">生成二维码</button><span class="meta" id="lg-bilibili-st"></span></div>
+          <div id="lg-bilibili"></div></div>
+        <div class="card"><h3>抖音扫码登录</h3>
+          <div class="toolbar"><button data-login="douyin">生成二维码</button><span class="meta" id="lg-douyin-st"></span></div>
+          <div id="lg-douyin"></div></div>
+      </div>
+    </div>
+
+    <div class="pane" id="pane-dbg">
+      <div class="card">
+        <div class="toolbar">
+          <input type="text" id="dbg-q" placeholder="BV号 / B站或抖音链接 / 搜索关键词 / 列表序号" style="flex:1;min-width:240px">
+          <select id="dbg-p"><option value="">自动识别平台</option><option value="bilibili">B站</option><option value="douyin">抖音</option></select>
+        </div>
+        <div class="toolbar">
+          <button data-dbg="info">解析链接</button>
+          <button data-dbg="search">搜索</button>
+          <button data-dbg="hot" class="ghost">热门</button>
+          <button data-dbg="watch">看视频（抽帧+转写）</button>
+          <span class="meta" id="dbg-st"></span>
+        </div>
+        <div id="dbg-out"></div>
+      </div>
+      <h2 class="sec">缓存与临时文件</h2>
+      <div class="card" id="cache"></div>
+    </div>
+  </div>
 
 <script>
 (function () {
-  // bridge 会把相对路径映射到 /api/v1/plugins/extensions/<插件>/<endpoint>，成功时返回 data 字段，status=error 时 reject
-  var bridge;
+  // bridge 把相对路径映射到 /api/v1/plugins/extensions/<插件>/<endpoint>，成功返回 data，status=error 时 reject
+  var bridge, settingsCache = [];
   var NAMES = { douyin: '抖音', bilibili: 'B站', gemini: 'Gemini', mimo: 'MiMo' };
-
+  function $(id) { return document.getElementById(id); }
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
   function fmt(ts) { return ts ? new Date(ts * 1000).toLocaleString() : '—'; }
-  function banner(msg) { document.getElementById('banner').innerHTML = msg ? '<div class="banner">' + esc(msg) + '</div>' : ''; }
+  function banner(msg) { $('banner').innerHTML = msg ? '<div class="banner">' + esc(msg) + '</div>' : ''; }
+  function json(o) { return '<pre>' + esc(JSON.stringify(o, null, 2)) + '</pre>'; }
 
+  // 插件页 iframe 没有 allow-modals，confirm() 会被静默拦截：危险按钮改成"再点一次确认"
+  function armed(btn, label) {
+    if (btn.dataset.armed === '1') return true;
+    btn.dataset.armed = '1';
+    var old = btn.textContent; btn.textContent = label || '再点一次确认';
+    setTimeout(function () { btn.dataset.armed = ''; btn.textContent = old; }, 3000);
+    return false;
+  }
+
+  // ── 概览 ──
   function statusCard(st, last) {
     var rows = Object.keys(st.details || {}).map(function (k) {
       return '<tr><td class="k">' + esc(k) + '</td><td>' + esc(st.details[k]) + '</td></tr>';
     }).join('');
-    var lastLine = last
-      ? '<div class="last">上次巡检 ' + fmt(last.checked_at) + '：<span class="dot ' + last.state + '" style="display:inline-block"></span> ' + esc(last.summary) + '</div>'
-      : '<div class="last">尚未巡检</div>';
+    var lastLine = last ? '<div class="meta">上次巡检 ' + fmt(last.checked_at) + '：<span class="dot ' + last.state + '"></span> ' + esc(last.summary) + '</div>' : '';
     return '<div class="card"><h3><span class="dot ' + st.state + '"></span>' + esc(NAMES[st.platform] || st.platform) + '</h3>' +
-      '<p class="summary">' + esc(st.summary) + '</p><table>' + rows + '</table>' + lastLine + '</div>';
+      '<div>' + esc(st.summary) + '</div><table>' + rows + '</table>' + lastLine + '</div>';
   }
-
   function poolCard(plat, accs) {
     var body = accs.length ? accs.map(function (a) {
       var tags = [];
@@ -91,74 +171,189 @@
       if (a.cooldown_left) tags.push('<span class="tag bad">冷却 ' + Math.ceil(a.cooldown_left / 60) + ' 分钟</span>');
       if (a.valid === false) tags.push('<span class="tag bad">已失效</span>');
       var btn = a.active ? '' : '<button class="ghost" data-use="' + esc(plat) + '|' + esc(a.name) + '">切换</button>';
-      return '<div class="row"><b>' + esc(a.name) + '</b>' + tags.join('') +
-        '<span class="meta">保存于 ' + fmt(a.saved_at) + (a.last_error ? ' · ' + esc(a.last_error) : '') + '</span>' +
-        '<span style="flex:1"></span>' + btn + '</div>';
+      return '<div class="row"><b>' + esc(a.name) + '</b>' + tags.join('') + '<span class="meta">保存于 ' + fmt(a.saved_at) +
+        (a.last_error ? ' · ' + esc(a.last_error) : '') + '</span><span style="flex:1"></span>' + btn + '</div>';
     }).join('') : '<div class="empty">空。聊天里发 <code>/va_pool save ' + esc(plat) + ' 名称</code> 保存当前登录</div>';
     return '<div class="card"><h3>' + esc(NAMES[plat] || plat) + '</h3>' + body + '</div>';
   }
+  function loadOverview() {
+    return bridge.apiGet('overview').then(function (d) {
+      var last = d.last_check || {};
+      $('problems').innerHTML = (d.problems || []).map(function (p) { return '<div class="row">' + (p === '一切正常' ? '✅ ' : '⚠️ ') + esc(p) + '</div>'; }).join('');
+      $('status').innerHTML = d.live.map(function (st) { return statusCard(st, last[st.platform]); }).join('');
+      $('pool').innerHTML = Object.keys(d.pool).map(function (p) { return poolCard(p, d.pool[p]); }).join('');
+      var s = d.settings;
+      $('meta').textContent = (s.interval_min ? '每 ' + s.interval_min + ' 分钟巡检' : '定时巡检已关闭') +
+        ' · 告警会话 ' + s.notify_targets + ' 个 · 待审批 ' + d.pending.length + ' · 上次巡检 ' + fmt(d.last_check_at);
+      renderPending(d.pending);
+    });
+  }
 
-  function pendingCard(list) {
-    if (!list.length) return '<div class="empty">没有待确认的操作（发布/删除/评论回复在聊天里用 /va_confirm 执行）</div>';
-    return list.map(function (o) {
+  // ── 审批 ──
+  function renderPending(list) {
+    $('pending').innerHTML = list.length ? list.map(function (o) {
       return '<div class="row"><code>' + esc(o.code) + '</code><span class="tag">' + esc(o.platform) + '·' + esc(o.account) + '</span>' +
         '<span>' + esc(o.summary) + '</span><span class="meta">剩 ' + o.expires_in + ' 秒</span><span style="flex:1"></span>' +
-        '<button class="ghost" data-cancel="' + esc(o.code) + '">取消</button></div>';
-    }).join('');
+        '<button data-approve="' + esc(o.code) + '">批准</button> <button class="ghost" data-cancel="' + esc(o.code) + '">拒绝</button></div>';
+    }).join('') : '<div class="empty">没有待审批的操作</div>';
+  }
+  function loadPending() { return bridge.apiGet('pending').then(function (d) { renderPending(d.items); }); }
+
+  // ── 审计 ──
+  var EV = { created: '待审批', approved: '已批准', rejected: '已拒绝', expired: '已过期' };
+  var RES = { ok: '成功', failed: '失败', partial: '部分成功' };
+  function loadAudit() {
+    return bridge.apiGet('audit', { limit: 100 }).then(function (d) {
+      var items = d.items || [];
+      if (!items.length) { $('audit').innerHTML = '<div class="empty">还没有记录</div>'; return; }
+      $('audit').innerHTML = '<table><tr><th>时间</th><th>状态</th><th>码</th><th>平台·账号</th><th>内容</th><th>申请人</th><th>处理人</th><th>结果</th></tr>' +
+        items.map(function (x) {
+          return '<tr><td class="nw">' + fmt(x.created) + '</td><td class="nw">' + esc(EV[x.status] || x.status) + '</td><td class="nw"><code>' + esc(x.code) + '</code></td><td>' +
+            esc((x.platform || '') + '·' + (x.account || '')) + '</td><td>' + esc(x.summary || x.kind || '') + '</td><td>' +
+            esc(x.requester_name || x.requester || '') + '</td><td>' + esc(x.approver_name || x.by_name || '') + '</td><td>' +
+            esc((RES[x.result] || x.result || '') + (x.error ? '：' + x.error : '')) + '</td></tr>';
+        }).join('') + '</table>';
+    });
   }
 
-  function render(d) {
-    var last = d.last_check || {};
-    document.getElementById('status').innerHTML = d.live.map(function (st) { return statusCard(st, last[st.platform]); }).join('');
-    document.getElementById('pool').innerHTML = Object.keys(d.pool).map(function (p) { return poolCard(p, d.pool[p]); }).join('');
-    document.getElementById('pending').innerHTML = pendingCard(d.pending);
-    var s = d.settings;
-    document.getElementById('meta').textContent =
-      (s.interval_min ? '每 ' + s.interval_min + ' 分钟巡检' : '定时巡检已关闭') + ' · 告警会话 ' + s.notify_targets +
-      ' 个 · 连续失败 ' + s.rotate_threshold + ' 次轮换 · 上次巡检 ' + fmt(d.last_check_at);
+  // ── 设置 ──
+  function settingInput(it) {
+    var id = 'set-' + it.key;
+    if (it.type === 'bool') return '<label><input type="checkbox" id="' + id + '"' + (it.value ? ' checked' : '') + '> 开启</label>';
+    if (it.secret) return '<input type="password" id="' + id + '" placeholder="' + esc(it.value) + '（留空不修改）" autocomplete="off">';
+    return '<input type="' + (it.type === 'int' ? 'number' : 'text') + '" id="' + id + '" value="' + esc(it.value == null ? '' : it.value) + '">';
+  }
+  function loadSettings() {
+    return bridge.apiGet('settings').then(function (d) {
+      settingsCache = d.items;
+      $('settings').innerHTML = d.items.map(function (it) {
+        return '<div class="set-row"><div><b>' + esc(it.name) + '</b><div class="meta"><code>' + esc(it.key) + '</code></div></div><div>' +
+          settingInput(it) + '</div>' + (it.help ? '<div class="help">' + esc(it.help) + '</div>' : '') + '</div>';
+      }).join('');
+    });
+  }
+  function collectChanges() {
+    var changes = {};
+    settingsCache.forEach(function (it) {
+      var el = $('set-' + it.key); if (!el) return;
+      var v = it.type === 'bool' ? el.checked : el.value;
+      if (it.secret) { if (v) changes[it.key] = v; return; }
+      if (it.type === 'int') v = v === '' ? '' : Number(v);
+      if (String(v) !== String(it.value == null ? '' : it.value)) changes[it.key] = v;
+    });
+    return changes;
   }
 
-  function load() {
-    return bridge.apiGet('overview').then(function (data) {
-      banner('');
-      render(data);
-    }).catch(function (e) { banner('加载失败：' + e.message); });
+  // ── 登录 ──
+  function poll(job, done, tries) {
+    return bridge.apiGet('job', { id: job }).then(function (j) {
+      if (j.state === 'running' && tries > 0) return new Promise(function (r) { setTimeout(r, 2000); }).then(function () { return poll(job, done, tries - 1); });
+      done(j);
+    });
+  }
+  function startLogin(plat, btn) {
+    btn.disabled = true; $('lg-' + plat + '-st').textContent = '生成中…';
+    bridge.apiPost('login/' + plat, {}).then(function (d) {
+      $('lg-' + plat).innerHTML = '<img class="qr" src="data:image/png;base64,' + d.image + '">';
+      $('lg-' + plat + '-st').textContent = '请用' + (plat === 'bilibili' ? ' B站' : '抖音') + ' App 扫码（' + d.expires_in + ' 秒内有效）';
+      return poll(d.job, function (j) {
+        var ok = j.state === 'done' && j.result;
+        $('lg-' + plat + '-st').textContent = ok ? '✅ 登录成功' : '❌ 未登录（超时或失败）' + (j.error ? '：' + j.error : '');
+        $('lg-' + plat).innerHTML = '';
+        if (ok) loadOverview();
+      }, 90);
+    }).catch(function (e) { $('lg-' + plat + '-st').textContent = '失败：' + e.message; })
+      .then(function () { btn.disabled = false; });
   }
 
-  function post(path, body, btn) {
+  // ── 调试 ──
+  function runDebug(action, btn) {
+    var q = $('dbg-q').value.trim(), p = $('dbg-p').value;
+    btn.disabled = true; $('dbg-st').textContent = action === 'watch' ? '正在看视频（下载→转写→挑帧→总结，约 20~120 秒）…' : '运行中…';
+    bridge.apiPost('debug/run', { action: action, query: q, platform: p }).then(function (d) {
+      if (!d.job) { $('dbg-out').innerHTML = json(d.result); $('dbg-st').textContent = ''; return; }
+      return poll(d.job, function (j) {
+        $('dbg-st').textContent = j.state === 'done' ? '完成' : '失败' + (j.error ? '：' + j.error : '');
+        if (j.result) {
+          var r = j.result;
+          $('dbg-out').innerHTML = '<table>' + [
+            ['视频', (r.title || '') + '（' + (r.up || '') + '，' + r.id + '）'],
+            ['时长', r.duration ? Math.round(r.duration / 60) + ' 分钟' : '—'],
+            ['转写', r.transcript_source + '（' + r.transcript_len + ' 字）'],
+            ['挑帧', r.frame_method + '：' + (r.frame_times || []).join(' ')],
+            ['总结', r.summary_by + ' · ' + r.seconds + 's' + (r.partial ? ' · ' + r.partial : '')],
+          ].map(function (x) { return '<tr><td class="k">' + x[0] + '</td><td>' + esc(x[1]) + '</td></tr>'; }).join('') + '</table>' +
+            '<h2 class="sec">概要</h2><pre>' + esc(r.summary) + '</pre><h2 class="sec">转写节选</h2><pre>' + esc(r.transcript_excerpt || '（无）') + '</pre>';
+        }
+        loadCache();
+      }, 90);
+    }).catch(function (e) { $('dbg-st').textContent = '失败：' + e.message; })
+      .then(function () { btn.disabled = false; });
+  }
+  function loadCache() {
+    return bridge.apiGet('cache').then(function (d) {
+      var map = { '下载的视频': 'downloads', '看视频临时文件': 'downloads', '二维码/截图': 'images', '视频概要缓存': 'summaries' };
+      $('cache').innerHTML = Object.keys(d).map(function (k) {
+        return '<div class="row"><b>' + esc(k) + '</b><span class="meta">' + d[k].files + ' 个 · ' + d[k].mb + ' MB</span><span style="flex:1"></span>' +
+          '<button class="ghost" data-clear="' + map[k] + '">清理</button></div>';
+      }).join('');
+    });
+  }
+
+  // ── 通用 ──
+  var LOADERS = { ov: loadOverview, ap: loadPending, au: loadAudit, st: loadSettings, lg: function () { return Promise.resolve(); }, dbg: loadCache };
+  var current = 'ov';
+  function show(tab) {
+    current = tab;
+    Array.prototype.forEach.call(document.querySelectorAll('#tabs button'), function (b) { b.classList.toggle('on', b.dataset.tab === tab); });
+    Array.prototype.forEach.call(document.querySelectorAll('.pane'), function (p) { p.classList.toggle('on', p.id === 'pane-' + tab); });
+    reload();
+  }
+  function reload() { return LOADERS[current]().then(function () { banner(''); }).catch(function (e) { banner('加载失败：' + e.message); }); }
+  function post(path, body, btn, after) {
     if (btn) btn.disabled = true;
-    return bridge.apiPost(path, body || {}).then(function () {
-      return load();
-    }).catch(function (e) { banner('操作失败：' + e.message); })
+    return bridge.apiPost(path, body || {}).then(function (d) { if (after) after(d); return reload(); })
+      .catch(function (e) { banner('操作失败：' + e.message); })
       .then(function () { if (btn) btn.disabled = false; });
   }
 
   function bind() {
-    document.getElementById('refresh').addEventListener('click', load);
-    document.getElementById('check').addEventListener('click', function (e) { post('check', {}, e.target); });
+    $('refresh').addEventListener('click', reload);
+    $('check').addEventListener('click', function (e) { post('check', {}, e.target); });
+    $('save').addEventListener('click', function (e) {
+      var ch = collectChanges();
+      if (!Object.keys(ch).length) { $('savemsg').innerHTML = '<div class="ok-msg">没有修改</div>'; return; }
+      if (!armed(e.target, '再点一次保存（' + Object.keys(ch).length + ' 项）')) return;
+      post('settings/save', { changes: ch }, e.target, function (d) {
+        $('savemsg').innerHTML = '<div class="ok-msg">' + esc(d.message) + '</div>';
+        setTimeout(function () { location.reload(); }, 4000);  // 插件重载后刷新页面
+      });
+    });
+    $('tabs').addEventListener('click', function (e) { if (e.target.dataset.tab) show(e.target.dataset.tab); });
     document.body.addEventListener('click', function (e) {
-      var t = e.target;
-      if (t.dataset.use) {
-        // 插件页 iframe 没有 allow-modals，confirm() 会被静默拦截，改成按钮内二次点击确认
-        if (t.dataset.armed !== '1') {
-          t.dataset.armed = '1';
-          t.textContent = '再点一次确认';
-          setTimeout(function () { t.dataset.armed = ''; t.textContent = '切换'; }, 3000);
-          return;
-        }
-        var p = t.dataset.use.split('|');
-        post('pool/use', { platform: p[0], name: p.slice(1).join('|') }, t);
-      } else if (t.dataset.cancel) {
-        post('pending/cancel', { code: t.dataset.cancel }, t);
-      }
+      var t = e.target, d = t.dataset;
+      if (d.use) { if (!armed(t)) return; var p = d.use.split('|'); post('pool/use', { platform: p[0], name: p.slice(1).join('|') }, t); }
+      else if (d.approve) { if (!armed(t, '再点一次执行')) return; post('pending/approve', { code: d.approve }, t, function (r) { banner(''); alertMsg(r.message); }); }
+      else if (d.cancel) { post('pending/cancel', { code: d.cancel }, t); }
+      else if (d.login) { startLogin(d.login, t); }
+      else if (d.dbg) { runDebug(d.dbg, t); }
+      else if (d.clear) { if (!armed(t)) return; post('cache/clear', { target: d.clear }, t); }
     });
   }
+  function alertMsg(m) { $('pending').insertAdjacentHTML('beforebegin', '<div class="ok-msg">' + esc(m) + '</div>'); }
 
   (function wait(tries) {
     var b = window.AstrBotPluginPage;
     if (b && typeof b.ready === 'function') {
       bridge = b;
-      b.ready().then(function () { bind(); load(); setInterval(load, 30000); });
+      b.ready().then(function () {
+        return bridge.apiGet('status');
+      }).then(function (st) {
+        if (!st.enabled) { $('disabled').style.display = ''; $('meta').textContent = '未开启'; return; }
+        $('app').style.display = '';
+        bind(); show('ov');
+        setInterval(function () { if (current === 'ov' || current === 'ap') reload(); }, 30000);
+      }).catch(function (e) { banner('加载失败：' + e.message); });
       return;
     }
     if (tries <= 0) { banner('未检测到插件页 bridge，请从 AstrBot WebUI 的插件详情页打开本页面。'); return; }
