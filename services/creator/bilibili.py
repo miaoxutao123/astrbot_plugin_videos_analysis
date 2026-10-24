@@ -585,7 +585,44 @@ class BilibiliCreator(CreatorPlatform):
         if data.get("code") == 0:
             return OpResult(True, f"已删除稿件 {work_id}")
         if data.get("code") == 340022:
-            # Web 端删稿要先给绑定手机发短信验证码，机器人不代收验证码
-            return OpResult(False, f"B站删除稿件需要短信验证码，机器人无法代为完成；请在 B站 App 或创作中心手动删除 {work_id}", data)
+            # Web 端删稿要先给绑定手机发短信验证码，机器人不代收验证码，先改成仅自己可见
+            hidden = await self.set_only_self(aid)
+            if hidden.ok:
+                return OpResult(True, f"B站删稿需要短信验证码，已先把 {work_id} 改为仅自己可见；要彻底删除请到 B站 App 或创作中心操作",
+                                {"hidden": True, "aid": aid})
+            return OpResult(False, f"B站删除稿件需要短信验证码，改为仅自己可见也失败了（{hidden.message}）；请在 B站 App 或创作中心手动处理 {work_id}", data)
         await self._check_risk(data, write=True)
         return OpResult(False, f"删除失败: {self._err(data)}", data)
+
+    async def set_only_self(self, aid: int) -> OpResult:
+        """把稿件改为仅自己可见：取回创作中心里的稿件信息，原样提交编辑并打开 is_only_self。"""
+        view = await self._get(f"{MEMBER}/x/vupre/web/archive/view", {"topic_grey": 1, "aid": aid},
+                               referer=f"{MEMBER}/platform/upload-manager/article")
+        d = view.get("data") or {}
+        a = d.get("archive") or {}
+        if view.get("code") != 0 or not a:
+            return OpResult(False, f"读取稿件失败: {self._err(view)}", view)
+        if a.get("is_only_self") == 1:
+            return OpResult(True, "已是仅自己可见")
+        body = {
+            "aid": aid, "copyright": a.get("copyright", 1), "tid": a.get("tid"), "title": a.get("title"),
+            "cover": a.get("cover"), "tag": a.get("tag", ""), "desc": a.get("desc", ""),
+            "desc_format_id": a.get("desc_format_id", 9999), "source": a.get("source", ""),
+            "no_reprint": a.get("no_reprint", 1), "dynamic": a.get("dynamic", ""),
+            "interactive": a.get("interactive", 0), "act_reserve_create": int(d.get("act_reserve_create") or 0),
+            "no_disturbance": int(d.get("no_disturbance") or 0), "is_only_self": 1, "web_os": 3, "recreate": -1, "dtime": 0,
+            # 缺 subtitle 会报 21001 参数错误；评论区/弹幕等开关不传，保持原样
+            "subtitle": {"open": 1 if (d.get("subtitle") or {}).get("allow") else 0, "lan": (d.get("subtitle") or {}).get("lan", "")},
+            "videos": [{"filename": v.get("filename"), "title": v.get("title", ""), "desc": v.get("desc", ""), "cid": v.get("cid")}
+                       for v in (d.get("videos") or [])],
+        }
+        cookies = await self._cookies()
+        await _pace()
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as s:
+            async with s.post(f"{MEMBER}/x/vu/web/edit", params={"t": int(time.time() * 1000), "csrf": cookies.get("bili_jct", "")},
+                              json=body, headers=bili_account.headers(cookies, f"{MEMBER}/platform/upload/video/frame")) as r:
+                data = await r.json(content_type=None)
+        if data.get("code") == 0:
+            return OpResult(True, "已改为仅自己可见")
+        await self._check_risk(data, write=True)
+        return OpResult(False, self._err(data), data)

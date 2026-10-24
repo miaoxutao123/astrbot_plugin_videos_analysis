@@ -293,7 +293,8 @@ class CreatorOps:
                 extra = f"，分区 {tid}，{'自定义封面' if o.get('cover') else '封面取视频第 1 秒'}"
             return f"发布《{p['title']}》 {' '.join('#' + t for t in p['tags'])}（{p['size_mb']:.1f}MB{extra}）"
         if op.kind == "delete":
-            return f"删除作品 {p['work_id']}" + (f"《{p['title']}》" if p.get("title") else "")
+            hint = "（B站若要求短信验证码，会改为仅自己可见）" if op.platform == "bilibili" else ""
+            return f"删除作品 {p['work_id']}" + (f"《{p['title']}》" if p.get("title") else "") + hint
         if op.kind == "comment":
             who = f"（UP：{p['author']}）" if p.get("author") else ""
             return f"评论作品 {p['work_id']}《{p.get('title', '')}》{who}"
