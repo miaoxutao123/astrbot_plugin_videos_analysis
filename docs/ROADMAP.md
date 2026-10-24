@@ -74,6 +74,8 @@ LLM 工具层 (tools/ops_tools.py)        video_browse · video_download · vide
 
 ## 4. 分阶段计划
 
+> 2026-10-24 细化：抖音创作中心接口调研与下一步优先级见 [OPS_PLAN.md](OPS_PLAN.md)。
+
 ### P1 · 基础运维补齐（v0.9 已完成主体）
 - ✅ **抖音浏览**：推荐流（`tab/feed`）/ 热搜词（`hot/search/list`）/ 搜索（`search/item`，需登录），全部走 BrowserSigner 页面内 fetch 签名
 - ✅ **抖音发评论、改签名/头像**：评论走 `comment/publish`；资料走个人主页"编辑资料"弹窗（提交接口 `commit/user`）。
