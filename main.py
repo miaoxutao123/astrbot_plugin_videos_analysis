@@ -202,6 +202,7 @@ class hybird_videos_analysis(Star):
 
         video_path 可以是本地文件或 http(s) 直链；返回 dict，不会抛异常。
         B站可选 opts：cover=封面图路径/直链，tid=分区 ID，desc=简介（不给封面就取视频第 1 秒）。
+        通用 opts：confirm_ttl=审批有效期（秒，最长 24 小时），无人值守的定时发布用。
         """
         from .services.creator import normalize_platform
 

@@ -364,7 +364,13 @@ class CreatorOps:
 
     async def prepare_upload(self, event, platform: str, source: str, title: str, tags: list[str],
                              account: str | None = None, opts: dict | None = None) -> PendingOp:
-        """opts（平台特有，目前 B站用）：cover=封面图路径/链接，tid=分区 ID，desc=简介。"""
+        """opts（平台特有，目前 B站用）：cover=封面图路径/链接，tid=分区 ID，desc=简介。
+        通用：confirm_ttl=这条申请等待确认的秒数（定时任务无人值守时用，最长 24 小时，默认 confirm_timeout_seconds）。"""
+        ttl = None
+        try:
+            ttl = min(int((opts or {}).get("confirm_ttl") or 0), 86400) or None
+        except (TypeError, ValueError):
+            ttl = None
         if not title:
             raise ValueError("缺少标题")
         if platform == "bilibili" and not tags:
@@ -377,7 +383,7 @@ class CreatorOps:
         path = await self.stage_video(source)
         size_mb = os.path.getsize(path) / 1048576
         payload = {"path": path, "title": title, "tags": tags, "size_mb": size_mb, "opts": opts}
-        return self._new_op("upload", platform, event, payload, account=account)
+        return self._new_op("upload", platform, event, payload, ttl=ttl, account=account)
 
     async def stage_image(self, source: str, prefix: str) -> str:
         """把图片（本地路径或 URL）复制到 UPLOAD_DIR 并转成 JPEG。"""
