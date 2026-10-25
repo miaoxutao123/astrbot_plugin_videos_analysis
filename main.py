@@ -31,7 +31,7 @@ _BOGUS_GEMINI_BASE = "https://generative-api.google.com/v1alpha2"
     "astrbot_plugin_videos_analysis",
     "视频解析与理解",
     "抖音/B站/MC百科视频自动解析与AI理解",
-    "0.13.0",
+    "0.14.0",
     "https://github.com/Zhalslar/astrbot_plugin_videos_analysis",
 )
 class hybird_videos_analysis(Star):
@@ -219,6 +219,26 @@ class hybird_videos_analysis(Star):
             op = await self.creator_ops.prepare_upload(event, plat, video_path, title, list(tags or []), account, opts)
         except Exception as e:
             return {"status": "rejected", "error": f"准备发布失败: {e}"}
+        return await self.creator_ops.submit(op)
+
+    async def post_request(self, event, images: list[str], title: str = "", text: str = "", tags: list[str] | None = None,
+                           platform: str = "douyin", account: str | None = None, **opts) -> dict:
+        """
+        其他插件申请发布图文（与 publish_request 相同：走审批，管理员确认后才发布；返回 dict，不会抛异常）。
+
+        images：本地图片路径或 http(s) 链接（抖音最多 35 张，B站最多 18 张）；title 最多 20 字，可只给 text。
+        opts：visibility=public/friends/private，ai_generated=True 声明“内容由 AI 生成”，
+        以及 confirm_ttl / caller / caller_ref（结局回调 on_publish_result，result["kind"] == "images"）。
+        """
+        from .services.creator import normalize_platform
+
+        plat = normalize_platform(platform)
+        if not plat:
+            return {"status": "rejected", "error": f"不支持的平台: {platform}"}
+        try:
+            op = await self.creator_ops.prepare_post(event, plat, list(images or []), title, text, list(tags or []), account, opts)
+        except Exception as e:
+            return {"status": "rejected", "error": f"准备图文失败: {redact(e)}"}
         return await self.creator_ops.submit(op)
 
     async def ops_insight(self, platform: str = "", days: int = 7, refresh: bool = False) -> dict:
@@ -430,6 +450,14 @@ class hybird_videos_analysis(Star):
         """查看当前账号最近作品：/va_works [平台]"""
         from .handlers.account_ops_handler import handle_works
         async for response in handle_works(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_post", alias={"发图文"})
+    async def creator_post_command(self, event):
+        """发布图文：/va_post [平台] [仅自己可见] [AI] <标题> #话题，第二行起正文，图片附在消息里或引用图片消息"""
+        from .handlers.account_ops_handler import handle_post
+        async for response in handle_post(self, event):
             yield response
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -674,21 +702,23 @@ class hybird_videos_analysis(Star):
         return await self._run_tool(ops_tools.video_account, event, action, platform, target, account)
 
     @filter.llm_tool(name="video_action")
-    async def llm_video_action(self, event, action: str, target: str = "", text: str = "", platform: str = "", account: str = "", title: str = "", tags: str = ""):
+    async def llm_video_action(self, event, action: str, target: str = "", text: str = "", platform: str = "", account: str = "",
+                               title: str = "", tags: str = "", options: str = ""):
         """用机器人的平台账号执行操作。不会立即执行，只提交申请，管理员本人确认后才执行；拿到结果后如实告诉用户“已提交审批”，不要说已完成，也不要替用户确认。
-comment=在视频下发评论（text 留空则自动起草）；reply=回复自己作品的评论（text 可填只回复某人的昵称/UID）；sign=改签名；avatar=换头像（用用户发的图）；delete=删除作品；switch_account=切换当前账号；upload=发布视频。
+comment=在视频下发评论（text 留空则自动起草）；reply=回复自己作品的评论（text 可填只回复某人的昵称/UID）；sign=改签名；avatar=换头像（用用户发的图）；delete=删除作品；switch_account=切换当前账号；upload=发布视频；post=发布图文（用用户发的图片）。
 
         Args:
-            action(string): comment / reply / sign / avatar / delete / switch_account / upload
-            target(string): comment/delete/reply 填视频或作品（序号/BV号/链接）；switch_account 填账号名；upload 填视频直链；avatar 可填图片链接
-            text(string): 评论内容 / 新签名 / reply 时只回复的人 / upload 时的标题
-            platform(string): bilibili 或 douyin，可留空自动识别
+            action(string): comment / reply / sign / avatar / delete / switch_account / upload / post
+            target(string): comment/delete/reply 填视频或作品（序号/BV号/链接）；switch_account 填账号名；upload 填视频直链；avatar/post 可填图片链接（post 多张用空格分隔，留空用用户发的图）
+            text(string): 评论内容 / 新签名 / reply 时只回复的人 / upload 时的标题 / post 的正文
+            platform(string): bilibili 或 douyin，可留空自动识别（post 默认 douyin）
             account(string): 用账号池里哪个账号，留空=当前账号
-            title(string): upload 的标题
-            tags(string): upload 的话题，空格分隔
+            title(string): upload/post 的标题（post 最多 20 字）
+            tags(string): upload/post 的话题，空格分隔
+            options(string): upload/post 可选：仅自己可见 / 好友可见，AI（声明内容由 AI 生成）
         """
         from .tools import ops_tools
-        return await self._run_tool(ops_tools.video_action, event, action, target, text, platform, account, title, tags)
+        return await self._run_tool(ops_tools.video_action, event, action, target, text, platform, account, title, tags, options)
 
     @filter.llm_tool(name="video_plugin_settings")
     async def llm_video_plugin_settings(self, event, action: str, setting: str = "", value: str = ""):

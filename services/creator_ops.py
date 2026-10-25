@@ -50,10 +50,29 @@ class PendingOp:
     requester_admin: bool = True
 
 
+VISIBILITY = {"public": "公开", "friends": "好友可见", "private": "仅自己可见"}
+_VIS_ALIAS = {"公开": "public", "好友可见": "friends", "好友": "friends", "仅自己可见": "private", "私密": "private", "自己": "private"}
+
+
+def _publish_opts(opts: dict | None) -> dict:
+    """视频和图文都支持的发布选项：visibility（public/friends/private）、ai_generated（声明内容由 AI 生成）。"""
+    opts = opts or {}
+    out = {}
+    raw = str(opts.get("visibility") or "").strip().lower()
+    vis = _VIS_ALIAS.get(raw, raw)
+    if vis in ("friends", "private"):
+        out["visibility"] = vis
+    if opts.get("ai_generated") in (True, 1, "1", "true", "True", "是"):
+        out["ai_generated"] = True
+    return out
+
+
 def _work_url(platform: str, work_id: str) -> str:
     if not work_id:
         return ""
-    return f"https://www.bilibili.com/video/{work_id}" if platform == "bilibili" else f"https://www.douyin.com/video/{work_id}"
+    if platform == "bilibili":
+        return f"https://www.bilibili.com/{'opus' if work_id.isdigit() else 'video'}/{work_id}"
+    return f"https://www.douyin.com/video/{work_id}"
 
 
 def read_publish_log(limit: int = 200) -> list[dict]:
@@ -243,12 +262,13 @@ class CreatorOps:
 
     def _report(self, op: PendingOp, status: str, message: str, data: dict | None = None) -> None:
         """发布类申请有了结局（published/failed/rejected/expired）：记入发布日志，并回调来源插件。"""
-        if op.kind != "upload":
+        if op.kind not in ("upload", "post"):
             return
         p = op.payload
-        work_id = str((data or {}).get("bvid") or (data or {}).get("aweme_id") or "")
+        work_id = str((data or {}).get("bvid") or (data or {}).get("dyn_id") or (data or {}).get("aweme_id") or "")
         result = {
-            "code": op.code, "status": status, "platform": op.platform, "account": op.account,
+            "code": op.code, "status": status, "kind": "images" if op.kind == "post" else "video",
+            "platform": op.platform, "account": op.account,
             "title": p.get("title", ""), "tags": p.get("tags", []), "work_id": work_id,
             "url": _work_url(op.platform, work_id), "message": redact(str(message))[:300],
             "caller": p.get("caller", ""), "caller_ref": p.get("caller_ref", ""), "at": int(time.time()),
@@ -379,7 +399,7 @@ class CreatorOps:
             return f"没有待确认的操作 {code}（可能已过期或已处理）"
         result = await self._execute(op, picks)
         status, error = self._classify(result)
-        if op.kind == "upload":
+        if op.kind in ("upload", "post"):
             res = op.payload.get("_result") or {}
             self._report(op, "published" if status == "ok" else "failed", res.get("message") or error or result,
                          res.get("data") or {})
@@ -411,6 +431,15 @@ class CreatorOps:
                     self._remove_staged(p["path"])  # 失败也清理，重发视频即可重试
                     self._remove_staged(opts.get("cover", ""))
                 return self._render_result(f"发布《{p['title']}》", res)
+            if op.kind == "post":
+                p = op.payload
+                try:
+                    res = await creator.post_images(p["images"], p["title"], p.get("text", ""), p["tags"], **(p.get("opts") or {}))
+                    p["_result"] = {"ok": res.ok, "message": res.message, "data": dict(res.data or {})}
+                finally:
+                    for f in p["images"]:
+                        self._remove_staged(f)
+                return self._render_result(f"发布图文《{p['title'] or p.get('text', '')[:15]}》", res)
             if op.kind == "delete":
                 res = await creator.delete(op.payload["work_id"], op.payload.get("title", ""))
                 return self._render_result(f"删除 {op.payload['work_id']}", res)
@@ -448,7 +477,15 @@ class CreatorOps:
                 o = p.get("opts") or {}
                 tid = o.get("tid") or self.plugin.config.get("bili_upload_tid", 21)
                 extra = f"，分区 {tid}，{'自定义封面' if o.get('cover') else '封面取视频第 1 秒'}"
+            o = p.get("opts") or {}
+            extra += "".join(f"，{x}" for x in (VISIBILITY.get(o.get("visibility", "")), "声明 AI 生成" if o.get("ai_generated") else "") if x)
             return f"发布《{p['title']}》 {' '.join('#' + t for t in p['tags'])}（{p['size_mb']:.1f}MB{extra}）"
+        if op.kind == "post":
+            o = p.get("opts") or {}
+            extra = "，".join(x for x in (VISIBILITY.get(o.get("visibility", "")), "声明 AI 生成" if o.get("ai_generated") else "") if x)
+            text = f"\n正文：{p['text'][:120]}" if p.get("text") else ""
+            return (f"发布图文《{p['title'] or '无标题'}》 {' '.join('#' + t for t in p['tags'])}"
+                    f"（{len(p['images'])} 张图{'，' + extra if extra else ''}）{text}")
         if op.kind == "delete":
             hint = "（B站若要求短信验证码，会改为仅自己可见）" if op.platform == "bilibili" else ""
             return f"删除作品 {p['work_id']}" + (f"《{p['title']}》" if p.get("title") else "") + hint
@@ -492,6 +529,8 @@ class CreatorOps:
 
     @staticmethod
     def _op_files(op: PendingOp) -> list[str]:
+        if op.kind == "post":
+            return list(op.payload.get("images") or [])
         if op.kind not in ("upload", "avatar"):
             return []
         return [f for f in (op.payload.get("path", ""), (op.payload.get("opts") or {}).get("cover", "")) if f]
@@ -539,9 +578,11 @@ class CreatorOps:
             raise ValueError("缺少标题")
         if platform == "bilibili" and not tags:
             raise ValueError("B站投稿至少需要 1 个标签（#话题）")
+        common = _publish_opts(opts)
         opts = {k: v for k, v in (opts or {}).items() if k in ("cover", "tid", "desc", "copyright", "source") and v}
         if platform != "bilibili":
             opts = {}  # 抖音发布页暂不支持这些参数
+        opts.update(common)
         if opts.get("cover"):
             opts["cover"] = await self.stage_image(opts["cover"], "cover")
         path = await self.stage_video(source)
@@ -549,6 +590,39 @@ class CreatorOps:
         payload = {"path": path, "title": title, "tags": tags, "size_mb": size_mb, "opts": opts,
                    "caller": str(meta.get("caller") or ""), "caller_ref": str(meta.get("caller_ref") or "")}
         return self._new_op("upload", platform, event, payload, ttl=ttl, account=account)
+
+    async def prepare_post(self, event, platform: str, images: list[str], title: str, text: str, tags: list[str],
+                           account: str | None = None, opts: dict | None = None) -> PendingOp:
+        """
+        图文发布申请。images 为本地路径或 http(s) 链接（会转成 JPEG 暂存）；
+        opts：visibility、ai_generated，以及与 prepare_upload 相同的 confirm_ttl / caller / caller_ref。
+        """
+        from .creator import get_creator
+
+        opts = dict(opts or {})
+        meta = {k: opts.pop(k) for k in META_OPTS if k in opts}
+        try:
+            ttl = min(int(meta.get("confirm_ttl") or 0), MAX_TTL) or self.publish_timeout
+        except (TypeError, ValueError):
+            ttl = self.publish_timeout
+        limit = get_creator(self.plugin, platform).max_images
+        images = [i for i in images if i][:limit]
+        if not images:
+            raise ValueError("至少需要 1 张图片")
+        if not (title or text):
+            raise ValueError("缺少标题或正文")
+        staged = []
+        try:
+            for src in images:
+                staged.append(await self.stage_image(src, "post"))
+        except Exception:
+            for f in staged:
+                self._remove_staged(f)
+            raise
+        payload = {"images": staged, "title": (title or "").strip(), "text": (text or "").strip(), "tags": tags,
+                   "opts": _publish_opts(opts),
+                   "caller": str(meta.get("caller") or ""), "caller_ref": str(meta.get("caller_ref") or "")}
+        return self._new_op("post", platform, event, payload, ttl=ttl, account=account)
 
     async def stage_image(self, source: str, prefix: str) -> str:
         """把图片（本地路径或 URL）复制到 UPLOAD_DIR 并转成 JPEG。"""

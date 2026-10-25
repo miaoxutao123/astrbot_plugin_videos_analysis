@@ -72,11 +72,11 @@ class DouyinCreator(CreatorPlatform):
             raise RuntimeError(f"抖音风控冷却中：{s.risk_status}")
         return s
 
-    async def _screenshot(self, page, tag: str) -> str:
+    async def _screenshot(self, page, tag: str, full: bool = False) -> str:
         try:
             os.makedirs(IMAGE_DIR, exist_ok=True)
             path = os.path.join(IMAGE_DIR, f"creator_{tag}_{int(time.time())}.png")
-            await page.screenshot(path=path, full_page=False)
+            await page.screenshot(path=path, full_page=full)
             return path
         except Exception:
             return ""
@@ -309,6 +309,8 @@ class DouyinCreator(CreatorPlatform):
                 await human_type(page, f" #{tag}")
                 await pause(0.6, 1.2)
                 await page.keyboard.press("Space")
+            await self._dismiss_tips(page)
+            await self._apply_publish_opts(page, opts)
 
             # 等视频上传完成：出现“重新上传”说明文件已传完；“上传失败”直接退出
             for _ in range(300):
@@ -334,6 +336,109 @@ class DouyinCreator(CreatorPlatform):
         except Exception as e:
             logger.warning(f"[creator] 抖音发布失败: {e}")
             return OpResult(False, f"发布失败: {e}", screenshot=await self._screenshot(page, "upload_err"))
+        finally:
+            await page.close()
+
+    # ── 图文 ─────────────────────────────────────────────
+
+    max_images = 35
+    _VISIBILITY = {"private": "仅自己可见", "friends": "好友可见"}
+
+    async def _dismiss_tips(self, page) -> None:
+        """首次进入发布页会弹“发文助手”引导，点掉。"""
+        btn = page.get_by_role("button", name="完成", exact=True)
+        if await btn.count():
+            try:
+                await human_click(page, btn.first)
+                await pause(0.5, 1.2)
+            except Exception:
+                pass
+
+    async def _apply_publish_opts(self, page, opts: dict) -> None:
+        """自主声明（内容由 AI 生成）与可见范围，视频和图文发布页通用。"""
+        if opts.get("ai_generated"):
+            entry = page.get_by_text("请选择自主声明")
+            if await entry.count():
+                await human_click(page, entry.first)
+                await pause(0.8, 1.5)
+                await human_click(page, page.get_by_text("内容由AI生成", exact=True).first)
+                await pause(0.4, 0.9)
+                await human_click(page, page.get_by_role("button", name="确定", exact=True).first)
+                await pause(0.6, 1.2)
+        label = self._VISIBILITY.get(opts.get("visibility") or "")
+        if label:
+            await human_click(page, page.get_by_text(label, exact=True).first)
+            await pause(0.4, 0.9)
+
+    async def post_images(self, images: list[str], title: str, text: str, tags: list[str], **opts) -> OpResult:
+        """创作中心“发布图文”：选图 → 标题/描述/话题 → 声明与可见范围 → 等图片传完 → 发布（dry_run=True 不点发布）。"""
+        if not opts.get("dry_run") and (refused := await self._write_gate("upload")):
+            return OpResult(False, refused)
+        images = [p for p in images if os.path.isfile(p)][:self.max_images]
+        if not images:
+            return OpResult(False, "没有可发布的图片")
+        try:
+            page = await self._creator_page(f"{UPLOAD_URL}?default-tab=3")
+        except CaptchaError as e:
+            return OpResult(False, str(e))
+        try:
+            if await self._is_login_page(page):
+                return OpResult(False, "创作者中心未登录，先 /dy_login 扫码", screenshot=await self._screenshot(page, "note_login"))
+            picker = page.locator("input[type=file][accept*='image']")
+            if not await picker.count():
+                await human_click(page, page.get_by_text("发布图文", exact=True).first)
+                await pause()
+            await picker.first.set_input_files(images)
+            await page.wait_for_url(re.compile(r".*/content/post/image.*"), timeout=60000)
+
+            await pause(1.5, 3.0)
+            await self._check_captcha(page, "上传图片")
+            await self._dismiss_tips(page)
+            title_input = page.locator("input[placeholder*='标题']")
+            if title and await title_input.count():
+                await human_fill(page, title_input.first, title[:20])
+                await pause()
+            editor = page.locator(".zone-container, [contenteditable='true']").first
+            await human_click(page, editor)
+            if text:
+                await human_type(page, text[:900])
+            for tag in tags:
+                await human_type(page, f" #{tag}")
+                await pause(0.6, 1.2)
+                await page.keyboard.press("Space")
+            await self._apply_publish_opts(page, opts)
+
+            # 等所有图片传完：出现“已添加N张图片”且没有“上传中”
+            done = page.get_by_text(f"已添加{len(images)}张图片")
+            for _ in range(90):
+                if await page.get_by_text("上传失败").count():
+                    return OpResult(False, "抖音提示图片上传失败", screenshot=await self._screenshot(page, "note_fail"))
+                if await done.count() and not await page.get_by_text("上传中").count():
+                    break
+                await asyncio.sleep(2)
+            else:
+                return OpResult(False, "等待图片上传完成超时（3 分钟）", screenshot=await self._screenshot(page, "note_timeout"))
+
+            if opts.get("dry_run"):  # 预检：表单填好、图片传完就停，不点发布
+                shot = await self._screenshot(page, "note_dryrun", full=True)
+                state = {"ai_declared": await page.get_by_text("内容由AI生成").count() > 0,
+                         "title": await title_input.first.input_value() if await title_input.count() else ""}
+                return OpResult(True, f"预检通过（{len(images)} 张图已上传，表单已填好，未发布）", state, screenshot=shot)
+            await pause(2.0, 4.0)
+            await human_click(page, page.get_by_role("button", name="发布", exact=True))
+            await pause(1.5, 3.0)
+            await self._check_captcha(page, "发布图文")
+            try:
+                await page.wait_for_url(re.compile(r".*/content/manage.*"), timeout=60000)
+            except Exception:
+                return OpResult(False, "点了发布但没跳转到作品管理页（可能需要验证码/审核弹窗）", screenshot=await self._screenshot(page, "note_publish"))
+            vis = f"（{self._VISIBILITY[opts['visibility']]}）" if opts.get("visibility") in self._VISIBILITY else ""
+            return OpResult(True, f"已发布图文{vis}，抖音审核通过后可见")
+        except CaptchaError as e:
+            return OpResult(False, str(e))
+        except Exception as e:
+            logger.warning(f"[creator] 抖音图文发布失败: {e}")
+            return OpResult(False, f"发布图文失败: {e}", screenshot=await self._screenshot(page, "note_err"))
         finally:
             await page.close()
 

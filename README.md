@@ -138,6 +138,12 @@
 - **发布视频**：`/va_upload 标题 #话题` 时附带视频、引用一条视频消息，或在 2 分钟内补发视频；也可让 Agent 通过 `video_action upload` 发起
   - **B站投稿**：`/va_upload bilibili 标题 #话题 [tid=分区]`，preupload → upos 分片上传（失败自动重试 3 次）→ 上传封面 → `add/v3` 提交；
     同一条消息里带一张图片作为封面，不带就取视频第 1 秒；至少 1 个话题；分区默认 `bili_upload_tid`（21=日常）；按账号 5 次/天、间隔 ≥10 分钟
+- **发布图文**：`/va_post [平台] [仅自己可见|好友可见] [AI] 标题 #话题`，第二行起是正文，图片附在同一条消息里或引用图片消息；
+  也可以对 AI 说“把这几张图发成抖音图文，仅自己可见”（`video_action post`）。都要管理员确认后才发布
+  - **B站**：发图文动态（opus，带标题），图片传到 B站图床 → `submit_check` 预检 → `create/dyn`，最多 18 张；
+    支持仅自己可见、AI 创作声明；`/va_delete` 填动态 ID 或 `opus/` 链接可删除
+  - **抖音**：创作中心“发布图文”页自动操作，最多 35 张，标题最多 20 字；支持仅自己/好友可见、自主声明“内容由AI生成”
+  - 视频发布同样支持 `仅自己可见 / 好友可见` 与 AI 声明（抖音），发布次数与视频共用“发布”的频率限制
 - **删除作品**：`/va_works` 列出最近作品，`/va_delete <序号|链接|ID>`。B站 Web 端删稿要求短信验证码，插件会自动改为「仅自己可见」，要彻底删除再到 App / 创作中心操作
 - **评论精选回复**：`/va_reply [序号|链接|ID]`（默认最新作品）读取 48 小时内的一级评论，按点赞取前 10 条、随机挑 1~5 条，
   结合视频内容（复用 `understand_video` 的分析流程，按作品缓存）和 `creator_reply_style` 账号风格由 LLM 起草回复；
@@ -147,6 +153,8 @@
   - `publish_request(event, 视频, 标题, 话题, 平台, caller=插件名, caller_ref=任务号, confirm_ttl=秒)`：提交发布申请，照常走管理员审批；
     发布成功 / 失败 / 被拒 / 过期后回调 `await <caller>.on_publish_result(result)`，带作品 ID 和链接；
     所有结果也写入 `accounts/creator/published.jsonl`，可用 `publish_history(caller)` 查询
+  - `post_request(event, 图片列表, 标题, 正文, 话题, 平台, visibility=, ai_generated=, caller=, caller_ref=)`：提交图文发布申请，
+    同样走审批和结果回传（`result["kind"] == "images"`）
   - `ops_insight(platform="", days=7)`：给选题用的运营摘要（约 2KB）：账号数据与变化、同类作者对比、最近/表现最好的作品、
     平台热点（抖音热搜词需要浏览器在跑，B站热门）、本插件发布过的内容的表现；只读，缓存 10 分钟，不会抛异常
 - 新平台只需在 `services/creator/` 实现 `CreatorPlatform`（`list_works / upload / delete / list_comments / reply_comment` 等）并登记到 `REGISTRY`，
@@ -280,6 +288,7 @@ Bot：这个视频展示了...（AI详细分析）
 ```
 /va_accounts [deep]  → 查看各平台账号与 AI 服务状态（别名 /账号状态；deep 实测连通性）
 /va_logout <平台>     → 注销 douyin / bilibili 登录态
+/va_post [平台] [仅自己可见] [AI] 标题 #话题  → 发布图文（图片附在消息里；第二行起正文；别名「发图文」）
 /va_admins [1 3|全部|我|清空|跳过] → 从 AstrBot 管理员里选插件管理员（别名「插件管理员」；也可在 WebUI 设置页勾选）
 /va_setup            → 插件体检：环境、账号、模型、转写、告警会话逐项检查并给出下一步（别名「插件体检」「快速配置」）
 /bili_login          → B站扫码登录（仅私聊）
@@ -383,7 +392,13 @@ astrbot_plugin_videos_analysis/
 
 ## 🔄 更新日志
 
-### v0.13.0（当前版本）
+### v0.14.0（当前版本）
+- 🖼️ 图文发布：B站图文动态（HTTP，含预检）、抖音创作中心“发布图文”；`/va_post`、`video_action post`、对外 `post_request`
+- 🏷️ 发布选项：仅自己可见 / 好友可见、声明“内容由 AI 生成”（抖音视频与图文、B站图文），审批预览里会写明
+- 🗑️ B站 `/va_delete` 支持删除图文/动态；两个平台的图文都可 `dry_run` 预检（填好表单、传完图片但不发布）
+- 修复：发布申请里的可见范围选项被丢弃
+
+### v0.13.0
 - 🔐 插件管理员：从 AstrBot 管理员里选（`/va_admins` 或 WebUI 设置页）；没设置时，管理员第一次在私聊里用插件命令或提交审批会被询问一次（12 小时内不重复，可选跳过）
   - 选中的人才能批准/拒绝危险操作，其他 AstrBot 管理员发起的操作变成申请交给他们审批；WebUI 面板不受名单限制
   - 审批和告警自动推送到插件管理员的私聊（私聊过机器人就记住会话；QQ 号在 aiocqhttp 上直接推导）
