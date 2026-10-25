@@ -130,6 +130,7 @@ class hybird_videos_analysis(Star):
         from .handlers.web_api import register_web_apis
         register_web_apis(self)
         self.accounts.start_scheduler()
+        self.creator_ops.start()
         from .services.ops_monitor import OpsMonitor
         self.monitor = OpsMonitor(self)
         self.monitor.start()
@@ -246,6 +247,7 @@ class hybird_videos_analysis(Star):
         if task and not task.done():
             task.cancel()
         await self.accounts.stop_scheduler()
+        await self.creator_ops.stop()
         if getattr(self, "monitor", None):
             await self.monitor.stop()
         if self._browser_signer:

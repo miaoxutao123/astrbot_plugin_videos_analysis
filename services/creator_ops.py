@@ -101,7 +101,26 @@ class CreatorOps:
         # 最近一次列表（作品/搜索/推荐）按"会话+平台"分别保存，群里多人同时用也不会串号
         self.last_works: dict[str, list] = {}
         self.last_list_platform: dict[str, str] = {}
+        self._gc_task = None
         self._load_pending()
+
+    def start(self) -> None:
+        """后台每分钟清一次过期申请：没人查看待审批列表时，过期结果也能及时回传给来源插件。"""
+        if not self._gc_task:
+            self._gc_task = asyncio.create_task(self._gc_loop())
+
+    async def stop(self) -> None:
+        if self._gc_task:
+            self._gc_task.cancel()
+            self._gc_task = None
+
+    async def _gc_loop(self) -> None:
+        while True:
+            await asyncio.sleep(60)
+            try:
+                self._gc()
+            except Exception as e:
+                logger.warning(f"[creator] 清理过期申请失败: {e}")
 
     @staticmethod
     def _list_key(event, platform: str) -> str:
