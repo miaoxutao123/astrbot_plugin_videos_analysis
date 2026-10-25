@@ -17,17 +17,26 @@ from ..services.bilibili_service import (
 from ..douyin_login import (
     save_manual_douyin_cookie,
 )
-from ..utils.config_helper import (
-    DOWNLOAD_DIR_BILI,
-    send_file_if_needed,
-)
+from ..utils.config_helper import send_file_if_needed
+from ..utils.paths import IMAGE_DIR
+
+# 登录二维码 / cookie 只在私聊里处理：群里任何人都能抢先扫码（机器人会登录到对方账号），
+# 粘贴的 cookie 等同于账号密码
+_PRIVATE_ONLY = "为了账号安全，{what}只能私聊机器人进行（群里其他人能看到{obj}）。请私聊我发送 /{cmd}"
+
+
+def _group_guard(event, what: str, obj: str, cmd: str) -> str:
+    return "" if event.is_private_chat() else _PRIVATE_ONLY.format(what=what, obj=obj, cmd=cmd)
 
 
 async def handle_bili_login(plugin, event):
     """管理员指令：B站扫码登录"""
+    if msg := _group_guard(event, "扫码登录", "并抢先扫描二维码", "bili_login"):
+        yield event.plain_result(msg)
+        return
     is_valid = await bili_check_cookie_valid()
     if is_valid:
-        yield event.plain_result("B站cookie仍然有效，无需重新登录。如需强制刷新，请先删除cookie文件后重试。")
+        yield event.plain_result("B站cookie仍然有效，无需重新登录。如需切换账号，请先发送 /va_logout bilibili。")
         return
 
     yield event.plain_result("正在生成B站登录二维码，请稍候...")
@@ -37,7 +46,7 @@ async def handle_bili_login(plugin, event):
         yield event.plain_result("生成B站二维码失败，请稍后重试。")
         return
 
-    image_dir = DOWNLOAD_DIR_BILI
+    image_dir = IMAGE_DIR
     os.makedirs(image_dir, exist_ok=True)
     image_path = os.path.join(image_dir, "bili_login_qrcode.png")
     with open(image_path, "wb") as f:
@@ -45,7 +54,7 @@ async def handle_bili_login(plugin, event):
 
     nap_path = await send_file_if_needed(image_path, plugin.nap_server_address, plugin.nap_server_port)
     yield event.chain_result([Comp.Image.fromFileSystem(nap_path)])
-    yield event.plain_result("请使用B站APP扫描上方二维码登录（40秒内有效）")
+    yield event.plain_result("请使用B站APP扫描上方二维码登录（2 分钟内有效）")
 
     cookies = await bili_check_login_status_loop(qr_data["qrcode_key"])
     if cookies:
@@ -56,35 +65,37 @@ async def handle_bili_login(plugin, event):
 
 async def handle_douyin_login(plugin, event):
     """管理员指令：抖音扫码登录 (使用浏览器签名引擎)"""
+    if msg := _group_guard(event, "扫码登录", "并抢先扫描二维码", "dy_login"):
+        yield event.plain_result(msg)
+        return
     signer = plugin.browser_signer
 
     if not signer or not signer.is_ready:
+        reason = plugin.browser_signer_error or "未知原因"
         yield event.plain_result(
-            "抖音浏览器签名引擎未就绪。\n\n"
-            "Windows: 请检查插件日志确认浏览器是否正常启动。\n"
-            "Linux: 请安装 Xvfb 后重启插件:\n"
-            "  sudo apt install xvfb\n\n"
-            "或使用 dy_cookie 命令手动粘贴cookie。"
+            f"抖音浏览器签名引擎未就绪：{reason}\n\n"
+            "需要: pip install playwright && playwright install --with-deps chromium\n"
+            "Linux 无桌面还需: apt install xvfb\n"
+            "装好后发送 /dy_restart 重启签名引擎。"
         )
         return
 
     if signer.is_logged_in:
-        yield event.plain_result("抖音已登录，无需重复扫码。如需强制刷新，请先删除浏览器数据后重试。")
+        yield event.plain_result("抖音已登录，无需重复扫码。如需切换账号，请先发送 /va_logout douyin。")
         return
 
     # 触发登录 (点击页面登录按钮)
     yield event.plain_result("正在触发抖音登录页面...")
     await signer.trigger_login()
-    await asyncio.sleep(3)
 
-    # 截图发送给用户
-    screenshot = await signer.get_page_screenshot()
+    # 等二维码渲染完成后截图发送给用户
+    screenshot = await signer.get_login_qr_screenshot()
     if not screenshot:
         yield event.plain_result("截图失败，请尝试使用 dy_cookie 命令手动粘贴cookie。")
         return
 
-    os.makedirs(DOWNLOAD_DIR_BILI, exist_ok=True)
-    ss_path = os.path.join(DOWNLOAD_DIR_BILI, "douyin_login_qrcode.png")
+    os.makedirs(IMAGE_DIR, exist_ok=True)
+    ss_path = os.path.join(IMAGE_DIR, "douyin_login_qrcode.png")
     with open(ss_path, "wb") as f:
         f.write(screenshot)
 
@@ -109,6 +120,14 @@ async def handle_douyin_login(plugin, event):
 
 async def handle_douyin_cookie(plugin, event):
     """管理员指令：手动粘贴抖音cookie"""
+    if not event.is_private_chat():
+        has_cookie = len(event.message_str.split(maxsplit=1)) > 1
+        yield event.plain_result(
+            "为了账号安全，抖音 cookie 只能私聊机器人设置，本次没有保存。"
+            + ("\n⚠️ 刚才的 cookie 已经发在群里，相当于公开了登录凭证：请在抖音 App「设置 → 账号与安全 → 登录设备管理」"
+               "里移除这台设备，或退出网页登录使其失效，然后私聊我重新设置。" if has_cookie else "")
+        )
+        return
     signer = plugin.browser_signer
 
     message_str = event.message_str.strip()
@@ -145,3 +164,13 @@ async def handle_douyin_cookie(plugin, event):
         yield event.plain_result("抖音cookie已保存！")
     else:
         yield event.plain_result("cookie格式无效，请检查后重试。")
+
+
+async def handle_accounts_status(plugin, event, deep: bool = False):
+    """管理员指令：查看各平台账号与 AI 服务状态"""
+    if deep:
+        yield event.plain_result("正在检测各平台连通性...")
+    statuses = await plugin.accounts.status_all(deep=deep)
+    text = "\n".join(st.render() for st in statuses)
+    text += "\n\n命令: /bili_login /dy_login /dy_cookie /dy_restart /va_logout <douyin|bilibili> /va_accounts deep\n运维: /va_check /va_notify /va_pool /va_works /va_upload /va_delete /va_reply /va_pending"
+    yield event.plain_result(text)

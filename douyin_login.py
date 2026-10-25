@@ -25,9 +25,8 @@ from astrbot.api import logger
 from .douyin_scraper.cookie_extractor import extract_and_format_cookies, extract_douyin_cookies
 
 # 路径常量
-PLUGIN_DATA_DIR = "data/plugins/astrbot_plugin_videos_analysis"
-DOUYIN_COOKIE_FILE = f"{PLUGIN_DATA_DIR}/douyin_cookies.json"
-DOUYIN_QR_IMAGE_DIR = f"{PLUGIN_DATA_DIR}/image"
+from .utils.paths import DOUYIN_COOKIE_FILE
+from .utils.paths import IMAGE_DIR as DOUYIN_QR_IMAGE_DIR
 
 # Cookie有效性缓存（同 bili_get.py 的 COOKIE_VALID）
 DOUYIN_COOKIE_VALID = None

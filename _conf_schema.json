@@ -21,7 +21,7 @@
         "default": 60
     },
     "max_video_size": {
-        "description": "最大视频大小（单位MB）（预留，还未完全实现）",
+        "description": "视频超过此大小（MB）时以文件形式发送",
         "type": "int",
         "default": 200
     },
@@ -79,15 +79,46 @@
         "default": false,
         "hint": "实验性功能，会消耗大量token，默认关闭，会读取你发的所有视频到llm进行分析"
     },
+    "gemini_enabled": {
+        "description": "启用 Gemini（可选）",
+        "type": "bool",
+        "default": false,
+        "hint": "默认关闭。开启并填写下面的 Key 后，可作为看图/理解视频的备选"
+    },
     "gemini_base_url": {
-        "description": "Gemini API 基础地址,反代地址也填写到这里",
+        "description": "Gemini API 地址（官方或中转站）",
         "type": "string",
-        "default": "https://generative-api.google.com/v1alpha2"
+        "default": "",
+        "hint": "留空使用官方 https://generativelanguage.googleapis.com ；new-api/one-api 等中转站填根地址，如 https://api.example.com（不要带 /v1beta）"
     },
     "gemini_api_key": {
         "description": "Gemini API Key",
         "type": "string",
         "default": ""
+    },
+    "gemini_model": {
+        "description": "Gemini 模型",
+        "type": "string",
+        "default": "",
+        "hint": "留空：插件 key 默认 gemini-2.5-flash；复用框架 Provider 时沿用其模型。中转站请填它实际提供的模型名"
+    },
+    "gemini_fallback_models": {
+        "description": "Gemini 备用模型",
+        "type": "string",
+        "default": "",
+        "hint": "逗号分隔。主模型返回 5xx/404（上游故障、模型下线）时依次改用，如 gemini-3.5-flash-lite,gemini-3.1-flash-lite"
+    },
+    "gemini_inline_limit_mb": {
+        "description": "内联上传阈值（MB）",
+        "type": "float",
+        "default": 20,
+        "hint": "不超过此大小的视频/音频以 base64 内联发送；更大的走 Google File API（多数中转站不支持 File API）"
+    },
+    "gemini_direct_max_mb": {
+        "description": "整段视频分析上限（MB）",
+        "type": "float",
+        "default": 200,
+        "hint": "超过此大小或整段分析失败时，回退为「音频转写 + 关键帧」模式"
     },
     "private_auto_comprehend": {
         "description": "私聊是否自动理解视频内容",
@@ -107,11 +138,35 @@
         "default": "",
         "hint": "如 http://127.0.0.1:7890 ，留空则直连。AstrBot启动时会清除系统代理，需在此手动配置。"
     },
+    "douyin_browser_signer": {
+        "description": "启用抖音浏览器签名引擎",
+        "type": "bool",
+        "default": true,
+        "hint": "抖音搜索、评论、发布、扫码登录需要。需要 playwright + Chromium，Linux 无桌面环境还需 Xvfb。关闭后仍能解析公开视频、看创作中心数据（走 HTTP）"
+    },
+    "douyin_browser_low_cpu": {
+        "description": "抖音浏览器空闲省电",
+        "type": "bool",
+        "default": true,
+        "hint": "空闲时隐藏抖音页面、停止动画，浏览器 CPU 从约 50% 降到约 10%。签名不受影响；遇到异常可关闭对比"
+    },
     "video_understand_method": {
-        "description": "视频理解方式",
+        "description": "视频理解首选方式",
         "type": "string",
-        "default": "local_asr",
-        "hint": "local_asr: 本地ASR+抽帧（需funasr）| mimo: 使用MiMo多模态大模型原生理解视频（推荐，需配置mimo_api_key）"
+        "default": "llm",
+        "options": [
+            "llm",
+            "gemini",
+            "mimo",
+            "local_asr"
+        ],
+        "hint": "llm：抽帧+语音转写交给当前对话模型（默认，适合 DeepSeek 等）；gemini/mimo 需先打开对应开关"
+    },
+    "mimo_enabled": {
+        "description": "启用 MiMo（可选）",
+        "type": "bool",
+        "default": false,
+        "hint": "默认关闭"
     },
     "mimo_model": {
         "description": "MiMo 模型ID",
@@ -130,5 +185,153 @@
         "type": "string",
         "default": "",
         "hint": "小米官方平台注册获取: https://platform.xiaomimimo.com/#/console/api-keys | 或填入OpenRouter API key"
+    },
+    "health_check_interval_minutes": {
+        "description": "账号定时巡检间隔（分钟）",
+        "type": "int",
+        "hint": "0 关闭。巡检会深度检查抖音/B站登录与 Gemini/MiMo 连通性，状态变化时推送给 /va_notify 设置的会话",
+        "default": 360
+    },
+    "inbox_patrol_minutes": {
+        "description": "消息巡检间隔（分钟）",
+        "type": "int",
+        "hint": "0 关闭。定时查看抖音/B站的新评论、@我、系统通知，推送给 /va_notify 设置的会话（首次只记录不推送）；同时每天记录一次粉丝/播放等数据供 /va_report 对比",
+        "default": 30
+    },
+    "rotate_fail_threshold": {
+        "description": "连续失败几次后自动轮换账号",
+        "type": "int",
+        "hint": "抖音空响应/风控、B站 -352/-412/cookie 失效计为失败；需要先用 /va_pool save 保存多个账号",
+        "default": 2
+    },
+    "rotate_cooldown_minutes": {
+        "description": "被轮换下来的账号冷却时间（分钟）",
+        "type": "int",
+        "default": 30
+    },
+    "confirm_timeout_seconds": {
+        "description": "危险操作二次确认有效期（秒）",
+        "type": "int",
+        "hint": "发布/删除用这个时长；评论回复至少 300 秒（需要时间审阅和修改）",
+        "default": 60
+    },
+    "reply_max_comments": {
+        "description": "每次评论精选回复最多几条（1~5）",
+        "type": "int",
+        "hint": "从 48 小时内点赞最高的 10 条里随机挑 1~N 条",
+        "default": 5
+    },
+    "reply_window_hours": {
+        "description": "评论精选只看最近多少小时的评论",
+        "type": "int",
+        "default": 48
+    },
+    "creator_reply_style": {
+        "description": "账号回复风格",
+        "type": "text",
+        "hint": "给 LLM 的人设/语气说明，例如：幽默、爱用颜文字、自称小编",
+        "default": ""
+    },
+    "creator_reply_provider_id": {
+        "description": "起草评论回复用的模型提供商 ID",
+        "type": "string",
+        "hint": "留空则用当前会话的默认模型",
+        "default": ""
+    },
+    "creator_reply_video_understanding": {
+        "description": "起草回复前先用 Gemini 理解视频内容",
+        "type": "bool",
+        "hint": "结果按作品缓存，每个作品只分析一次",
+        "default": true
+    },
+    "browse_asr_api_base": {
+        "description": "浏览用线上 ASR 地址（OpenAI 兼容）",
+        "type": "string",
+        "default": "",
+        "hint": "如 SiliconFlow 免费的 https://api.siliconflow.cn/v1 ，或 new-api 中转站 https://xxx/v1 。留空则依次尝试 B站字幕 → 框架 STT → 本地 funasr"
+    },
+    "browse_asr_api_key": {
+        "description": "浏览用线上 ASR Key",
+        "type": "string",
+        "default": ""
+    },
+    "browse_asr_model": {
+        "description": "浏览用 ASR 模型",
+        "type": "string",
+        "default": "FunAudioLLM/SenseVoiceSmall",
+        "hint": "SiliconFlow 免费：FunAudioLLM/SenseVoiceSmall；中转站按其模型名填写（如 sensevoicesmall）"
+    },
+    "browse_asr_max_minutes": {
+        "description": "转写最长时长（分钟）",
+        "type": "int",
+        "default": 15,
+        "hint": "超出部分不转写，控制耗时和流量"
+    },
+    "browse_max_frames": {
+        "description": "浏览抽帧数",
+        "type": "int",
+        "default": 6
+    },
+    "browse_report_history": {
+        "description": "浏览后写入B站观看历史",
+        "type": "bool",
+        "default": true,
+        "hint": "登录状态下 /bili_watch 会上报播放心跳和历史记录，让账号行为更像真人"
+    },
+    "browse_report_seconds": {
+        "description": "上报的观看时长（秒）",
+        "type": "int",
+        "default": 60
+    },
+    "browse_summary_by": {
+        "description": "浏览总结由谁看图",
+        "type": "string",
+        "default": "llm",
+        "options": [
+            "llm",
+            "gemini"
+        ],
+        "hint": "llm：关键帧+转写直接交给当前对话模型（如新版 DeepSeek，可看图）；gemini：优先用 Gemini 看图。都会自动降级到纯文字"
+    },
+    "llm_allow_non_admin_requests": {
+        "description": "允许非管理员通过 LLM 申请危险操作",
+        "type": "bool",
+        "default": true,
+        "hint": "开启后普通用户也能让 AI 发起评论/改资料等申请，但都会推送给管理员（/va_notify 会话）审批，管理员 /va_confirm 才执行"
+    },
+    "max_pending_per_user": {
+        "description": "每人最多待审批操作数",
+        "type": "int",
+        "default": 3
+    },
+    "risk_cooldown_minutes": {
+        "description": "风控熔断时长（分钟）",
+        "type": "int",
+        "default": 60,
+        "hint": "账号写操作遇到 -352/-412/验证码/重复评论等风控码后，该账号暂停写操作的时长（读操作不受影响）"
+    },
+    "browse_max_minutes": {
+        "description": "看视频最长处理（分钟）",
+        "type": "int",
+        "default": 20,
+        "hint": "更长的视频只看开头这么长（B站直接截取开头，不下载整片）"
+    },
+    "browse_sync_max_minutes": {
+        "description": "超过多少分钟转后台看",
+        "type": "int",
+        "default": 8,
+        "hint": "工具调用有超时，长视频改为后台观看，看完把总结推到聊天里"
+    },
+    "bili_upload_tid": {
+        "description": "B站投稿默认分区 ID",
+        "type": "int",
+        "default": 21,
+        "hint": "21=日常（生活区）；常用：17=单机游戏 138=搞笑 201=科学科普 95=数码。投稿时可用 tid=xx 单独指定"
+    },
+    "debug_webui_enabled": {
+        "description": "调试管理面板（WebUI 插件页）",
+        "type": "bool",
+        "default": false,
+        "hint": "默认关闭。开启后在 AstrBot WebUI → 插件 → 本插件的页面里可以查看账号、审批、审计、修改设置、扫码登录、调试看视频。仅建议调试时开启"
     }
 }

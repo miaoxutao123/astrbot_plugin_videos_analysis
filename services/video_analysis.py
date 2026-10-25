@@ -65,6 +65,13 @@ def _unload_model():
             logger.info("SenseVoice 模型已卸载，显存已释放。")
 
 
+def local_asr_available() -> bool:
+    """funasr 是否已安装（不加载模型）。"""
+    import importlib.util
+
+    return importlib.util.find_spec("funasr") is not None
+
+
 def _get_model():
     """获取 SenseVoice 模型（懒加载 + 使用后自动倒计时卸载）"""
     global _model

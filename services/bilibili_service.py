@@ -17,10 +17,10 @@ from astrbot.api import logger
 log_callback = logger.info
 
 # 路径常量
-PLUGIN_DATA_DIR = "data/plugins/astrbot_plugin_videos_analysis"
-COOKIE_FILE = f"{PLUGIN_DATA_DIR}/bili_cookies.json"
-BILI_DOWNLOAD_DIR = f"{PLUGIN_DATA_DIR}/download_videos/bili"
-os.makedirs(os.path.dirname(COOKIE_FILE), exist_ok=True)
+from ..utils.paths import BILI_COOKIE_FILE as COOKIE_FILE
+from .bili_account import REFRESH_KEY, cookie_header, ensure_buvid
+from ..utils.paths import DOWNLOAD_DIR_BILI as BILI_DOWNLOAD_DIR
+from ..utils.paths import IMAGE_DIR
 
 # Cookie有效性缓存
 COOKIE_VALID = None
@@ -31,12 +31,10 @@ REG_BV = re.compile(r"BV1\w{9}")
 REG_AV = re.compile(r"av\d+", re.I)
 REG_FULL_URL = re.compile(r"https?://www\.bilibili\.com/video/(BV1\w{9}|av\d+)")
 
-# AV转BV算法参数·
-AV2BV_TABLE = "fZodR9XQDSUm21yCkr6zBqiveYah8bt4xsWpHnJE7jL5VG3guMTKNPAwcF"
-AV2BV_TR = {c: i for i, c in enumerate(AV2BV_TABLE)}
-AV2BV_S = [11, 10, 3, 8, 4, 6]
-AV2BV_XOR = 177451812
-AV2BV_ADD = 8728348608
+# AV转BV算法参数（2024 年起 B 站使用的新算法，兼容 aid >= 2^30）
+AV2BV_ALPHABET = "FcwAPNKTMug3GV5Lj7EJnHpWsx4tb8haYeviqBz6rkCy12mUSDQX9RdoZf"
+AV2BV_XOR = 23442827791579
+AV2BV_MAX_AID = 1 << 51
 
 def format_number(num):
     """格式化数字显示"""
@@ -50,21 +48,19 @@ def format_number(num):
 
 def av2bv(av):
     """AV号转BV号"""
-    av_num = re.search(r"\d+", av)
+    av_num = re.search(r"\d+", str(av))
     if not av_num:
         return None
-
-    try:
-        x = (int(av_num.group()) ^ AV2BV_XOR) + AV2BV_ADD
-    except Exception:
-        return None
-
-    r = list("BV1 0 4 1 7  ")
-    for i in range(6):
-        idx = (x // (58**i)) % 58
-        r[AV2BV_S[i]] = AV2BV_TABLE[idx]
-
-    return "".join(r).replace(" ", "0")
+    tmp = (AV2BV_MAX_AID | int(av_num.group())) ^ AV2BV_XOR
+    chars = list("BV1000000000")
+    idx = len(chars) - 1
+    while tmp > 0:
+        chars[idx] = AV2BV_ALPHABET[tmp % 58]
+        tmp //= 58
+        idx -= 1
+    chars[3], chars[9] = chars[9], chars[3]
+    chars[4], chars[7] = chars[7], chars[4]
+    return "".join(chars)
 
 async def bili_request(url, return_json=True):
     """发送B站API请求"""
@@ -137,7 +133,7 @@ async def check_cookie_valid():
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Referer": "https://space.bilibili.com/",
         "Origin": "https://space.bilibili.com",
-        "Cookie": "; ".join([f"{k}={v}" for k, v in cookies.items()])
+        "Cookie": cookie_header(cookies)
     }
 
     try:
@@ -173,6 +169,26 @@ async def check_cookie_valid():
         return False
 
 
+async def get_login_info(cookies: dict | None = None) -> dict | None:
+    """查询当前 cookie 对应的登录信息（x/web-interface/nav），失败返回 None。"""
+    cookies = cookies if cookies is not None else await load_cookies()
+    if not cookies:
+        return None
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://www.bilibili.com/",
+        "Cookie": cookie_header(cookies),
+    }
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+            async with session.get("https://api.bilibili.com/x/web-interface/nav", headers=headers) as resp:
+                data = await resp.json(content_type=None)
+                return data.get("data") if isinstance(data, dict) else None
+    except Exception as e:
+        log_callback(f"查询B站登录信息失败: {e}")
+        return None
+
+
 async def parse_b23(short_url):
     """解析b23短链接"""
     try:
@@ -183,24 +199,26 @@ async def parse_b23(short_url):
                 if REG_BV.search(real_url):
                     return await parse_video(REG_BV.search(real_url).group())
                 elif REG_AV.search(real_url):
-                    return await parse_video(av2bv(REG_AV.search(real_url).group()))
+                    return await parse_video(aid=REG_AV.search(real_url).group()[2:])
                 return None
     except aiohttp.ClientError:
         return None
 
-async def parse_video(bvid):
-    """解析视频信息"""
-    api_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
+async def parse_video(bvid=None, aid=None):
+    """解析视频信息（BV 号或 aid 二选一）"""
+    query = f"bvid={bvid}" if bvid else f"aid={int(aid)}"
+    api_url = f"https://api.bilibili.com/x/web-interface/view?{query}"
     data = await bili_request(api_url)
 
     if data.get("code") != 0:
+        log_callback(f"B站视频信息获取失败 ({query}): {data.get('code')} {data.get('message')}")
         return None
 
     info = data["data"]
     return {
         "aid": info["aid"],
         "cid": info["cid"],
-        "bvid": bvid,
+        "bvid": info.get("bvid") or bvid,
         "title": info["title"],
         "cover": info["pic"],
         "duration": info["duration"],
@@ -223,17 +241,20 @@ async def download_video(aid, cid, bvid, quality=16):
         return None
 
     video_url = data["data"]["durl"][0]["url"]
-    video_data = await bili_request(video_url, return_json=False)
-
-    if isinstance(video_data, dict):
-        return None
-
     filename = f"{BILI_DOWNLOAD_DIR}/{bvid}.mp4"
     os.makedirs(os.path.dirname(filename), exist_ok=True)
-    async with aiofiles.open(filename, "wb") as f:
-        await f.write(video_data)
-
-    return filename
+    headers = {
+        "Referer": "https://www.bilibili.com/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+    }
+    # 流式写盘，长视频不会因为 30 秒总超时或整段读进内存而失败
+    try:
+        await download_file(video_url, filename, headers)
+    except Exception:
+        if os.path.exists(filename):
+            os.remove(filename)
+        return None
+    return filename if os.path.getsize(filename) > 0 else None
 
 async def get_video_download_url_by_bvid(bvid, quality=16):
     """获取视频下载链接（无需Cookie的备用方法）"""
@@ -353,6 +374,8 @@ async def check_login_status(qrcode_key):
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.get(url, headers=headers)
             result = response.json()
+            # 新版接口扫码成功后通过 Set-Cookie 下发登录 cookie（URL 里只剩 crossDomain ticket）
+            result["_set_cookies"] = {k: v for k, v in response.cookies.items()}
             return result
     except Exception as e:
         log_callback(f"检查登录状态失败: {str(e)}")
@@ -407,7 +430,7 @@ async def bili_login(event=None):
 
 
     # 保存二维码图片到指定路径
-    image_dir = "data/plugins/astrbot_plugin_videos_analysis/image"
+    image_dir = IMAGE_DIR
     os.makedirs(image_dir, exist_ok=True)
     image_path = os.path.join(image_dir, "bili_login_qrcode.png")
     with open(image_path, "wb") as f:
@@ -426,10 +449,30 @@ async def bili_login(event=None):
     return login_task
 
 
-async def check_login_status_loop(qrcode_key):
-    """循环检查登录状态，直到登录成功或超时"""
-    logger.info("等待登录...（最多40秒）")
-    for _ in range(40):  # 最多等待90秒
+_LOGIN_COOKIE_KEYS = {
+    "_uuid", "DedeUserID", "DedeUserID__ckMd5", "SESSDATA", "bili_jct", "sid",
+    "bili_ticket", "bili_ticket_expires", "buvid_fp", "buvid3", "buvid4",
+}
+
+
+def _login_cookies(status: dict, data: dict) -> dict:
+    """扫码成功后的登录 cookie：新版在 Set-Cookie 里，旧版拼在跳转 URL 的参数里。"""
+    cookies = {k: unquote(v) for k, v in (status.get("_set_cookies") or {}).items() if v and k in _LOGIN_COOKIE_KEYS}
+    if cookies.get("SESSDATA"):
+        return cookies
+    url = data.get("url", "")
+    for param in (url.split("?", 1)[1] if "?" in url else "").split("&"):
+        if "=" in param:
+            key, value = param.split("=", 1)
+            if key in _LOGIN_COOKIE_KEYS:
+                cookies[key] = unquote(value)
+    return cookies
+
+
+async def check_login_status_loop(qrcode_key, timeout_seconds: int = 150):
+    """循环检查登录状态，直到登录成功或超时（B站二维码本身 180 秒过期）"""
+    logger.info(f"等待登录...（最多{timeout_seconds}秒）")
+    for _ in range(timeout_seconds):
         await asyncio.sleep(1)
         status = await check_login_status(qrcode_key)
 
@@ -440,38 +483,19 @@ async def check_login_status_loop(qrcode_key):
                 log_callback("\n登录成功!")
 
                 try:
-                    # 优先从URL参数获取Cookie
-                    url = data.get("url", "")
-                    if "?" in url:
-                        url_params = url.split("?")[1]
-                        cookies = {}
-                        for param in url_params.split("&"):
-                            if "=" in param:
-                                key, value = param.split("=", 1)
-                                useful_keys = [
-                                    "_uuid", "DedeUserID", "DedeUserID__ckMd5", "SESSDATA", "bili_jct",
-                                    "bili_ticket", "bili_ticket_expires", "CURRENT_FNVAL", "CURRENT_QUALITY",
-                                    "enable_feed_channel", "enable_web_push", "header_theme_version",
-                                    "home_feed_column", "LIVE_BUVID", "PVID", "browser_resolution",
-                                    "buvid_fp", "buvid3", "fingerprint"
-                                ]
-                                if key in useful_keys:
-                                    cookies[key] = unquote(value)
-
-                        # 验证提取的Cookie是否完整
-                        if not cookies.get("SESSDATA") or not cookies.get("DedeUserID"):
-                            raise ValueError("获取的Cookie格式异常")
-
-                        log_callback(f"获取到的Cookie: {cookies}")
-
-                        await save_cookies_dict(cookies)
-                        return cookies
+                    cookies = _login_cookies(status, data)
+                    if not cookies.get("SESSDATA") or not cookies.get("DedeUserID"):
+                        raise ValueError("扫码成功但没有拿到 SESSDATA/DedeUserID（接口可能又改版了）")
+                    if data.get("refresh_token"):
+                        cookies[REFRESH_KEY] = data["refresh_token"]
                     else:
-                        raise ValueError("URL格式异常，无法提取参数")
-
+                        log_callback("扫码结果里没有 refresh_token，cookie 到期后需要重新扫码")
+                    cookies = await ensure_buvid(cookies)
+                    log_callback(f"B站登录成功: DedeUserID={cookies.get('DedeUserID')}")
+                    await save_cookies_dict(cookies)
+                    return cookies
                 except Exception as e:
-                    log_callback(f"登录异常: {str(e)}")
-                    log_callback(f"原始响应数据: {data}")
+                    log_callback(f"登录异常: {e}（响应字段: {sorted(data)}，Set-Cookie: {sorted(status.get('_set_cookies') or {})}）")
                     return None
 
             elif data.get("code") == -2:
@@ -486,27 +510,28 @@ async def check_login_status_loop(qrcode_key):
     log_callback("\n登录超时，请重试")
     return None
 
+# 账号池轮换钩子：AccountManager 注册 async (reason) -> None，遇到失效/风控时调用
+FAILURE_HOOK = None
+RISK_CODES = {-101, -352, -412}
+
+
+async def _report_failure(reason: str):
+    if FAILURE_HOOK:
+        try:
+            await FAILURE_HOOK(reason)
+        except Exception as e:
+            log_callback(f"上报B站账号失败时出错: {e}")
+
+
 async def get_video_download_url_with_cookie(bvid, quality=80, event=None):
     """使用Cookie获取高清视频下载链接"""
     # 检查Cookie是否有效
-    is_valid = await check_cookie_valid()
-
-    if not is_valid:
-        log_callback("Cookie无效或不存在，尝试登录...")
-        login_result = await bili_login(event)
-        cookies = await login_result
-
-        if not cookies:
-            log_callback("登录失败，将使用默认画质")
-            return await get_video_download_url_by_bvid(bvid, 16)
-
-        is_valid = await check_cookie_valid()
-        if not is_valid:
-            log_callback("登录后Cookie仍然无效，将使用默认画质")
-            return await get_video_download_url_by_bvid(bvid, 16)
-    else:
-        cookies = await load_cookies()
-        log_callback("使用已有的有效Cookie")
+    if not await check_cookie_valid():
+        if os.path.exists(COOKIE_FILE):
+            await _report_failure("cookie 校验失败")
+        log_callback("Cookie无效或不存在，将使用默认画质")
+        return await get_video_download_url_by_bvid(bvid, 16)
+    cookies = await load_cookies()
 
     # 获取视频信息
     video_info = await parse_video(bvid)
@@ -522,7 +547,7 @@ async def get_video_download_url_with_cookie(bvid, quality=80, event=None):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:137.0) Gecko/20100101 Firefox/137.0",
         "Referer": "https://www.bilibili.com/",
-        "Cookie": "; ".join([f"{k}={v}" for k, v in cookies.items()])
+        "Cookie": cookie_header(cookies)
     }
 
     try:
@@ -533,6 +558,8 @@ async def get_video_download_url_with_cookie(bvid, quality=80, event=None):
 
                 if data.get("code") != 0:
                     log_callback(f"获取视频地址失败: {data.get('message')}")
+                    if data.get("code") in RISK_CODES:
+                        await _report_failure(f"playurl {data.get('code')} {data.get('message')}")
                     return await get_video_download_url_by_bvid(bvid, 16)
 
                 # 获取视频和音频的URL
@@ -582,11 +609,17 @@ async def download_video_with_cookie(aid, cid, bvid, quality=80, event=None):
         log_callback("获取视频和音频URL失败")
         return None
 
-    video_url, audio_url = result
     headers = {
         "Referer": "https://www.bilibili.com/",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:137.0) Gecko/20100101 Firefox/137.0"
     }
+
+    if isinstance(result, str):
+        # Cookie 请求失败时回退为单文件 mp4 直链
+        os.makedirs(BILI_DOWNLOAD_DIR, exist_ok=True)
+        await download_file(result, output_file, headers)
+        return output_file
+    video_url, audio_url = result
 
     # 下载视频和音频
     video_file = f"{BILI_DOWNLOAD_DIR}/{bvid}_video.mp4"
@@ -608,7 +641,14 @@ async def download_video_with_cookie(aid, cid, bvid, quality=80, event=None):
 
     # 合成音视频
     log_callback("正在合成音视频...")
-    await merge_audio_and_video(audio_file, video_file, output_file)
+    if not await merge_audio_and_video(audio_file, video_file, output_file):
+        log_callback("ffmpeg 合成音视频失败")
+        return None
+    for tmp in (video_file, audio_file):
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
     log_callback(f"视频合成完成，保存为 {output_file}")
     return output_file
@@ -616,12 +656,16 @@ async def download_video_with_cookie(aid, cid, bvid, quality=80, event=None):
 async def merge_audio_and_video(audio_file, video_file, output_file):
     """异步合成音视频"""
     process = await asyncio.create_subprocess_exec(
-        "ffmpeg", "-i", audio_file, "-i", video_file,
+        "ffmpeg", "-y", "-i", audio_file, "-i", video_file,
         "-acodec", "copy", "-vcodec", "copy", output_file,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE
     )
-    await process.communicate()
+    _, stderr = await process.communicate()
+    if process.returncode != 0:
+        logger.error(f"ffmpeg 合成失败: {stderr.decode(errors='ignore')[-300:]}")
+        return False
+    return os.path.exists(output_file)
 
 async def process_bili_video(url, download_flag=True, quality=80, use_login=True, event=None):
     """主处理函数
@@ -650,15 +694,13 @@ async def process_bili_video(url, download_flag=True, quality=80, use_login=True
             if REG_BV.search(video_id):
                 video_info = await parse_video(video_id)
             elif REG_AV.search(video_id):
-                bvid = av2bv(video_id)
-                video_info = await parse_video(bvid) if bvid else None
+                video_info = await parse_video(aid=video_id[2:])
             else:
                 video_info = None
         elif REG_BV.search(url):
             video_info = await parse_video(REG_BV.search(url).group())
         elif REG_AV.search(url):
-            bvid = av2bv(REG_AV.search(url).group())
-            video_info = await parse_video(bvid) if bvid else None
+            video_info = await parse_video(aid=REG_AV.search(url).group()[2:])
         else:
             log_callback("不支持的链接格式")
             return None
@@ -702,20 +744,11 @@ async def process_bili_video(url, download_flag=True, quality=80, use_login=True
         # 先检查Cookie是否有效
         is_valid = await check_cookie_valid()
 
-        # 如果Cookie无效，尝试登录
         if not is_valid:
-            log_callback("Cookie无效或不存在，尝试登录...")
-            # 直接调用bili_login并等待结果完成
-            login_result = await bili_login(event)
-            # 因为bili_login返回的是一个任务，所以需要再次await
-            cookies = await login_result
-
-            if cookies:
-                log_callback("登录成功，重新检查Cookie有效性")
-                is_valid = await check_cookie_valid()
-            else:
-                log_callback("登录失败或超时")
-                is_valid = False
+            log_callback("B站 Cookie 无效或不存在，本次使用无登录方式。管理员可发送 /bili_login 扫码登录。")
+            use_login = False
+            if os.path.exists(COOKIE_FILE):
+                await _report_failure("cookie 校验失败")
 
         # 根据Cookie有效性决定使用哪种方式获取视频链接
         if is_valid:

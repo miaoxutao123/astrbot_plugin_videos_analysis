@@ -1,6 +1,5 @@
 # 网络请求
 aiohttp>=3.8.0
-requests>=2.25.0
 httpx>=0.24.0
 
 # 异步文件操作
@@ -10,26 +9,25 @@ aiofiles>=0.8.0
 Pillow>=9.0.0
 qrcode>=7.3.0
 
-# Google Gemini API
-google-generativeai
-
 # 数据解析
-PyYAML==6.0.1
+PyYAML>=6.0.1
 lxml
 beautifulsoup4
 pydantic
 
-# 安全
-gmssl==3.2.2
+# 抖音签名
+gmssl>=3.2.2
+# 浏览器签名引擎（抖音解析必需）。安装后还需执行: playwright install --with-deps chromium
+playwright>=1.45
 
 # 抖音爬虫依赖
-browser-cookie3==0.19.1
-importlib_resources==6.4.0
+browser-cookie3>=0.19.1
+importlib_resources>=6.4.0
 
 # 其他
 rich
 cachetools
 
-# ASR 语音识别（可选，用于本地视频理解）
+# ASR 语音识别（可选，用于 video_understand_method=local_asr）
 # funasr
 # torchaudio

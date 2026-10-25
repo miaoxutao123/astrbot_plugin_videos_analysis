@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+from urllib.parse import urlparse
 
 import aiofiles
 import aiohttp
@@ -8,6 +9,18 @@ import aiohttp
 from astrbot.api import logger
 
 from ..douyin_scraper.cookie_extractor import extract_and_format_cookies
+
+
+# 只有抖音主站接口需要登录 cookie；CDN（douyinvod/douyinpic 等）和任何跳转后的地址都不发，避免登录态外泄
+_COOKIE_HOSTS = ("douyin.com", "iesdouyin.com")
+
+
+def scoped_cookie(url, cookie):
+    """仅当 url 属于抖音主站域名时返回 cookie，否则返回 None。"""
+    if not cookie:
+        return None
+    host = (urlparse(url).hostname or "").lower()
+    return cookie if any(host == h or host.endswith("." + h) for h in _COOKIE_HOSTS) else None
 
 
 def clean_cookie(cookie):
@@ -50,6 +63,7 @@ async def get_location_from_url(url, cookie=None):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
     }
 
+    cookie = scoped_cookie(url, cookie)
     if cookie:
         headers["Cookie"] = clean_cookie(cookie)
 
@@ -76,6 +90,7 @@ async def download_douyin_image(url, filename, cookie=None):
     Returns:
         bool: 下载是否成功
     """
+    cookie = scoped_cookie(url, cookie)
     if os.path.exists(filename):
         logger.info(f"文件已存在，跳过下载: {filename}")
         return True
@@ -194,6 +209,12 @@ async def download_video(url, filename="video.mp4", cookie=None):
     Returns:
         bool: 下载是否成功
     """
+    cookie = scoped_cookie(url, cookie)
+    if cookie:
+        # 主站播放地址先在本地解析跳转，CDN 地址不带 cookie
+        loc = (await get_location_from_url(url, cookie)).get("location")
+        if loc:
+            url, cookie = loc, scoped_cookie(loc, cookie)
     if os.path.exists(filename):
         logger.info(f"文件已存在，跳过下载: {filename}")
         return True
