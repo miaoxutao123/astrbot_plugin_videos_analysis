@@ -184,7 +184,7 @@ class BilibiliCreator(CreatorPlatform):
             bvid = arc.get("bvid", "")
             works.append(Work(
                 id=bvid, title=arc.get("title") or "(无标题)", create_time=int(arc.get("ptime") or arc.get("ctime") or 0),
-                digg=int(stat.get("like") or 0), comments=int(stat.get("reply") or 0),
+                digg=int(stat.get("like") or 0), comments=int(stat.get("reply") or 0), views=int(stat.get("view") or 0),
                 url=f"https://www.bilibili.com/video/{bvid}",
             ))
         return works[:limit]

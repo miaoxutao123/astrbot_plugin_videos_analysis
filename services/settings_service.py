@@ -31,6 +31,7 @@ CATALOG: dict[str, tuple[str, str, str, bool]] = {
     # 账号运维与审批
     "llm_allow_non_admin_requests": ("允许普通用户申请操作", "bool", "普通用户让 AI 发评论等，会推送给管理员审批", False),
     "max_pending_per_user": ("每人待审批上限", "int", "", False),
+    "publish_confirm_minutes": ("发布审批有效期(分钟)", "int", "发布申请多久内没确认就作废，默认 720（12 小时），最长 1440", False),
     "risk_cooldown_minutes": ("风控冷却(分钟)", "int", "账号触发风控后暂停写操作的时长", False),
     "health_check_interval_minutes": ("账号巡检间隔(分钟)", "int", "定时检查登录状态并自动续期，0 为关闭", False),
     "inbox_patrol_minutes": ("消息巡检间隔(分钟)", "int", "新评论/@/系统通知推送给管理员，并每天记录运营数据；0 为关闭", False),

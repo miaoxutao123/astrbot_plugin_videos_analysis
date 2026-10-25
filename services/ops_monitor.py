@@ -302,3 +302,80 @@ class OpsMonitor:
                 logger.warning(f"[monitor] 巡检异常: {e}")
             # 加一点随机，避免每次都在整点打开页面
             await asyncio.sleep(self.interval_min * 60 * random.uniform(0.85, 1.15))
+
+
+# ── 运营洞察（给内容生产插件选题用） ─────────────────────
+
+_INSIGHT_CACHE: dict[tuple, tuple[float, dict]] = {}
+INSIGHT_TTL = 600
+
+
+def _work_brief(w, now: float) -> dict:
+    return {"title": (w.title or "")[:30], "days_ago": round((now - w.create_time) / 86400, 1) if w.create_time else None,
+            "views": w.views, "likes": w.digg, "comments": w.comments}
+
+
+async def insight(plugin, platform: str = "", days: int = 7, refresh: bool = False) -> dict:
+    """
+    紧凑的运营摘要：账号数据与变化、同类对比、最近/表现最好的作品、平台热点、我们发布过的内容表现。
+    结果缓存 10 分钟；单项失败只缺那一项，不影响其他。
+    """
+    from .creator_ops import read_publish_log
+
+    days = max(1, min(90, int(days or 7)))
+    key = (platform or "*", days)
+    hit = _INSIGHT_CACHE.get(key)
+    if hit and not refresh and time.time() - hit[0] < INSIGHT_TTL:
+        return hit[1]
+    now = time.time()
+    rep = await report(plugin, platform, days)
+    log = read_publish_log(200)
+    out = {"generated_at": int(now), "days": days, "platforms": []}
+    for p in rep["platforms"]:
+        plat = p["platform"]
+        item = {"platform": plat, "label": LABEL.get(plat, plat)}
+        if p.get("error"):
+            item["error"] = p["error"]
+            out["platforms"].append(item)
+            continue
+        item.update({k: p[k] for k in ("account", "totals", "since", "period") if p.get(k)})
+        if change := {k: v for k, v in (p.get("change") or {}).items() if v}:
+            item["change"] = change
+        if p.get("diagnosis"):
+            item["vs_similar"] = {k: [v.get("own"), v.get("similar")] for k, v in p["diagnosis"].items()}
+        creator = get_creator(plugin, plat)
+        works = []
+        try:
+            works = await creator.list_works(20)
+        except Exception as e:
+            item["works_error"] = str(e)[:100]
+        if works:
+            item["recent_works"] = [_work_brief(w, now) for w in works[:5]]
+            ranked = sorted(works, key=lambda w: (w.views, w.digg), reverse=True)
+            item["best_works"] = [_work_brief(w, now) for w in ranked[:3]]
+            item["posts_in_period"] = sum(1 for w in works if w.create_time and now - w.create_time < days * 86400)
+        try:
+            if plat == "douyin" and getattr(creator, "hot_words", None) and plugin.browser_signer and plugin.browser_signer.is_ready:
+                item["trending"] = [w["word"] for w in await creator.hot_words(8)]
+            elif plat == "bilibili":
+                item["trending"] = [w.title[:30] for w in await creator.feed("hot", 8)]
+        except Exception as e:
+            logger.info(f"[insight] {plat} 热点读取失败: {e}")
+        by_id = {w.id: w for w in works}
+        ours = []
+        for r in log:
+            if r.get("platform") != plat or r.get("status") not in ("published", "failed"):
+                continue
+            w = by_id.get(r.get("work_id")) or next((x for x in works if r.get("title") and x.title.startswith(r["title"][:20])), None)
+            row = {"title": r.get("title", "")[:30], "status": r.get("status"), "caller": r.get("caller", ""),
+                   "days_ago": round((now - r.get("at", now)) / 86400, 1)}
+            if w:
+                row.update(views=w.views, likes=w.digg, comments=w.comments)
+            ours.append(row)
+            if len(ours) >= 5:
+                break
+        if ours:
+            item["our_publishes"] = ours
+        out["platforms"].append(item)
+    _INSIGHT_CACHE[key] = (now, out)
+    return out

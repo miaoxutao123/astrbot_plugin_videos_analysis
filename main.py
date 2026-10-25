@@ -30,7 +30,7 @@ _BOGUS_GEMINI_BASE = "https://generative-api.google.com/v1alpha2"
     "astrbot_plugin_videos_analysis",
     "视频解析与理解",
     "抖音/B站/MC百科视频自动解析与AI理解",
-    "0.11.0",
+    "0.12.0",
     "https://github.com/Zhalslar/astrbot_plugin_videos_analysis",
 )
 class hybird_videos_analysis(Star):
@@ -202,7 +202,10 @@ class hybird_videos_analysis(Star):
 
         video_path 可以是本地文件或 http(s) 直链；返回 dict，不会抛异常。
         B站可选 opts：cover=封面图路径/直链，tid=分区 ID，desc=简介（不给封面就取视频第 1 秒）。
-        通用 opts：confirm_ttl=审批有效期（秒，最长 24 小时），无人值守的定时发布用。
+        通用 opts：confirm_ttl=审批有效期（秒，最长 24 小时；默认 publish_confirm_minutes，12 小时）；
+        caller=你的插件名、caller_ref=你的任务号——发布成功/失败/被拒/过期后会调用
+        ``await <caller 插件>.on_publish_result(result: dict)``，result 含 status(published/failed/rejected/expired)、
+        code、platform、title、work_id、url、message、caller_ref。待审批申请保存在磁盘上，本插件重载不会丢。
         """
         from .services.creator import normalize_platform
 
@@ -214,6 +217,28 @@ class hybird_videos_analysis(Star):
         except Exception as e:
             return {"status": "rejected", "error": f"准备发布失败: {e}"}
         return await self.creator_ops.submit(op)
+
+    async def ops_insight(self, platform: str = "", days: int = 7, refresh: bool = False) -> dict:
+        """
+        给内容生产插件（如 media_gen）选题用的运营摘要，只读、不需要审批，结果缓存 10 分钟。
+
+        返回 {"days", "platforms": [{platform, label, account, totals, change, period, vs_similar,
+        recent_works, best_works, posts_in_period, trending, our_publishes} 或 {platform, error}]}；不会抛异常。
+        """
+        from .services import ops_monitor
+
+        try:
+            return await ops_monitor.insight(self, platform, days, refresh)
+        except Exception as e:
+            logger.warning(f"[insight] 生成运营洞察失败: {e}")
+            return {"days": days, "platforms": [], "error": redact(e)[:200]}
+
+    def publish_history(self, caller: str = "", limit: int = 20) -> list[dict]:
+        """发布结果记录（新→旧），可按来源插件过滤；与 on_publish_result 回调内容相同。"""
+        from .services.creator_ops import read_publish_log
+
+        rows = read_publish_log(500)
+        return [r for r in rows if not caller or r.get("caller") == caller][:max(1, int(limit))]
 
     async def terminate(self):
         """插件卸载/重载时关闭浏览器与 Xvfb，避免进程泄漏。"""

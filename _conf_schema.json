@@ -209,10 +209,16 @@
         "type": "int",
         "default": 30
     },
+    "publish_confirm_minutes": {
+        "description": "发布申请的确认有效期（分钟）",
+        "type": "int",
+        "default": 720,
+        "hint": "发布要先看视频，生成插件的定时任务也常在没人时提交，默认 12 小时；最长 24 小时。待审批的申请会保存到磁盘，插件重载不会丢"
+    },
     "confirm_timeout_seconds": {
         "description": "危险操作二次确认有效期（秒）",
         "type": "int",
-        "hint": "发布/删除用这个时长；评论回复至少 300 秒（需要时间审阅和修改）",
+        "hint": "删除、改资料等用这个时长；评论回复至少 300 秒；发布单独看 publish_confirm_minutes",
         "default": 60
     },
     "reply_max_comments": {

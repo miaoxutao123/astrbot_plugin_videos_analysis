@@ -162,7 +162,8 @@ class DouyinCreator(CreatorPlatform):
             works.append(Work(
                 id=str(a.get("aweme_id")), title=a.get("desc") or a.get("item_title") or "(无标题)",
                 create_time=int(a.get("create_time") or 0), digg=st.get("digg_count", 0),
-                comments=st.get("comment_count", 0), url=f"https://www.douyin.com/video/{a.get('aweme_id')}",
+                comments=st.get("comment_count", 0), views=int(st.get("play_count") or 0),
+                url=f"https://www.douyin.com/video/{a.get('aweme_id')}",
             ))
         return works
 

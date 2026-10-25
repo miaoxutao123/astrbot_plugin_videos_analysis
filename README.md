@@ -131,7 +131,8 @@
 超过 `browse_sync_max_minutes` 的转后台看完再推送。Gemini / MiMo **默认关闭**（`gemini_enabled` / `mimo_enabled`）。
 
 ### 🎬 创作者操作（抖音 / B站，平台可扩展）
-> 发布、删除、回复评论都是**危险操作**：命令只生成预览和 4 位确认码，管理员发送 `/va_confirm <码>` 后才执行（默认 60 秒内有效）。
+> 发布、删除、回复评论都是**危险操作**：命令只生成预览和 4 位确认码，管理员发送 `/va_confirm <码>` 后才执行
+> （发布默认 12 小时内有效，其余 60 秒；待审批的申请保存在磁盘上，插件重载、容器重启都不会丢）。
 > 操作作用于账号池里**当前使用中**的账号，预览里会写明账号名。
 
 - **发布视频**：`/va_upload 标题 #话题` 时附带视频、引用一条视频消息，或在 2 分钟内补发视频；也可让 Agent 通过 `video_action upload` 发起
@@ -142,6 +143,12 @@
   结合视频内容（复用 `understand_video` 的分析流程，按作品缓存）和 `creator_reply_style` 账号风格由 LLM 起草回复；
   可 `/va_edit <码> <序号> <新回复>` 修改、`/va_confirm <码> 1 3` 只发部分。作者本人、已回复过的评论自动跳过，多条之间随机间隔 4~9 秒
 - 浏览器自动化失败时会把创作者中心截图发回，方便判断是未登录、验证码还是页面改版
+- **与内容生产插件联动**（如 `astrbot_plugin_media_gen`）：
+  - `publish_request(event, 视频, 标题, 话题, 平台, caller=插件名, caller_ref=任务号, confirm_ttl=秒)`：提交发布申请，照常走管理员审批；
+    发布成功 / 失败 / 被拒 / 过期后回调 `await <caller>.on_publish_result(result)`，带作品 ID 和链接；
+    所有结果也写入 `accounts/creator/published.jsonl`，可用 `publish_history(caller)` 查询
+  - `ops_insight(platform="", days=7)`：给选题用的运营摘要（约 2KB）：账号数据与变化、同类作者对比、最近/表现最好的作品、
+    平台热点（抖音热搜词需要浏览器在跑，B站热门）、本插件发布过的内容的表现；只读，缓存 10 分钟，不会抛异常
 - 新平台只需在 `services/creator/` 实现 `CreatorPlatform`（`list_works / upload / delete / list_comments / reply_comment` 等）并登记到 `REGISTRY`，
   命令里写 `/va_works bilibili` 这样的平台参数即可复用全部流程
 
@@ -234,7 +241,8 @@
 ### 创作者操作
 | 配置项 | 描述 | 默认值 |
 |--------|------|--------|
-| `confirm_timeout_seconds` | 危险操作确认有效期（评论回复至少 300 秒） | `60` |
+| `publish_confirm_minutes` | 发布申请确认有效期（分钟，最长 1440） | `720` |
+| `confirm_timeout_seconds` | 其他危险操作确认有效期（评论回复至少 300 秒） | `60` |
 | `reply_max_comments` | 每次精选回复最多几条（1~5） | `5` |
 | `reply_window_hours` | 只看最近多少小时的评论 | `48` |
 | `creator_reply_style` | 账号回复风格（给 LLM 的人设/语气） | `""` |
@@ -372,7 +380,12 @@ astrbot_plugin_videos_analysis/
 
 ## 🔄 更新日志
 
-### v0.11.0（当前版本）
+### v0.12.0（当前版本）
+- 🔗 与内容生产插件联动：待审批申请持久化（重载、重启不丢，暂存素材保留）；发布申请默认 12 小时有效（`publish_confirm_minutes`）；
+  `publish_request` 支持 `caller` / `caller_ref`，结果回调 `on_publish_result` 并记入发布日志；新增 `ops_insight` 运营洞察与 `publish_history`
+- 📈 作品列表带播放量（抖音、B站）
+
+### v0.11.0
 - ⚡ 抖音解析改为纯 HTTP：先读公开分享页（约 0.5 秒，无水印 1080p），私密/受限作品再用浏览器签名；
   支持 `douyin.com/video|note`、`modal_id` 等长链接
 - ⚡ 创作中心数据、消息、作品列表改为直接 HTTP 读取（10~20 秒 → 约 1 秒），接口异常时自动回退页面读取
