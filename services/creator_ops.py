@@ -155,7 +155,7 @@ class CreatorOps:
             code=code, kind=kind, platform=platform,
             account=key or "当前登录账号", account_key=key,
             requester=requester, umo=event.unified_msg_origin,
-            requester_name=str(event.get_sender_name() or requester), requester_admin=bool(event.is_admin()),
+            requester_name=str(event.get_sender_name() or requester), requester_admin=self.plugin.admins.is_admin(event),
             expires=time.time() + (ttl or self.confirm_timeout), payload=payload,
         )
         self._pending[code] = op
@@ -311,6 +311,10 @@ class CreatorOps:
         preview = self.render_preview(op)
         if op.requester_admin:
             await self._send(op.umo, preview)
+            # 还没设置插件管理员：管理员在私聊里提交申请时顺带问一次
+            admins = self.plugin.admins
+            if ":FriendMessage:" in op.umo and admins.should_ask_uid(op.requester):
+                await self._send(op.umo, admins.prompt())
             return {"status": "pending_confirmation", "code": op.code,
                     "message": f"尚未执行。确认信息已发到当前会话，需要管理员本人回复「确认 {op.code}」才会执行。请如实告知，不要声称已完成，也不要替用户确认。"}
         head = (

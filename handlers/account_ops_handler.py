@@ -266,7 +266,14 @@ async def handle_bili_refresh(plugin, event):
     yield event.plain_result("\n".join(await plugin.accounts.refresh_all_bilibili(force=force)) or "B站未登录")
 
 
+def _not_approver(plugin, event) -> str:
+    return "" if plugin.admins.is_admin(event) else f"审批由本插件管理员（{plugin.admins.names()}）处理"
+
+
 async def handle_confirm(plugin, event):
+    if msg := _not_approver(plugin, event):
+        yield event.plain_result(msg)
+        return
     args = command_args(event, "va_confirm")
     if not args:
         yield event.plain_result("用法: /va_confirm <确认码> [序号...]")
@@ -285,11 +292,17 @@ async def handle_confirm(plugin, event):
 
 
 async def handle_cancel(plugin, event):
+    if msg := _not_approver(plugin, event):
+        yield event.plain_result(msg)
+        return
     args = command_args(event, "va_cancel")
     yield event.plain_result(plugin.creator_ops.cancel(args[0], event) if args else "用法: /va_cancel <确认码>")
 
 
 async def handle_edit(plugin, event):
+    if msg := _not_approver(plugin, event):
+        yield event.plain_result(msg)
+        return
     args = command_args(event, "va_edit")
     if len(args) < 3 or not args[1].isdigit():
         yield event.plain_result("用法: /va_edit <确认码> <序号> <新回复>")

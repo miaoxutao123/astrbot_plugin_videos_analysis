@@ -474,7 +474,12 @@ class AccountManager:
     # ── 定时巡检与告警 ───────────────────────────────────
 
     def notify_targets(self) -> list[str]:
-        return list(self._health.get("notify", []))
+        """/va_notify 设置的会话 + 插件管理员的私聊。"""
+        out = list(self._health.get("notify", []))
+        for umo in self.plugin.admins.umos():
+            if umo not in out:
+                out.append(umo)
+        return out
 
     def set_notify(self, umo: str, enable: bool) -> str:
         targets = self._health.setdefault("notify", [])

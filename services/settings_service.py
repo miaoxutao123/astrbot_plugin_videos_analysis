@@ -166,8 +166,14 @@ async def checklist(plugin, event) -> list[tuple[bool, str, str]]:
     asr = bool(cfg.get("browse_asr_api_base") and cfg.get("browse_asr_api_key"))
     add(asr, "语音转写", "已配置" if asr else "未配置：看视频只能靠B站字幕和画面。可以私聊说“用硅基流动的免费语音转写，密钥是 sk-xxx”")
     # 运维
+    adm = plugin.admins
+    if adm.configured:
+        add(True, "插件管理员", f"{adm.names()}（审批和告警推送到他们的私聊）")
+    else:
+        add(False, "插件管理员", "未设置：所有 AstrBot 管理员都能批准发布、删除。私聊机器人发送 /va_admins，从 AstrBot 管理员里选")
     has_notify = bool(plugin.accounts.notify_targets())
-    add(has_notify, "告警/审批会话", "已设置" if has_notify else "未设置：普通用户的操作申请、新评论推送无处可发。管理员私聊发送 /va_notify")
+    add(has_notify, "告警/审批会话", f"{len(plugin.accounts.notify_targets())} 个" if has_notify
+        else "未设置：普通用户的操作申请、新评论推送无处可发。设置插件管理员（/va_admins）或私聊发送 /va_notify")
     add(True, "自动解析链接", "已开启" if cfg.get("auto_parse_enabled") else "未开启（群里发链接不会自动解析）；需要可说“打开自动解析链接”")
     return items
 

@@ -19,6 +19,7 @@ from .douyin_scraper.browser_signer import BrowserSigner
 from .douyin_scraper.douyin_parser import DOUYIN_LINK, DouyinParser
 from .services.account_manager import AccountManager
 from .services.creator_ops import CreatorOps
+from .services.plugin_admins import COMMAND_PREFIXES, PluginAdmins
 from .utils.paths import DOUYIN_BROWSER_PROFILE, migrate_legacy_data
 from .utils.redact import redact
 
@@ -30,7 +31,7 @@ _BOGUS_GEMINI_BASE = "https://generative-api.google.com/v1alpha2"
     "astrbot_plugin_videos_analysis",
     "视频解析与理解",
     "抖音/B站/MC百科视频自动解析与AI理解",
-    "0.12.0",
+    "0.13.0",
     "https://github.com/Zhalslar/astrbot_plugin_videos_analysis",
 )
 class hybird_videos_analysis(Star):
@@ -92,6 +93,7 @@ class hybird_videos_analysis(Star):
         self._browser_signer: BrowserSigner | None = None
         self.browser_signer_error: str = ""
 
+        self.admins = PluginAdmins(self)
         self.accounts = AccountManager(self)
         self.creator_ops = CreatorOps(self)
 
@@ -376,6 +378,34 @@ class hybird_videos_analysis(Star):
         async for response in handle_health_check(self, event):
             yield response
 
+    @filter.event_message_type(EventMessageType.ALL)
+    async def observe_admins(self, event):
+        """记下 AstrBot 管理员的私聊会话；管理员私聊里用本插件命令、且还没设置插件管理员时，问一次要不要设置。"""
+        self.admins.observe(event)
+        text = (event.message_str or "").strip().lstrip("/")
+        if (text.startswith(COMMAND_PREFIXES) and not text.startswith("va_admins") and event.is_private_chat()
+                and self.admins.should_ask(event)):
+            asyncio.create_task(self._ask_admins(event.unified_msg_origin))
+        if False:  # 本 handler 不回复消息，只是让 AstrBot 把它当作异步生成器
+            yield
+
+    async def _ask_admins(self, umo: str) -> None:
+        from astrbot.core.message.message_event_result import MessageChain
+
+        await asyncio.sleep(2)  # 等命令自己的回复先发出去
+        try:
+            await self.context.send_message(umo, MessageChain().message(self.admins.prompt()))
+        except Exception as e:
+            logger.warning(f"[admins] 发送插件管理员设置提示失败: {e}")
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_admins", alias={"插件管理员"})
+    async def plugin_admins_command(self, event):
+        """从 AstrBot 管理员里选本插件管理员：/va_admins [1 3|全部|我|清空|跳过]"""
+        from .handlers.account_ops_handler import command_args
+
+        yield event.plain_result(self.admins.select(event, command_args(event, "va_admins")))
+
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("va_notify")
     async def accounts_notify_command(self, event):
@@ -499,6 +529,10 @@ class hybird_videos_analysis(Star):
         m = _re.match(r"^\s*(确认|同意|批准|执行|拒绝|取消|驳回)\s*(\d{4})((?:\s+\d{1,2})*)\s*$", event.message_str or "")
         if not m or not event.is_admin() or not self.creator_ops.has_pending(m.group(2)):
             return  # 不是待审批的码，交给其他插件/LLM 正常处理
+        if not self.admins.is_admin(event):
+            yield event.plain_result(f"这条申请由本插件管理员（{self.admins.names()}）审批")
+            event.stop_event()
+            return
         verb, code = m.group(1), m.group(2)
         if verb in ("拒绝", "取消", "驳回"):
             result = self.creator_ops.cancel(code, event)
