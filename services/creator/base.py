@@ -8,6 +8,8 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
+from ...utils.redact import redact
+
 
 @dataclass
 class Work:
@@ -39,6 +41,9 @@ class OpResult:
     message: str
     data: dict = field(default_factory=dict)
     screenshot: str = ""  # 浏览器自动化失败时的截图，便于排查页面改版
+
+    def __post_init__(self):
+        self.message = redact(self.message)  # 报错里可能夹带 cookie / 密钥
 
 
 class CreatorPlatform(ABC):

@@ -37,7 +37,8 @@ CATALOG: dict[str, tuple[str, str, str, bool]] = {
     "creator_reply_style": ("评论回复风格", "str", "AI 起草评论/回复时的语气", False),
     "reply_max_comments": ("每次最多回复几条", "int", "1~5", False),
     # 抖音
-    "douyin_browser_signer": ("抖音签名浏览器", "bool", "抖音解析必须开启", False),
+    "douyin_browser_signer": ("抖音签名浏览器", "bool", "抖音搜索/评论/发布/扫码登录需要；只解析公开视频可关闭省内存", False),
+    "douyin_browser_low_cpu": ("抖音浏览器空闲省电", "bool", "空闲时隐藏页面停动画，CPU 约 50%→10%", False),
     "douyin_proxy": ("抖音代理", "str", "如 http://127.0.0.1:7890，留空直连", False),
     # 可选的第三方模型（默认关闭）
     "video_understand_method": ("视频理解方式", "str", "llm=抽帧+转写交给当前对话模型（默认）；gemini/mimo 需先开启", False),
@@ -119,29 +120,77 @@ def show(config) -> dict:
             "注意": "这只是查看。要修改必须再调用 action=set（多项可一次传 JSON），没调用 set 不算提交，不要对用户说已提交"}
 
 
-async def check(plugin, event) -> list[str]:
-    """体检：告诉小白还缺什么、哪里不对。只返回有问题或值得注意的项。"""
-    cfg, notes = plugin.config, []
-    if not (cfg.get("browse_asr_api_base") and cfg.get("browse_asr_api_key")):
-        notes.append("没有配置线上语音转写：看视频时只能靠B站字幕或画面。可以说“用硅基流动的免费语音转写，密钥是 xxx”")
+async def checklist(plugin, event) -> list[tuple[bool, str, str]]:
+    """完整体检：[(是否正常, 项目, 说明/下一步)]，/va_setup 和 LLM 的 check 共用。"""
+    import shutil
+
+    cfg, items = plugin.config, []
+
+    def add(ok: bool, name: str, detail: str):
+        items.append((ok, name, detail))
+
+    # 运行环境
+    add(bool(shutil.which("ffmpeg")), "ffmpeg", "已安装" if shutil.which("ffmpeg") else
+        "未安装：看视频抽帧、B站高清合成需要。Debian/Ubuntu: apt install ffmpeg")
+    signer, err = plugin.browser_signer, plugin.browser_signer_error or ""
+    if not plugin.douyin_browser_signer_enabled:
+        add(True, "抖音浏览器", "已关闭：公开视频解析、创作中心数据照常；搜索/评论/发布/扫码登录不可用")
+    elif signer and signer.is_ready:
+        add(True, "抖音浏览器", "运行中" + ("（空闲省电已开）" if cfg.get("douyin_browser_low_cpu", True) else ""))
+    else:
+        starting = "后台启动" in err or "自动下载" in err
+        add(starting, "抖音浏览器", f"{err}（公开视频解析不受影响）" if starting
+            else f"{err or '未启动'}。公开视频解析不受影响；处理好后发送 /dy_restart")
+    # 账号
+    dy_cookie = plugin.effective_douyin_cookie or ""
+    dy_logged = bool(signer and signer.is_ready and signer.is_logged_in) or "sessionid" in dy_cookie
+    add(dy_logged, "抖音账号", "已登录" if dy_logged else "未登录：私聊机器人发送 /dy_login 扫码（只解析视频可以不登录）")
+    bili = await plugin.accounts.bili_cookies_for(None)
+    bili_logged = bool((bili or {}).get("SESSDATA"))
+    add(bili_logged, "B站账号", ("已登录" + ("" if plugin.bili_use_login else "；解析仍按未登录下载（最高 720P），要高清可说“打开B站登录态下载”"))
+        if bili_logged else "未登录：私聊机器人发送 /bili_login 扫码（评论、观看记录、高清需要）")
+    # 看视频
     try:
         from .browse_service import _current_provider, _provider_sees_images
 
         _, prov = await _current_provider(plugin, event)
         if not prov:
-            notes.append("没有找到当前对话模型，浏览视频无法总结")
+            add(False, "对话模型", "没有找到当前对话模型，看视频无法总结：在 AstrBot WebUI → 模型提供商里添加并设为默认")
         elif not _provider_sees_images(prov):
-            notes.append(f"当前对话模型 {prov.get_model()} 在 AstrBot 里没有勾选“图像”能力，看视频时只能读转写不看画面")
+            add(False, "对话模型", f"{prov.get_model()} 没有勾选“图像”能力，看视频时只能读转写不看画面")
+        else:
+            add(True, "对话模型", f"{prov.get_model()}（可看图）")
     except Exception:
         pass
-    bili = await plugin.accounts.bili_cookies_for(None)
-    if not (bili or {}).get("SESSDATA"):
-        notes.append("B站未登录：评论、观看记录、字幕等需要登录，管理员发送 /bili_login 扫码")
-    if plugin.browser_signer is None:
-        notes.append(f"抖音签名引擎未就绪：{plugin.browser_signer_error or '未知原因'}")
-    if not plugin.accounts.notify_targets():
-        notes.append("还没有设置审批/告警会话：普通用户的操作申请无处推送。管理员私聊机器人发送 /va_notify")
+    asr = bool(cfg.get("browse_asr_api_base") and cfg.get("browse_asr_api_key"))
+    add(asr, "语音转写", "已配置" if asr else "未配置：看视频只能靠B站字幕和画面。可以私聊说“用硅基流动的免费语音转写，密钥是 sk-xxx”")
+    # 运维
+    has_notify = bool(plugin.accounts.notify_targets())
+    add(has_notify, "告警/审批会话", "已设置" if has_notify else "未设置：普通用户的操作申请、新评论推送无处可发。管理员私聊发送 /va_notify")
+    add(True, "自动解析链接", "已开启" if cfg.get("auto_parse_enabled") else "未开启（群里发链接不会自动解析）；需要可说“打开自动解析链接”")
+    return items
+
+
+def render_checklist(items: list[tuple[bool, str, str]]) -> str:
+    bad = [i for i in items if not i[0]]
+    lines = ["🔧 视频插件体检" + ("：一切正常" if not bad else f"：{len(bad)} 项需要处理"), ""]
+    lines += [f"{'✅' if ok else '⚠️'} {name}：{detail}" for ok, name, detail in items]
+    lines += ["", "设置都可以直接用中文说，例如“看视频抽 6 帧”“关闭进度提示”；密钥类请私聊。"]
+    return "\n".join(lines)
+
+
+async def check(plugin, event) -> list[str]:
+    """体检：告诉小白还缺什么、哪里不对。只返回有问题的项。"""
+    notes = [f"{name}：{detail}" for ok, name, detail in await checklist(plugin, event) if not ok]
     return notes or ["一切正常"]
+
+
+# 改这些地址后，对应的密钥 / 登录 cookie 会发往新地址：审批时单独提醒
+ENDPOINT_RECEIVES = {
+    "browse_asr_api_base": "语音转写密钥和视频音频",
+    "gemini_base_url": "Gemini 密钥和视频内容",
+    "douyin_proxy": "抖音登录 cookie 和全部抖音请求",
+}
 
 
 def diff_text(changes: dict, config) -> str:
@@ -150,4 +199,6 @@ def diff_text(changes: dict, config) -> str:
         cn, _, _, secret = CATALOG[k]
         old = config.get(k)
         lines.append(f"· {cn}：{_mask(old) if secret else json.dumps(old, ensure_ascii=False)} → {_mask(v) if secret else json.dumps(v, ensure_ascii=False)}")
+        if k in ENDPOINT_RECEIVES and v and v != old:
+            lines.append(f"  ⚠️ 批准后{ENDPOINT_RECEIVES[k]}会发送到这个地址，请确认是你自己信任的服务")
     return "\n".join(lines)

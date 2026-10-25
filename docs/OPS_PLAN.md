@@ -2,7 +2,7 @@
 
 > 本文是 [ROADMAP.md](ROADMAP.md)(ROADMAP.md) P1 收尾 → P3 的细化。调研方式：测试容器里复制一份抖音浏览器配置，
 > 只读地打开创作中心 9 个页面，记录页面实际调用的接口、返回结构，并从前端 JS 中提取写接口路径。
-> **全程没有点击任何按钮、没有调用任何写接口。** 账号：小牛说书（18 个作品，登录态仍有效）。
+> **全程没有点击任何按钮、没有调用任何写接口。** 测试账号：18 个作品，登录态有效。
 
 ---
 
@@ -52,13 +52,30 @@
 
 ---
 
+## 1.3 协议化评估（v0.11，实测 2026-10-25）
+
+| 能力 | 现在怎么做 | 结论 |
+|------|-----------|------|
+| 解析公开视频/图文 | `iesdouyin.com/share/note/{id}` 的 SSR `_ROUTER_DATA`，`playwm→play` + `ratio=1080p` | ✅ 纯 HTTP，约 0.5 秒，不带 cookie；偶发空数据换路径重试，私密/受限作品回退浏览器 |
+| 下载视频 | `aweme.snssdk.com/aweme/v1/play/` → douyinvod CDN | ✅ 纯 HTTP，不需要 cookie |
+| 创作中心读接口（user/info、overview、diagnosis、消息、work_list、item/list） | aiohttp + cookie | ✅ 纯 HTTP，约 1 秒；失败回退页面内 fetch |
+| www.douyin.com 读接口（评论列表、搜索、推荐、详情） | 页面内 fetch，SDK 自动补 a_bogus | ❌ 需要 a_bogus；内置纯 Python 算法 2026-06 起失效，继续用浏览器 |
+| 所有写接口（评论、删稿、改资料、发布） | 页面内 fetch / 页面自动化 | ❌ web_protect 设备证书（bd-ticket-guard）绑定浏览器配置目录，只能在浏览器里发 |
+| 扫码登录 | 浏览器 | ❌ 登录后还要过新设备验证，留在浏览器 |
+| B站全部功能 | aiohttp | ✅ 本来就是纯协议 |
+
+浏览器常驻成本：抖音首页渲染进程约 40%~100% CPU（推荐视频 + Lottie 动画，几乎都是渲染不是 JS）。
+v0.11 在空闲时隐藏整页、停动画（`douyin_browser_low_cpu`），实测约 7%~12%，签名与页面内 fetch 不受影响。
+
+---
+
 ## 2. 下一步规划（按优先级）
 
 ### P1.5 · 抖音创作中心"接口化"（替换脆弱的页面点击）
 
 | # | 事项 | 做法 | 需要用户在场？ |
 |---|------|------|:---:|
-| 1 | ✅ v0.10 **数据看板（只读）** | `stats()`：`overview/all` + `author_diagnosis` + `item_contribution_top`；B站对应 `member/x/web/index/stat`（已验证可用：总播放 10012、粉丝 73 等）+ `x/web/data/pandect` | 否，现在就能做 |
+| 1 | ✅ v0.10 **数据看板（只读）** | `stats()`：`overview/all` + `author_diagnosis` + `item_contribution_top`；B站对应 `member/x/web/index/stat`（已验证可用）+ `x/web/data/pandect` | 否，现在就能做 |
 | 2 | ✅ v0.10 **消息巡检（只读）** | `unread_count` → 有变化再拉 `notice/comment` / `user_message/list`；B站 `x/msgfeed/unread` + `x/msgfeed/reply`（已验证可用） | 否 |
 | 3 | 评论读取切到创作者接口 | `creator/item/list` 拿加密 ID → `creator/comment/list` | 否（只读） |
 | 4 | 删除作品走接口 | 页面内 fetch `/web/api/media/aweme/delete`，失败再回退页面点击 | **是**（要拿一条测试作品验证） |

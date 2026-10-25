@@ -9,6 +9,7 @@ import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.core.message.message_event_result import MessageChain
 
+from ..douyin_scraper.douyin_parser import DOUYIN_LINK
 from ..services.douyin_service import download
 from ..services.gemini_service import process_images_with_gemini
 from ..utils.config_helper import (
@@ -21,6 +22,7 @@ from ..utils.config_helper import (
     should_comprehend,
     cleanup_old_files,
 )
+from ..utils.redact import redact
 
 
 async def _process_multi_part_media(plugin, event, result, media_type: str):
@@ -68,7 +70,7 @@ async def _process_multi_part_media(plugin, event, result, media_type: str):
 
         except Exception as e:
             logger.error(f"处理媒体文件 {i+1} 时发生错误: {e}")
-            content = [Comp.Plain(f"媒体文件 {i+1} 处理失败: {str(e)}")]
+            content = [Comp.Plain(f"媒体文件 {i+1} 处理失败: {redact(e)}")]
 
         node = create_node(event, content)
         ns.nodes.append(node)
@@ -117,7 +119,7 @@ async def _process_single_media(plugin, event, result, media_type: str):
 
     except Exception as e:
         logger.error(f"处理媒体文件时发生错误: {e}")
-        return [Comp.Plain(f"媒体文件处理失败: {str(e)}")]
+        return [Comp.Plain(f"媒体文件处理失败: {redact(e)}")]
 
 
 async def _process_douyin_comprehension(plugin, event, result, content_type, gcfg):
@@ -218,7 +220,7 @@ async def _process_douyin_videos_comprehension(plugin, event, media_urls, aweme_
 async def handle_douyin_parse(plugin, event):
     """抖音被动解析核心逻辑"""
     message_str = event.message_str
-    match = re.search(r"(https?://v\.douyin\.com/[a-zA-Z0-9_\-]+(?:-[a-zA-Z0-9_\-]+)?)", message_str)
+    match = DOUYIN_LINK.search(message_str)
 
     if not match:
         return
@@ -292,4 +294,4 @@ async def handle_douyin_parse(plugin, event):
 
     except Exception as e:
         logger.error(f"处理抖音媒体时发生错误: {e}")
-        yield event.plain_result(f"处理媒体文件时发生错误: {str(e)}")
+        yield event.plain_result(f"处理媒体文件时发生错误: {redact(e)}")

@@ -11,6 +11,7 @@ from ..services.account_manager import POOL_PLATFORMS
 from ..services.creator import REGISTRY, get_creator, normalize_platform
 from ..services.creator_ops import split_title_tags
 from ..utils.config_helper import send_file_if_needed
+from ..utils.redact import redact
 
 
 def command_args(event, *names: str) -> list[str]:
@@ -123,7 +124,7 @@ async def handle_works(plugin, event):
     try:
         works = await get_creator(plugin, platform, account).list_works(limit=10)
     except Exception as e:
-        yield event.plain_result(f"读取作品失败: {e}")
+        yield event.plain_result(f"读取作品失败: {redact(e)}")
         return
     plugin.creator_ops.remember_list(event, platform, works)
     if not works:
@@ -190,7 +191,7 @@ async def _prepare_upload(plugin, event, platform, source, title, tags, opts=Non
     try:
         op = await plugin.creator_ops.prepare_upload(event, platform, source, title, tags, opts=opts)
     except Exception as e:
-        yield event.plain_result(f"准备发布失败: {e}")
+        yield event.plain_result(f"准备发布失败: {redact(e)}")
         return
     yield event.plain_result(plugin.creator_ops.render_preview(op))
 
@@ -230,7 +231,7 @@ async def handle_reply(plugin, event):
     try:
         res = await plugin.creator_ops.prepare_replies(event, platform, work.id if work else ref, target, account)
     except Exception as e:
-        yield event.plain_result(f"起草失败: {e}")
+        yield event.plain_result(f"起草失败: {redact(e)}")
         return
     yield event.plain_result(res if isinstance(res, str) else plugin.creator_ops.render_preview(res))
 
@@ -255,7 +256,7 @@ async def handle_comment(plugin, event):
     try:
         res = await plugin.creator_ops.prepare_comment(event, platform, work.id if work else ref, text, account)
     except Exception as e:
-        yield event.plain_result(f"准备评论失败: {e}")
+        yield event.plain_result(f"准备评论失败: {redact(e)}")
         return
     yield event.plain_result(res if isinstance(res, str) else plugin.creator_ops.render_preview(res))
 
@@ -366,7 +367,7 @@ async def handle_bili_feed(plugin, event):
     try:
         works = await get_creator(plugin, "bilibili").feed(kind, limit=10)
     except Exception as e:
-        yield event.plain_result(f"读取失败: {e}")
+        yield event.plain_result(f"读取失败: {redact(e)}")
         return
     plugin.creator_ops.remember_list(event, "bilibili", works)
     yield event.plain_result(_render_list("bilibili", "B站热门：" if kind == "hot" else "B站首页推荐：", works) if works else "没有内容")
@@ -380,7 +381,7 @@ async def handle_bili_search(plugin, event):
     try:
         works = await get_creator(plugin, "bilibili").search(kw, limit=10)
     except Exception as e:
-        yield event.plain_result(f"搜索失败: {e}")
+        yield event.plain_result(f"搜索失败: {redact(e)}")
         return
     plugin.creator_ops.remember_list(event, "bilibili", works)
     yield event.plain_result(_render_list("bilibili", f"B站搜索「{kw}」：", works) if works else f"没有搜到「{kw}」")
@@ -402,14 +403,14 @@ async def handle_bili_watch(plugin, event):
             return
         ctx = await creator.work_context(work_id)
     except Exception as e:
-        yield event.plain_result(f"读取视频失败: {e}")
+        yield event.plain_result(f"读取视频失败: {redact(e)}")
         return
     yield event.plain_result(f"正在浏览《{ctx['title'][:30]}》（下载 360P → 抽帧 + 语音转写，约 20~90 秒）...")
     seconds = int(plugin.config.get("browse_report_seconds", 60) or 0) if plugin.config.get("browse_report_history", True) else 0
     try:
         res = await browse_work(plugin, event, "bilibili", work_id, ctx, report_seconds=seconds)
     except Exception as e:
-        yield event.plain_result(f"浏览失败: {e}")
+        yield event.plain_result(f"浏览失败: {redact(e)}")
         return
     lines = [f"📺 {ctx['title']}\nUP {ctx.get('author', '')} · {work_id}", "", res["summary"] or "（没有生成概要）", ""]
     try:
@@ -434,7 +435,7 @@ async def handle_bili_profile(plugin, event):
     try:
         p = await get_creator(plugin, "bilibili", account).profile()
     except Exception as e:
-        yield event.plain_result(f"读取资料失败: {e}")
+        yield event.plain_result(f"读取资料失败: {redact(e)}")
         return
     text = (
         f"B站账号: {p['uname']}（mid {p['mid']}，Lv{p['level']}{'，大会员' if p['vip'] else ''}）\n"
@@ -456,7 +457,7 @@ async def handle_bili_sign(plugin, event):
     try:
         res = await plugin.creator_ops.prepare_sign(event, "bilibili", text, account)
     except Exception as e:
-        yield event.plain_result(f"准备失败: {e}")
+        yield event.plain_result(f"准备失败: {redact(e)}")
         return
     yield event.plain_result(res if isinstance(res, str) else plugin.creator_ops.render_preview(res))
 
@@ -486,7 +487,7 @@ async def handle_bili_avatar(plugin, event):
         account, _ = _take_account(command_args(event, "bili_avatar"))
         op = await plugin.creator_ops.prepare_avatar(event, "bilibili", source, account)
     except Exception as e:
-        yield event.plain_result(f"处理图片失败: {e}")
+        yield event.plain_result(f"处理图片失败: {redact(e)}")
         return
     nap = await send_file_if_needed(op.payload["path"], plugin.nap_server_address, plugin.nap_server_port)
     yield event.chain_result([Comp.Image.fromFileSystem(nap), Comp.Plain(plugin.creator_ops.render_preview(op))])

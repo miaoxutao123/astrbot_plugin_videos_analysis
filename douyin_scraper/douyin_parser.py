@@ -12,6 +12,27 @@ from .crawlers.douyin.web.endpoints import DouyinAPIEndpoints
 from .crawlers.douyin.web.utils import AwemeIdFetcher, BogusManager
 
 
+_MOBILE_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 "
+              "(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
+_ROUTER_DATA = re.compile(r"window\._ROUTER_DATA\s*=\s*(\{.*?\})</script>", re.S)
+# 抖音分享短链、作品长链（video/note/图集/分享页/modal_id 弹窗）
+DOUYIN_LINK = re.compile(r"https?://(?:v\.douyin\.com/[\w\-]+/?|(?:www\.)?(?:ies)?douyin\.com/(?:video|note|slides|share/(?:video|note))/\d+[^\s]*|www\.douyin\.com/\S*?[?&]modal_id=\d+\S*)")
+_DIRECT_ID = re.compile(r"douyin\.com/(?:share/)?(?:video|note|slides)/(\d{15,21})|[?&](?:modal_id|aweme_id|vid)=(\d{15,21})")
+
+
+def _upgrade_share_item(item: dict) -> dict:
+    """分享页给的是带水印、720p 的播放地址：换成无水印 play 接口并请求 1080p。"""
+    play = (item.get("video") or {}).get("play_addr") or {}
+    urls = []
+    for u in play.get("url_list") or []:
+        u = u.replace("/playwm/", "/play/")
+        u = re.sub(r"ratio=[^&]*", "ratio=1080p", u) if "ratio=" in u else u + "&ratio=1080p"
+        urls.append(u)
+    if urls:
+        play["url_list"] = urls
+    return item
+
+
 class DouyinParser:
     """
     一个独立的抖音分享链接解析器。
@@ -182,9 +203,10 @@ class DouyinParser:
         extracted_url = url_match.group(1)
         logger.info(f"成功提取URL: {extracted_url}")
 
-        # 步骤 2: 从URL中提取 aweme_id
+        # 步骤 2: 从URL中提取 aweme_id（长链接直接取，短链接才请求跳转）
         try:
-            aweme_id = await self.id_fetcher.get_aweme_id(
+            m = _DIRECT_ID.search(extracted_url)
+            aweme_id = (m.group(1) or m.group(2)) if m else await self.id_fetcher.get_aweme_id(
                 extracted_url, proxy=self.proxy
             )
             if not aweme_id:
@@ -196,8 +218,11 @@ class DouyinParser:
 
         # 步骤 3: 使用 aweme_id 获取视频详情
         try:
-            # 优先使用浏览器签名 (如果可用)
-            if self._browser_signer:
+            # 优先走公开分享页（纯 HTTP、不带登录态、约 0.5 秒）；私密/受限作品再用浏览器签名
+            raw_video_data = await self._fetch_via_share(aweme_id)
+            if raw_video_data:
+                logger.info("通过分享页获取视频数据")
+            elif self._browser_signer:
                 logger.info("使用浏览器签名获取视频数据")
                 raw_video_data = await self._fetch_via_browser(aweme_id)
             else:
@@ -214,6 +239,24 @@ class DouyinParser:
         except Exception as e:
             logger.error(f"获取或处理视频数据失败: {e}")
             return {"error": "Failed to fetch or process video data", "details": str(e)}
+
+    async def _fetch_via_share(self, aweme_id: str) -> dict | None:
+        """公开分享页 iesdouyin.com/share/{note|video}/{id} 的 SSR 数据，不需要签名和 cookie。"""
+        try:
+            async with httpx.AsyncClient(timeout=10, proxy=self.proxy, follow_redirects=True) as client:
+                for kind in ("note", "video", "note"):  # note 路径对视频同样有效；偶尔返回空数据，换路径重试
+                    resp = await client.get(f"https://www.iesdouyin.com/share/{kind}/{aweme_id}/",
+                                            headers={"User-Agent": _MOBILE_UA})
+                    m = _ROUTER_DATA.search(resp.text)
+                    if not m:
+                        continue
+                    for page in (json.loads(m.group(1)).get("loaderData") or {}).values():
+                        items = ((page or {}).get("videoInfoRes") or {}).get("item_list") if isinstance(page, dict) else None
+                        if items:
+                            return {"aweme_detail": _upgrade_share_item(items[0])}
+        except Exception as e:
+            logger.info(f"分享页解析失败，改用浏览器签名: {e}")
+        return None
 
     async def _fetch_via_browser(self, aweme_id: str) -> dict | None:
         """通过浏览器签名引擎获取视频数据。直接返回 API 原始响应。"""

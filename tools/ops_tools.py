@@ -347,5 +347,10 @@ async def video_plugin_settings(plugin, event, action: str, setting: str = "", v
                 return {"error": str(e)}
         if not changes:
             return {"error": "没有要修改的内容"}
+        secrets_set = [ss.CATALOG[k][0] for k, v in changes.items() if ss.CATALOG[k][3] and v]
+        if secrets_set and not event.is_private_chat():
+            return {"error": f"{'、'.join(secrets_set)}属于密钥，不能在群里设置（群成员都能看到）。没有提交。"
+                             "请提醒用户：这条密钥已经在群里公开，建议到服务商后台作废并换一个新的，再私聊机器人设置，"
+                             "或者在 AstrBot WebUI 的插件配置里填写"}
         return await plugin.creator_ops.submit(plugin.creator_ops.prepare_config(event, changes))
     return {"error": "action 只能是 show / check / set"}

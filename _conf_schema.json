@@ -142,7 +142,13 @@
         "description": "启用抖音浏览器签名引擎",
         "type": "bool",
         "default": true,
-        "hint": "抖音解析必需。需要 playwright + Chromium，Linux 无桌面环境还需 Xvfb。关闭后抖音解析基本不可用"
+        "hint": "抖音搜索、评论、发布、扫码登录需要。需要 playwright + Chromium，Linux 无桌面环境还需 Xvfb。关闭后仍能解析公开视频、看创作中心数据（走 HTTP）"
+    },
+    "douyin_browser_low_cpu": {
+        "description": "抖音浏览器空闲省电",
+        "type": "bool",
+        "default": true,
+        "hint": "空闲时隐藏抖音页面、停止动画，浏览器 CPU 从约 50% 降到约 10%。签名不受影响；遇到异常可关闭对比"
     },
     "video_understand_method": {
         "description": "视频理解首选方式",

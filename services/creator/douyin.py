@@ -16,6 +16,8 @@ import os
 import re
 import time
 
+import aiohttp
+
 from astrbot.api import logger
 
 from ...utils.paths import DOWNLOAD_DIR_DY, IMAGE_DIR
@@ -24,6 +26,8 @@ from .human import GUARD, human_click, human_fill, human_hover, human_type, paus
 
 CREATOR = "https://creator.douyin.com"
 SELF_URL = "https://www.douyin.com/user/self"
+DESKTOP_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+              "Chrome/131.0.0.0 Safari/537.36")
 UPLOAD_URL = f"{CREATOR}/creator-micro/content/upload"
 MANAGE_URL = f"{CREATOR}/creator-micro/content/manage"
 # 设备参数（系统/浏览器/屏幕等）由 fetch_signed_api 按浏览器真实环境填充
@@ -136,6 +140,8 @@ class DouyinCreator(CreatorPlatform):
     # ── 读 ───────────────────────────────────────────────
 
     async def check_login(self) -> tuple[bool, str]:
+        if await self._creator_http([("/aweme/v1/creator/user/info/", "GET")]) is not None:
+            return True, "创作者中心可用"
         if not self.signer.is_logged_in:
             return False, "未登录"
         page = await self._creator_page(UPLOAD_URL)
@@ -148,6 +154,19 @@ class DouyinCreator(CreatorPlatform):
             await page.close()
 
     async def list_works(self, limit: int = 10) -> list[Work]:
+        got = await self._creator_http([("/janus/douyin/creator/pc/work_list?status=0&count=12&max_cursor=0", "GET")])
+        data = got[0] if got else await self._works_via_page()
+        works = []
+        for a in (data.get("aweme_list") or [])[:limit]:
+            st = a.get("statistics") or {}
+            works.append(Work(
+                id=str(a.get("aweme_id")), title=a.get("desc") or a.get("item_title") or "(无标题)",
+                create_time=int(a.get("create_time") or 0), digg=st.get("digg_count", 0),
+                comments=st.get("comment_count", 0), url=f"https://www.douyin.com/video/{a.get('aweme_id')}",
+            ))
+        return works
+
+    async def _works_via_page(self) -> dict:
         page = await self.signer.new_page()
         try:
             async with page.expect_response(lambda r: "work_list" in r.url, timeout=30000) as resp_info:
@@ -165,15 +184,7 @@ class DouyinCreator(CreatorPlatform):
             raise RuntimeError(f"读取作品列表失败（页面可能改版）: {e}") from e
         finally:
             await page.close()
-        works = []
-        for a in (data.get("aweme_list") or [])[:limit]:
-            st = a.get("statistics") or {}
-            works.append(Work(
-                id=str(a.get("aweme_id")), title=a.get("desc") or a.get("item_title") or "(无标题)",
-                create_time=int(a.get("create_time") or 0), digg=st.get("digg_count", 0),
-                comments=st.get("comment_count", 0), url=f"https://www.douyin.com/video/{a.get('aweme_id')}",
-            ))
-        return works
+        return data
 
     async def resolve_work(self, ref: str) -> str | None:
         ref = ref.strip()
@@ -453,8 +464,51 @@ class DouyinCreator(CreatorPlatform):
         } catch (e) { return null; }
     }"""
 
+    async def _cookie_header(self) -> str:
+        """creator.douyin.com 的 cookie：浏览器在跑就取最新的（会滚动续期），否则用 cookie 文件。"""
+        s = self.plugin.browser_signer
+        if s and s.is_ready:
+            try:
+                if cs := await s.cookies_for(CREATOR):
+                    return cs
+            except Exception:
+                pass
+        from ..douyin_service import clean_cookie
+
+        return clean_cookie(self.plugin.effective_douyin_cookie)
+
+    async def _creator_http(self, reqs: list[tuple[str, str]]) -> list[dict] | None:
+        """纯 HTTP 读创作中心接口（这些读接口只认 cookie，不需要签名）。登录失效等异常返回 None 交给页面兜底。"""
+        cookie = await self._cookie_header()
+        if "sessionid" not in cookie:
+            return None
+        s = self.plugin.browser_signer
+        if s and s.risk_status:
+            raise RuntimeError(f"抖音风控冷却中：{s.risk_status}")
+        headers = {"User-Agent": DESKTOP_UA, "Cookie": cookie, "Referer": f"{CREATOR}/creator-micro/home",
+                   "Accept": "application/json, text/plain, */*"}
+        out = []
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
+                for i, (path, method) in enumerate(reqs):
+                    if i:
+                        await pause(0.2, 0.6)
+                    async with session.request(method, CREATOR + path, headers=headers, proxy=self.plugin.douyin_proxy or None,
+                                               **({"json": {}} if method == "POST" else {})) as resp:
+                        data = await resp.json(content_type=None)
+                    if not isinstance(data, dict) or data.get("status_code", data.get("code", 0)) not in (0, None):
+                        logger.info(f"[douyin] 创作中心接口 {path.split('?')[0]} 返回 {str(data)[:120]}，改用页面读取")
+                        return None
+                    out.append(data)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as e:
+            logger.info(f"[douyin] 创作中心 HTTP 读取失败，改用页面读取: {e}")
+            return None
+        return out
+
     async def _creator_reads(self, reqs: list[tuple[str, str]]) -> list[dict]:
-        """打开创作中心首页，依次读取若干接口（像人打开首页后看各个卡片）。"""
+        """读取若干创作中心接口：先纯 HTTP（约 1 秒），失败再打开创作中心首页在页面里读。"""
+        if (out := await self._creator_http(reqs)) is not None:
+            return out
         if not self.signer.is_logged_in:
             raise RuntimeError("抖音未登录，先 /dy_login 扫码")
         page = await self._creator_page(f"{CREATOR}/creator-micro/home")

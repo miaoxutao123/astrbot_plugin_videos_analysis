@@ -65,7 +65,10 @@ async def logged_in(plugin, platform: str) -> bool:
     if platform == "bilibili":
         return bool(((await plugin.accounts.bili_cookies_for(None)) or {}).get("SESSDATA"))
     s = plugin.browser_signer
-    return bool(s and s.is_ready and s.is_logged_in and not s.risk_status)
+    if s and s.is_ready:
+        return bool(s.is_logged_in and not s.risk_status)
+    # 浏览器没跑也能用 cookie 文件走 HTTP 读创作中心
+    return "sessionid" in (plugin.effective_douyin_cookie or "")
 
 
 def _account(plugin, platform: str) -> str:

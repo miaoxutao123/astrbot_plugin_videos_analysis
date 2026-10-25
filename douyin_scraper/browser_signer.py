@@ -310,6 +310,22 @@ def _xvfb_install_hint() -> str:
     )
 
 
+# 打开/关闭主页面的"空闲省电"样式；返回调用前是否已处于空闲
+_IDLE_JS = """(on) => {
+    const old = document.getElementById('va-idle');
+    if (on && !old) {
+        const s = document.createElement('style');
+        s.id = 'va-idle';
+        s.textContent = 'html{display:none!important} *{animation:none!important;transition:none!important}';
+        document.documentElement.appendChild(s);
+        document.querySelectorAll('video,audio').forEach(v => { try { v.pause(); v.muted = true; } catch (e) {} });
+    } else if (!on && old) {
+        old.remove();
+    }
+    return !!old;
+}"""
+
+
 class BrowserSigner:
     """
     抖音 API 浏览器签名引擎。
@@ -329,8 +345,10 @@ class BrowserSigner:
         headless: bool = False,
         user_data_dir: str | None = None,
         timezone: str = "Asia/Shanghai",
+        low_cpu: bool = True,
     ):
         self._headless = headless
+        self._low_cpu = low_cpu
         self._user_data_dir = user_data_dir or _USER_DATA_DIR
         self._timezone = timezone
         self._client_env: dict | None = None
@@ -515,6 +533,7 @@ class BrowserSigner:
 
             # 7. 检查登录状态
             self._logged_in = await self._check_logged_in()
+            await self._set_idle(True)
 
             if self._logged_in:
                 return self._make_status(True, "已登录, SDK 就绪", logged_in=True)
@@ -568,6 +587,7 @@ class BrowserSigner:
         if not self._page:
             return None
         try:
+            await self._set_idle(False)
             return await self._page.screenshot(type="png", full_page=False)
         except Exception as e:
             self._log(f"截图失败: {e}")
@@ -644,17 +664,20 @@ class BrowserSigner:
         轮询等待用户完成登录。
         返回 True=已登录, False=超时。
         """
-        for i in range(timeout_seconds):
-            await asyncio.sleep(1)
-            if await self._check_logged_in():
-                self._logged_in = True
-                cookies = await self._context.cookies()
-                await self._save_cookies(cookies)
-                self._log("登录成功!")
-                return True
-            if i % 15 == 0 and i > 0:
-                self._log(f"等待登录... ({i}s)")
-        return False
+        try:
+            for i in range(timeout_seconds):
+                await asyncio.sleep(1)
+                if await self._check_logged_in():
+                    self._logged_in = True
+                    cookies = await self._context.cookies()
+                    await self._save_cookies(cookies)
+                    self._log("登录成功!")
+                    return True
+                if i % 15 == 0 and i > 0:
+                    self._log(f"等待登录... ({i}s)")
+            return False
+        finally:
+            await self._set_idle(True)
 
     async def set_manual_cookies(self, cookie_string: str) -> bool:
         """
@@ -720,6 +743,7 @@ class BrowserSigner:
         page = page or self._page
         if not page:
             return False
+        idle = page is self._page and await self._set_idle(False)
         try:
             if "验证码" in (await page.title()):
                 return True
@@ -735,6 +759,9 @@ class BrowserSigner:
             }""")
         except Exception:
             return False
+        finally:
+            if idle:
+                await self._set_idle(True)
 
     async def _client_params(self) -> dict:
         """
@@ -875,6 +902,7 @@ class BrowserSigner:
         except Exception as e:
             self._log(f"刷新页面失败: {e}")
         self._sdk_ready = await self._wait_for_sdk(timeout=20)
+        await self._set_idle(True)
         return self._sdk_ready
 
     # ── 视频/图文解析 ────────────────────────────────────
@@ -965,6 +993,13 @@ class BrowserSigner:
         cookies = await self._context.cookies()
         return "; ".join(f"{c['name']}={c['value']}" for c in cookies)
 
+    async def cookies_for(self, url: str) -> str:
+        """只导出会发给 url 的 cookie（按域名过滤），用于纯 HTTP 请求。"""
+        if not self._context:
+            return ""
+        cookies = await self._context.cookies(url)
+        return "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+
     # ── 多账号 / 创作者操作支持 ─────────────────────────
 
     async def export_cookies(self) -> list[dict]:
@@ -1014,6 +1049,19 @@ class BrowserSigner:
             "need_qr_login": not self._logged_in and ok,
             **extra,
         }
+
+    async def _set_idle(self, on: bool) -> bool:
+        """
+        主页面空闲时停掉渲染：抖音首页的推荐视频、Lottie 动画会让渲染进程常驻 40%~100% CPU，
+        而签名只需要页面里的 SDK 脚本。隐藏整页 + 停动画后约 10%，签名与页面内 fetch 不受影响。
+        需要看页面（扫码截图、验证码检测）时先恢复显示。返回之前是否处于空闲状态。
+        """
+        if not self._low_cpu or not self._page:
+            return False
+        try:
+            return bool(await self._page.evaluate(_IDLE_JS, on))
+        except Exception:
+            return False
 
     async def _wait_for_sdk(self, timeout: int = 30) -> bool:
         if not self._page:

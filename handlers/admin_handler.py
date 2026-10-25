@@ -20,9 +20,20 @@ from ..douyin_login import (
 from ..utils.config_helper import send_file_if_needed
 from ..utils.paths import IMAGE_DIR
 
+# 登录二维码 / cookie 只在私聊里处理：群里任何人都能抢先扫码（机器人会登录到对方账号），
+# 粘贴的 cookie 等同于账号密码
+_PRIVATE_ONLY = "为了账号安全，{what}只能私聊机器人进行（群里其他人能看到{obj}）。请私聊我发送 /{cmd}"
+
+
+def _group_guard(event, what: str, obj: str, cmd: str) -> str:
+    return "" if event.is_private_chat() else _PRIVATE_ONLY.format(what=what, obj=obj, cmd=cmd)
+
 
 async def handle_bili_login(plugin, event):
     """管理员指令：B站扫码登录"""
+    if msg := _group_guard(event, "扫码登录", "并抢先扫描二维码", "bili_login"):
+        yield event.plain_result(msg)
+        return
     is_valid = await bili_check_cookie_valid()
     if is_valid:
         yield event.plain_result("B站cookie仍然有效，无需重新登录。如需切换账号，请先发送 /va_logout bilibili。")
@@ -54,6 +65,9 @@ async def handle_bili_login(plugin, event):
 
 async def handle_douyin_login(plugin, event):
     """管理员指令：抖音扫码登录 (使用浏览器签名引擎)"""
+    if msg := _group_guard(event, "扫码登录", "并抢先扫描二维码", "dy_login"):
+        yield event.plain_result(msg)
+        return
     signer = plugin.browser_signer
 
     if not signer or not signer.is_ready:
@@ -106,6 +120,14 @@ async def handle_douyin_login(plugin, event):
 
 async def handle_douyin_cookie(plugin, event):
     """管理员指令：手动粘贴抖音cookie"""
+    if not event.is_private_chat():
+        has_cookie = len(event.message_str.split(maxsplit=1)) > 1
+        yield event.plain_result(
+            "为了账号安全，抖音 cookie 只能私聊机器人设置，本次没有保存。"
+            + ("\n⚠️ 刚才的 cookie 已经发在群里，相当于公开了登录凭证：请在抖音 App「设置 → 账号与安全 → 登录设备管理」"
+               "里移除这台设备，或退出网页登录使其失效，然后私聊我重新设置。" if has_cookie else "")
+        )
+        return
     signer = plugin.browser_signer
 
     message_str = event.message_str.strip()

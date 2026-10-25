@@ -14,13 +14,14 @@ import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.core.message.message_event_result import MessageChain
 
+from ..douyin_scraper.douyin_parser import DOUYIN_LINK
 from ..utils.config_helper import DOWNLOAD_DIR_DY, cleanup_old_files, send_file_if_needed
 from . import bilibili_service
 from .douyin_service import download as douyin_download
 
 _last: dict[str, float] = {}
 COOLDOWN = 30
-DOUYIN_RE = re.compile(r"https?://(?:v\.douyin\.com/[\w\-]+/?|www\.douyin\.com/(?:video|note)/\d+)")
+DOUYIN_RE = DOUYIN_LINK
 
 
 async def _media(plugin, path: str, kind: str):

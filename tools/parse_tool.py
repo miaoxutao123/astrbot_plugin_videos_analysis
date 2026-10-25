@@ -7,6 +7,7 @@ import re
 
 from astrbot.api import logger
 
+from ..douyin_scraper.douyin_parser import DOUYIN_LINK
 from ..services.bilibili_service import process_bili_video
 
 
@@ -38,7 +39,7 @@ async def handle_parse_video_link(plugin, link: str) -> dict:
         link = url_match.group(0)
 
     # ==================== 抖音解析 ====================
-    if re.search(r"v\.douyin\.com", link):
+    if DOUYIN_LINK.search(link):
         try:
             result = await plugin.accounts.parse_douyin(link)
 

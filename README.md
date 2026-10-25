@@ -154,7 +154,9 @@
 - **Python 3.10+**
 - **FFmpeg**：用于音视频分离、关键帧提取
 - Python 依赖详见 [`requirements.txt`](requirements.txt)
-- **抖音解析必需**：Chromium + 显示环境（抖音已拦截纯 Python 签名与无头浏览器）
+- **抖音浏览器（可选）**：公开视频解析、创作中心数据、消息巡检都走 HTTP，不需要浏览器；
+  搜索、评论、发布、扫码登录需要 Chromium + 显示环境（抖音已拦截纯 Python 签名与无头浏览器）。
+  插件发现装了 playwright 但没下载 Chromium 时会**自动下载**；系统依赖和 Xvfb 需要自己装：
   ```bash
   playwright install --with-deps chromium
   # Linux 无桌面环境（含 Docker）还需要 Xvfb，插件会自动启动 :99
@@ -170,10 +172,11 @@
   装好后发送 `/dy_restart` 即可，无需重启 AstrBot。
 
 ### 快速开始
-1. 安装插件后重启 AstrBot
-2. 配置 Gemini API（插件配置优先；未填写时复用框架里的 Gemini Provider）
-3. 可选：开启 `auto_parse_enabled` 启用被动解析
-4. Agent 可直接调用 `parse_video_link` / `understand_video` 工具
+1. 安装插件（无需重启 AstrBot；浏览器在后台启动，插件加载约 1 秒）
+2. 私聊机器人发送 **`/va_setup`**（别名「插件体检」），按清单逐项处理：每项都写了下一步怎么做
+3. 常用设置直接说中文即可，例如“用硅基流动的免费语音转写，密钥是 sk-xxx”“打开自动解析链接”“看视频抽 6 帧”；
+   修改需要管理员确认，**密钥只能私聊设置**
+4. 要用账号功能：私聊发送 `/bili_login`、`/dy_login` 扫码；再私聊发送 `/va_notify` 接收审批和告警
 
 ## ⚙️ 配置选项
 
@@ -217,7 +220,8 @@
 | `douyin_video_comprehend` | 深度理解功能 | `false` |
 | `show_progress_messages` | 显示进度提示 | `true` |
 | `douyin_proxy` | 代理地址 | `""` |
-| `douyin_browser_signer` | 启用浏览器签名引擎（抖音解析必需） | `true` |
+| `douyin_browser_signer` | 启用抖音浏览器（搜索/评论/发布/扫码登录需要；解析公开视频不需要） | `true` |
+| `douyin_browser_low_cpu` | 浏览器空闲省电：空闲时隐藏页面、停动画，CPU 约 50% → 10% | `true` |
 
 ### 账号运维
 | 配置项 | 描述 | 默认值 |
@@ -266,9 +270,10 @@ Bot：这个视频展示了...（AI详细分析）
 ```
 /va_accounts [deep]  → 查看各平台账号与 AI 服务状态（别名 /账号状态；deep 实测连通性）
 /va_logout <平台>     → 注销 douyin / bilibili 登录态
-/bili_login          → B站扫码登录
-/dy_login            → 抖音扫码登录
-/dy_cookie xxx       → 手动设置抖音cookie（建议私聊发送）
+/va_setup            → 插件体检：环境、账号、模型、转写、告警会话逐项检查并给出下一步（别名「插件体检」「快速配置」）
+/bili_login          → B站扫码登录（仅私聊）
+/dy_login            → 抖音扫码登录（仅私聊）
+/dy_cookie xxx       → 手动设置抖音cookie（仅私聊）
 /dy_restart          → 重启抖音浏览器签名引擎
 
 # 账号运维
@@ -367,7 +372,16 @@ astrbot_plugin_videos_analysis/
 
 ## 🔄 更新日志
 
-### v0.10.0（当前版本）
+### v0.11.0（当前版本）
+- ⚡ 抖音解析改为纯 HTTP：先读公开分享页（约 0.5 秒，无水印 1080p），私密/受限作品再用浏览器签名；
+  支持 `douyin.com/video|note`、`modal_id` 等长链接
+- ⚡ 创作中心数据、消息、作品列表改为直接 HTTP 读取（10~20 秒 → 约 1 秒），接口异常时自动回退页面读取
+- ⚡ 浏览器空闲省电（CPU 约 50% → 10%）；浏览器后台启动，插件加载约 1 秒；缺 Chromium 时自动下载
+- 🧰 `/va_setup` 插件体检（也在 WebUI「数据」页）；对 AI 说“插件还缺什么”给出同样的清单
+- 🔒 安全加固：扫码登录、手动 cookie、密钥类设置只允许私聊；抖音登录 cookie 只发给抖音主站（不再发给 CDN 与跳转地址）；
+  发给聊天、模型、面板的报错统一脱敏；修改转写/Gemini 地址或抖音代理时审批消息提示“密钥/cookie 会发往新地址”
+
+### v0.10.0
 - 📊 运营数据看板：`/va_report`、`video_account report`、WebUI「数据」页；每日自动采样，按天数对比；抖音同类作者对比
 - 📬 消息巡检：抖音创作中心 + B站消息中心的新评论 / @ / 系统通知，定时只推送新增；`/va_inbox`、`video_account inbox`
 - 🛡️ B站删稿遇到短信验证码时自动改为仅自己可见（v0.9.2）；WebUI 内嵌调试管理面板（v0.9.1，默认关闭）

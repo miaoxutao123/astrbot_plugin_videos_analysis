@@ -5,7 +5,9 @@ AstrBot 视频解析与理解插件
      创作者操作（发布/删除/评论精选回复，二次确认）
 """
 
+import asyncio
 import json
+import sys
 
 from astrbot.api import logger
 from astrbot.api.event import filter
@@ -14,10 +16,11 @@ from astrbot.api.star import Context, Star, register
 
 from .douyin_login import load_douyin_cookies
 from .douyin_scraper.browser_signer import BrowserSigner
-from .douyin_scraper.douyin_parser import DouyinParser
+from .douyin_scraper.douyin_parser import DOUYIN_LINK, DouyinParser
 from .services.account_manager import AccountManager
 from .services.creator_ops import CreatorOps
 from .utils.paths import DOUYIN_BROWSER_PROFILE, migrate_legacy_data
+from .utils.redact import redact
 
 # 旧版 _conf_schema 的默认值是个不存在的地址，按未填写处理
 _BOGUS_GEMINI_BASE = "https://generative-api.google.com/v1alpha2"
@@ -27,7 +30,7 @@ _BOGUS_GEMINI_BASE = "https://generative-api.google.com/v1alpha2"
     "astrbot_plugin_videos_analysis",
     "视频解析与理解",
     "抖音/B站/MC百科视频自动解析与AI理解",
-    "0.10.0",
+    "0.11.0",
     "https://github.com/Zhalslar/astrbot_plugin_videos_analysis",
 )
 class hybird_videos_analysis(Star):
@@ -116,8 +119,11 @@ class hybird_videos_analysis(Star):
             self._douyin_cookie_from_file = cookie
             logger.info("已加载抖音cookie文件")
 
+        # 浏览器放到后台启动：解析公开视频、创作中心数据都走 HTTP，不必等 Chromium（冷启动 5~30 秒）
+        self._signer_task = None
         if self.douyin_browser_signer_enabled:
-            await self.start_browser_signer()
+            self.browser_signer_error = "正在后台启动，稍等十几秒"
+            self._signer_task = asyncio.create_task(self._start_signer_background())
         else:
             self.browser_signer_error = "已在配置中禁用"
 
@@ -128,13 +134,40 @@ class hybird_videos_analysis(Star):
         self.monitor = OpsMonitor(self)
         self.monitor.start()
 
+    async def _start_signer_background(self) -> None:
+        try:
+            status = await self.start_browser_signer()
+            reason = status.get("reason", "")
+            if not status.get("ok") and ("Executable doesn't exist" in reason or "playwright install" in reason):
+                # 首次部署常见：装了 playwright 包但没下载浏览器，自动下载一次（约 150MB）
+                self.browser_signer_error = "正在自动下载 Chromium（约 150MB，几分钟）"
+                logger.info("[setup] 未找到 Chromium，正在执行 playwright install chromium ...")
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable, "-m", "playwright", "install", "chromium",
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                )
+                out, _ = await asyncio.wait_for(proc.communicate(), timeout=900)
+                if proc.returncode == 0:
+                    logger.info("[setup] Chromium 下载完成，重新启动抖音浏览器")
+                    await self.start_browser_signer()
+                else:
+                    self.browser_signer_error = ("自动下载 Chromium 失败，请在 AstrBot 所在环境执行: "
+                                                 "python -m playwright install --with-deps chromium")
+                    logger.warning(f"[setup] playwright install 失败: {out.decode(errors='ignore')[-500:]}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.browser_signer_error = f"启动异常: {e}"
+            logger.warning(f"[setup] 后台启动抖音浏览器失败: {e}")
+
     async def start_browser_signer(self) -> dict:
         """启动（或重启）抖音浏览器签名引擎，返回状态字典。"""
         if self._browser_signer:
             await self._browser_signer.stop()
             self._browser_signer = None
         try:
-            signer = BrowserSigner(headless=False, user_data_dir=DOUYIN_BROWSER_PROFILE)
+            signer = BrowserSigner(headless=False, user_data_dir=DOUYIN_BROWSER_PROFILE,
+                                   low_cpu=bool(self.config.get("douyin_browser_low_cpu", True)))
             status = await signer.start()
         except Exception as e:
             status = {"ok": False, "reason": f"启动异常: {e}"}
@@ -149,7 +182,7 @@ class hybird_videos_analysis(Star):
         else:
             self.browser_signer_error = status.get("reason", "未知错误")
             logger.warning(f"抖音浏览器签名引擎不可用: {self.browser_signer_error}")
-            logger.warning("抖音解析将回退到纯 Python A-Bogus 签名（目前基本会被 403 拒绝）")
+            logger.warning("公开视频解析、创作中心数据不受影响；搜索、评论、发布、扫码登录暂不可用")
             if signer:
                 await signer.stop()
         return status
@@ -183,6 +216,9 @@ class hybird_videos_analysis(Star):
 
     async def terminate(self):
         """插件卸载/重载时关闭浏览器与 Xvfb，避免进程泄漏。"""
+        task = getattr(self, "_signer_task", None)
+        if task and not task.done():
+            task.cancel()
         await self.accounts.stop_scheduler()
         if getattr(self, "monitor", None):
             await self.monitor.stop()
@@ -193,7 +229,7 @@ class hybird_videos_analysis(Star):
     # ==================== 被动解析 ====================
 
     @filter.event_message_type(EventMessageType.ALL)
-    @filter.regex(r"(https?://v\.douyin\.com/[a-zA-Z0-9_\-]+(?:-[a-zA-Z0-9_\-]+)?)")
+    @filter.regex(DOUYIN_LINK.pattern)
     async def auto_parse_dy(self, event):
         """被动解析抖音链接（需开启 auto_parse_enabled）"""
         if not self.auto_parse_enabled:
@@ -295,6 +331,14 @@ class hybird_videos_analysis(Star):
         yield event.plain_result(("✅ " if status.get("ok") else "⚠️ ") + str(status.get("reason")))
 
     # ==================== 账号运维 ====================
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_setup", alias={"插件体检", "快速配置"})
+    async def setup_command(self, event):
+        """一键体检：环境、账号、模型、转写、告警会话，逐项给出下一步"""
+        from .services import settings_service as ss
+
+        yield event.plain_result(ss.render_checklist(await ss.checklist(self, event)))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("va_check")
@@ -528,7 +572,8 @@ class hybird_videos_analysis(Star):
         except Exception as e:
             logger.warning(f"[llm_tool] {fn.__name__} 失败: {e}")
             result = {"error": str(e)[:300]}
-        return json.dumps(result, ensure_ascii=False, default=str, separators=(",", ":"))
+        # 工具结果会进入对话历史并发给模型服务商，兜底脱敏
+        return redact(json.dumps(result, ensure_ascii=False, default=str, separators=(",", ":")))
 
     @filter.llm_tool(name="video_browse")
     async def llm_video_browse(self, event, action: str, query: str = "", question: str = "", platform: str = ""):

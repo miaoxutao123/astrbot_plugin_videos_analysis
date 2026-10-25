@@ -9,6 +9,7 @@ import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.message_components import Image, Nodes, Plain
 
+from ..douyin_scraper.douyin_parser import DOUYIN_LINK
 from ..services.bilibili_service import process_bili_video
 from ..services.gemini_service import (
     GeminiConfig,
@@ -188,7 +189,7 @@ async def handle_comprehend_video_command(plugin, event):
 
     gcfg = resolve_gemini_config(plugin)
 
-    if re.search(r"v\.douyin\.com", url):
+    if DOUYIN_LINK.search(url):
         if plugin.show_progress_messages:
             yield event.plain_result("正在解析抖音链接并分析视频内容...")
         result = await plugin.accounts.parse_douyin(url)

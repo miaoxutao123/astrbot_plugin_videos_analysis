@@ -15,6 +15,7 @@ import httpx
 
 from astrbot.api import logger
 
+from ..douyin_scraper.douyin_parser import DOUYIN_LINK
 from ..services.gemini_service import process_video_with_gemini
 from ..services.mimo_service import analyze_video_with_mimo
 from ..services.video_analysis import (
@@ -205,7 +206,7 @@ async def handle_understand_video(plugin, video_source: str, prompt: str = None,
             video_path = video_source
             logger.info(f"使用本地文件: {video_path}")
 
-        elif re.search(r"v\.douyin\.com", video_source):
+        elif DOUYIN_LINK.search(video_source):
             # 抖音链接
             platform = "抖音"
             cookie = plugin.effective_douyin_cookie

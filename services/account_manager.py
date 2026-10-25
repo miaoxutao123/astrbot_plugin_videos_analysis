@@ -141,9 +141,11 @@ class AccountManager:
             else f"未就绪 ({p.browser_signer_error or '未知原因'})"
         )
         logged_in = bool(signer and signer.is_logged_in) or has_login_fields
-        ok = bool(signer and signer.is_ready)
+        # 公开视频走分享页、创作中心数据走 HTTP，浏览器只影响搜索/评论/发布/扫码登录
+        browser_ok = bool(signer and signer.is_ready)
+        ok = True
         details = {"签名引擎": signer_state, "cookie 来源": source}
-        warn = False
+        warn = p.douyin_browser_signer_enabled and not browser_ok and "后台启动" not in (p.browser_signer_error or "")
         if signer and signer.is_ready:
             sess = next((c for c in await signer.export_cookies() if c["name"] == "sessionid"), None)
             if sess:
@@ -153,7 +155,7 @@ class AccountManager:
         from .creator.human import GUARD, OP_LABEL
 
         details["今日写操作"] = " · ".join(f"{OP_LABEL.get(op, op)} {n}" for op, n in GUARD.usage("douyin").items())
-        if deep and ok and logged_in:
+        if deep and logged_in:
             from .creator import get_creator
 
             try:
@@ -163,7 +165,7 @@ class AccountManager:
             details["创作者中心"] = msg
             if not creator_ok:
                 logged_in, warn = False, True
-        summary = ("可解析" if ok else "无法解析（纯 Python 签名已失效，需要浏览器签名引擎）") + ("，已登录" if logged_in else "，未登录")
+        summary = ("可解析" if browser_ok else "可解析公开视频（浏览器未就绪：搜索/评论/发布暂不可用）") + ("，已登录" if logged_in else "，未登录")
         return AccountStatus("douyin", ok, summary, details, warn=warn)
 
     async def _bilibili(self, deep: bool) -> AccountStatus:

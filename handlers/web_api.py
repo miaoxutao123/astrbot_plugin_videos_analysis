@@ -21,14 +21,15 @@ from astrbot.api.web import request
 
 from ..services.account_manager import PLATFORMS
 from ..utils.paths import CREATOR_DIR, DOWNLOAD_DIR, IMAGE_DIR, PLUGIN_NAME
+from ..utils.redact import redact
 
 
 def _ok(data: dict) -> dict:
     return {"status": "ok", "message": None, "data": data}
 
 
-def _err(msg: str) -> dict:
-    return {"status": "error", "message": msg, "data": {}}
+def _err(msg) -> dict:
+    return {"status": "error", "message": redact(msg), "data": {}}
 
 
 class PanelEvent:
@@ -102,7 +103,7 @@ def register_web_apis(plugin) -> None:
                 jobs[jid]["state"] = "done"
             except Exception as e:
                 logger.warning(f"[panel] 任务 {kind} 失败: {e}")
-                jobs[jid].update(state="failed", error=str(e)[:300])
+                jobs[jid].update(state="failed", error=redact(e)[:300])
 
         asyncio.create_task(run())
         for old in [k for k, v in jobs.items() if time.time() - v["started"] > 3600]:
@@ -256,7 +257,10 @@ def register_web_apis(plugin) -> None:
         if action == "watch":
             return _ok({"job": new_job("watch", _debug_watch(plugin, ev, query))})
         if action in ("info", "search", "recommend", "hot"):
-            return _ok({"result": await ops_tools.video_browse(plugin, ev, action, query, "", plat)})
+            try:
+                return _ok({"result": await ops_tools.video_browse(plugin, ev, action, query, "", plat)})
+            except Exception as e:
+                return _err(e)
         return _err("action 只能是 info / search / recommend / hot / watch")
 
     # ── 数据 / 消息 ──────────────────────────────────────
@@ -267,6 +271,11 @@ def register_web_apis(plugin) -> None:
         days = request.query.get("days", "7")
         rep = await ops_monitor.report(plugin, request.query.get("platform", ""), int(days) if days.isdigit() else 7)
         return _ok({"report": rep, "text": ops_monitor.render_report(rep)})
+
+    async def setup_get(**kwargs):
+        from ..services import settings_service as ss
+
+        return _ok({"text": ss.render_checklist(await ss.checklist(plugin, PanelEvent(plugin, "")))})
 
     async def inbox_get(**kwargs):
         from ..services import ops_monitor
@@ -334,6 +343,7 @@ def register_web_apis(plugin) -> None:
         ("debug/run", debug_run, "POST", "调试：解析/搜索/看视频"),
         ("report", report_get, "GET", "运营数据报表"),
         ("inbox", inbox_get, "GET", "消息概况"),
+        ("setup", setup_get, "GET", "插件体检"),
         ("inbox/patrol", inbox_patrol, "POST", "立即巡检消息"),
         ("job", job, "GET", "后台任务状态"),
         ("cache", cache_get, "GET", "缓存占用"),
