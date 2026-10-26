@@ -139,7 +139,7 @@ async def checklist(plugin, event) -> list[tuple[bool, str, str]]:
         add(True, "抖音浏览器", "已关闭：公开视频解析、创作中心数据照常；搜索/评论/发布/扫码登录不可用")
     elif signer and signer.is_ready:
         name = getattr(plugin.browser_signer, "browser_name", "") or "运行中"
-        tip = "（Chromium 和普通用户的 Chrome 有差异，建议 python -m playwright install chrome 后 /dy_restart）" if name == "Chromium" else ""
+        tip = "（Chromium 和普通用户的 Chrome 有差异；插件会在后台自动安装正式版 Chrome，装好后 /dy_restart 切换）" if name == "Chromium" else ""
         add(True, "抖音浏览器", name + ("，空闲省电已开" if cfg.get("douyin_browser_low_cpu", True) else "") + tip)
     else:
         starting = "后台启动" in err or "自动下载" in err

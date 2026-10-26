@@ -475,7 +475,7 @@ class BrowserSigner:
                 if "Executable doesn't exist" in msg:
                     return self._make_status(
                         False,
-                        "Chromium 浏览器未安装。请运行: playwright install --with-deps chromium",
+                        "Chromium 浏览器未安装。请运行（国内镜像）: PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright python -m playwright install --with-deps --no-shell chromium",
                     )
                 if "Missing X server" in msg or "cannot open display" in msg.lower():
                     return self._make_status(

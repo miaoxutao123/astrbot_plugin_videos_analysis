@@ -171,17 +171,22 @@
 - Python 依赖详见 [`requirements.txt`](requirements.txt)
 - **抖音浏览器（可选）**：公开视频解析、创作中心数据、消息巡检都走 HTTP，不需要浏览器；
   搜索、评论、发布、扫码登录需要 Chromium + 显示环境（抖音已拦截纯 Python 签名与无头浏览器）。
-  插件发现装了 playwright 但没下载 Chromium 时会**自动下载**；系统依赖和 Xvfb 需要自己装：
+  插件发现装了 playwright 但没下载 Chromium 时会**自动下载**：先测速，国内一般选 npmmirror 镜像（约 10MB/s，
+  官方 CDN 国内约 0.1MB/s），不下载用不到的 headless shell。Linux 容器里（root + apt）还会在后台装**正式版 Google Chrome**
+  （Chromium 的浏览器品牌和普通用户不同，容易被识别），安装包缓存在 `data/plugin_data/…/browser_cache/`，
+  容器重建后不用再下（dl.google.com 国内没有镜像，首次约 10 分钟）。Python 依赖由 AstrBot 安装，默认走阿里云 PyPI 镜像。
+  手动安装（系统依赖和 Xvfb 需要自己装）：
   ```bash
-  playwright install --with-deps chromium
+  PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright python -m playwright install --with-deps --no-shell chromium
   # Linux 无桌面环境（含 Docker）还需要 Xvfb，插件会自动启动 :99
   apt install -y xvfb
   ```
   官方 Docker 镜像（`soulter/astrbot`）默认不含以上组件，需在容器内安装，或基于官方镜像构建：
   ```dockerfile
   FROM soulter/astrbot:latest
+  ENV PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright
   RUN apt-get update && apt-get install -y --no-install-recommends xvfb \
-      && pip install playwright && playwright install --with-deps chromium \
+      && pip install playwright && playwright install --with-deps --no-shell chromium \
       && rm -rf /var/lib/apt/lists/*
   ```
   装好后发送 `/dy_restart` 即可，无需重启 AstrBot。
@@ -402,6 +407,7 @@ astrbot_plugin_videos_analysis/
   - 用 Chromium 时后台安装正式版 Google Chrome（`douyin_browser_install_chrome`，默认开），下次重载切换，登录态保留
   - B站补齐网页端本来就有的 `_uuid`、`b_nut` 设备 cookie
 - 体检里显示抖音浏览器是 Google Chrome 还是 Chromium
+- ⚡ 浏览器自动安装走测速后最快的源（国内 npmmirror 约 10MB/s，官方约 0.1MB/s），不装 headless shell；Chrome 安装包缓存到数据目录，容器重建后秒装
 
 ### v0.14.0
 - 🖼️ 图文发布：B站图文动态（HTTP，含预检）、抖音创作中心“发布图文”；`/va_post`、`video_action post`、对外 `post_request`

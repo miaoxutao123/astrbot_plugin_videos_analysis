@@ -87,6 +87,17 @@ v0.11 在空闲时隐藏整页、停动画（`douyin_browser_low_cpu`），实�
 - B站请求仍是 aiohttp 的 TLS 指纹；若出现 -352 增多，可考虑 curl_cffi（impersonate=chrome）或改走浏览器
 - IP 信誉：家庭宽带出口、与登录地一致最重要，机房代理是最大的风险源
 
+### 自动化驱动选型（实测 2026-10-26，Google Chrome 156 + Xvfb）
+
+| 驱动 | BrowserScan bot 检测 | CDP Runtime.enable 泄露 | webdriver | 对本插件的代价 |
+|---|---|---|---|---|
+| Playwright 1.64（当前，去掉自动化参数） | Normal | 未触发 | false | — |
+| Patchright 1.64.3（阿里云 PyPI 可装） | Normal | 未触发 | false | `evaluate` 默认跑在隔离世界，看不到抖音 SDK 改过的 `fetch`，签名请求要逐处改成主世界；关掉了 Console API |
+| Camoufox（Firefox 内核） | 未测 | 不适用（Juggler 协议） | — | 换内核等于换设备：现有 Chrome 配置目录、bd-ticket-guard 设备证书和登录态全部作废，要重新扫码并过新设备验证；国内 Firefox + Linux 用户极少，反而更显眼；指纹随机化是给"多身份爬虫"设计的，单账号长期运营需要的是同一台设备不变；原作者已交接给 Clover Labs，2026 版本仍标注为实验性 |
+
+结论：当前配置在公开检测里已经和真人 Chrome 一致，暂不换驱动。Patchright 作为备选：
+若以后出现"打开页面就弹验证码"且排除了 IP/频率原因，再改成 Patchright（API 相同，需要给 SDK 相关的 evaluate 指定主世界）。
+
 ---
 
 ## 2. 下一步规划（按优先级）

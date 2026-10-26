@@ -16,6 +16,7 @@ from astrbot.api.event.filter import EventMessageType
 from astrbot.api.star import Context, Star, register
 
 from .douyin_login import load_douyin_cookies
+from .utils import browser_install
 from .douyin_scraper.browser_signer import BrowserSigner
 from .douyin_scraper.douyin_parser import DOUYIN_LINK, DouyinParser
 from .services.account_manager import AccountManager
@@ -145,21 +146,19 @@ class hybird_videos_analysis(Star):
             if status.get("ok"):
                 await self._maybe_install_chrome()
             if not status.get("ok") and ("Executable doesn't exist" in reason or "playwright install" in reason):
-                # 首次部署常见：装了 playwright 包但没下载浏览器，自动下载一次（约 150MB）
-                self.browser_signer_error = "正在自动下载 Chromium（约 150MB，几分钟）"
-                logger.info("[setup] 未找到 Chromium，正在执行 playwright install chromium ...")
-                proc = await asyncio.create_subprocess_exec(
-                    sys.executable, "-m", "playwright", "install", "chromium",
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-                )
-                out, _ = await asyncio.wait_for(proc.communicate(), timeout=900)
-                if proc.returncode == 0:
+                # 首次部署常见：装了 playwright 包但没下载浏览器，自动下载一次（约 170MB，测速选镜像）
+                self.browser_signer_error = "正在自动下载 Chromium（约 170MB，自动选最快的下载源）"
+                logger.info("[setup] 未找到 Chromium，正在自动安装 ...")
+                ok, out = await browser_install.install_chromium()
+                if ok:
                     logger.info("[setup] Chromium 下载完成，重新启动抖音浏览器")
                     await self.start_browser_signer()
+                    await self._maybe_install_chrome()
                 else:
                     self.browser_signer_error = ("自动下载 Chromium 失败，请在 AstrBot 所在环境执行: "
+                                                 "PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright "
                                                  "python -m playwright install --with-deps chromium")
-                    logger.warning(f"[setup] playwright install 失败: {out.decode(errors='ignore')[-500:]}")
+                    logger.warning(f"[setup] playwright install 失败: {out}")
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -178,20 +177,20 @@ class hybird_videos_analysis(Star):
         if (not s or s.browser_name != "Chromium" or not self.config.get("douyin_browser_install_chrome", True)
                 or not sys.platform.startswith("linux") or getattr(os, "geteuid", lambda: 1)() != 0):
             return
-        logger.info("[setup] 抖音浏览器是 Chromium，后台安装正式版 Google Chrome（约 120MB）...")
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable, "-m", "playwright", "install", "chrome",
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-            )
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout=900)
-        except (OSError, asyncio.TimeoutError) as e:
-            logger.warning(f"[setup] 安装 Google Chrome 失败: {e}")
+        if os.path.exists("/opt/google/chrome/chrome"):
+            return  # 已装但比配置目录的版本旧，等 Chrome 正式版追上后自动切换
+        if not os.path.exists("/usr/bin/apt-get"):
+            logger.info("[setup] 非 Debian/Ubuntu 系统，跳过自动安装 Google Chrome")
             return
-        if proc.returncode == 0:
+        logger.info("[setup] 抖音浏览器是 Chromium，后台安装正式版 Google Chrome ...")
+        try:
+            ok, out = await browser_install.install_chrome()
+        except Exception as e:
+            ok, out = False, str(e)
+        if ok:
             logger.info("[setup] Google Chrome 安装完成，下次重载插件或 /dy_restart 时切换（登录态保留）")
         else:
-            logger.warning(f"[setup] 安装 Google Chrome 失败: {out.decode(errors='ignore')[-300:]}")
+            logger.warning(f"[setup] 安装 Google Chrome 失败: {out[-300:]}")
 
     async def start_browser_signer(self) -> dict:
         """启动（或重启）抖音浏览器签名引擎，返回状态字典。"""
