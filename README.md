@@ -1,4 +1,4 @@
-# AstrBot 视频解析与 AI 理解插件
+# 短视频运营助手（astrbot_plugin_videos_analysis）
 
 <div align="center">
 
@@ -6,7 +6,7 @@
 
 </div>
 
-一个功能强大的 AstrBot 插件，支持多平台视频内容解析、下载和 AI 智能分析。Agent 可主动调用视频解析与理解工具。
+AstrBot 插件：抖音/B站链接解析、下载与 AI 看视频，以及两个平台的账号运营——数据看板、消息巡检、评论回复、视频/图文发布。发布、删除、改资料等操作都要管理员审批；插件 ID 保持 `astrbot_plugin_videos_analysis` 不变，老用户直接更新即可。
 
 ## ✨ 主要功能
 
@@ -397,7 +397,15 @@ astrbot_plugin_videos_analysis/
 
 ## 🔄 更新日志
 
-### v0.14.1（当前版本）
+### v1.0.0-rc.1（当前版本）
+- 🏷️ 显示名改为「短视频运营助手」，插件 ID 不变（老用户直接更新，配置和登录态都保留）；更正作者与仓库信息
+  （v0.3.0 的重构提交误把作者和仓库写成了别人的）
+- 📱 抖音新设备验证引导：写操作遇到"短信验证码 / 原设备扫码"时，自动切到原设备扫码，把二维码发给执行确认的管理员；
+  扫码后自动解除写操作暂停并通知（不会点"获取验证码"，不给账号绑定手机发短信）
+- 🧪 新增自动化测试（`pytest`，35 项）：脱敏、抖音链接识别、设置解析、发布选项、插件管理员、审批持久化/过期/拒绝/推送、客户端身份；
+  没装 AstrBot 也能跑
+
+### v0.14.1
 - 🛡️ 环境一致性（不靠降频降低风控）：
   - 所有带登录态的 HTTP 请求统一使用抖音浏览器的真实 UA 与 Client Hints（记录在 `accounts/identity.json`），
     不再混用 Windows Chrome 90~131、Firefox、iPhone 等七八套写死的 UA
@@ -502,6 +510,11 @@ astrbot_plugin_videos_analysis/
 
 - Bug 报告：[提交 Issue](https://github.com/miaoxutao123/astrbot_plugin_videos_analysis/issues)
 - 代码贡献：Fork 项目并提交 PR
+- 运行测试（不需要安装 AstrBot）：
+  ```bash
+  pip install pytest pytest-asyncio -r requirements.txt
+  python -m pytest
+  ```
 
 ## 📄 许可证
 

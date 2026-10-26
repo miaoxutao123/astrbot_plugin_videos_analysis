@@ -41,6 +41,9 @@ WEB_PARAMS = {
 
 # 写接口返回这些码说明账号被风控/要求验证，熔断该账号的写操作
 WRITE_RISK_CODES = {-1, 8, 2154, 2155, 3057, 2496}
+# 新设备验证弹窗的文字特征，和"使用原设备扫码"后等待扫码的最长时间
+_VERIFY_MARKS = ("短信验证码", "原设备扫码", "验证身份", "身份验证")
+VERIFY_WAIT = 180
 
 
 class CaptchaError(RuntimeError):
@@ -113,8 +116,73 @@ class DouyinCreator(CreatorPlatform):
             return f"已拦截：{refused}（防风控频率限制）"
         return ""
 
+    async def _verify_dialog(self, page) -> bool:
+        for mark in _VERIFY_MARKS:
+            try:
+                if await page.get_by_text(mark).count():
+                    return True
+            except Exception:
+                pass
+        return False
+
+    async def _start_device_verify(self, what: str) -> OpResult | None:
+        """
+        新设备上第一次写操作时，抖音会弹"短信验证码 / 使用原设备扫码"验证本人，接口返回空。
+
+        没有弹窗返回 None。有弹窗时切到"使用原设备扫码"，把二维码截图返回给执行确认的管理员，
+        后台等扫码完成（最多 VERIFY_WAIT 秒）：完成后解除写操作暂停并通知管理员。
+        不点"获取验证码"——那会给账号绑定的手机发短信，机器人也不该代收验证码。
+        """
+        s = self.signer
+        page = s._page
+        if not page:
+            return None
+        was_idle = await s._set_idle(False)
+        found = False
+        for _ in range(12):  # 弹窗在接口返回后才渲染
+            if found := await self._verify_dialog(page):
+                break
+            await asyncio.sleep(0.5)
+        if not found:
+            if was_idle:
+                await s._set_idle(True)
+            return None
+        try:
+            await page.get_by_text("使用原设备扫码").first.click(timeout=5000)
+            await asyncio.sleep(3)  # 等二维码加载
+        except Exception:
+            pass
+        shot = await self._screenshot(page, "device_verify")
+        asyncio.get_running_loop().create_task(self._await_device_verify(page, was_idle))
+        return OpResult(False, (
+            f"{what}需要先验证本人：抖音把机器人的浏览器当成了新设备。\n"
+            f"请用登录这个抖音号的手机打开抖音 App，点首页左上角或「我」→右上角 ≡ →「扫一扫」，扫描下面的二维码"
+            f"（{VERIFY_WAIT // 60} 分钟内有效）。验证一次后这台设备就被信任，之后不用再扫。\n"
+            f"扫码完成后插件会通知你，再重新提交刚才的操作即可。"), screenshot=shot)
+
+    async def _await_device_verify(self, page, was_idle: bool) -> None:
+        notify = self.plugin.accounts.notify
+        try:
+            for _ in range(VERIFY_WAIT // 2):
+                await asyncio.sleep(2)
+                if not await self._verify_dialog(page):
+                    self.plugin.accounts.clear_risk(self.name)
+                    logger.info("[creator] 抖音设备验证已完成")
+                    await notify("✅ 抖音设备验证已完成，写操作已恢复，可以重新提交刚才的操作。")
+                    return
+            await notify("⌛ 抖音设备验证二维码已过期（没有扫码）。重新提交操作会再次生成二维码。")
+        except Exception as e:
+            logger.warning(f"[creator] 等待抖音设备验证失败: {e}")
+        finally:
+            if was_idle:
+                await self.signer._set_idle(True)
+
     async def _write_failed(self, data: dict | None, what: str) -> OpResult:
-        """统一处理写接口失败：风控类错误熔断该账号的写操作。"""
+        """统一处理写接口失败：风控类错误熔断该账号的写操作；新设备验证则引导原设备扫码。"""
+        if data and data.get("status_code") == -1 and "空响应" in str(data.get("status_msg")):
+            if verify := await self._start_device_verify(what):
+                await self.plugin.accounts.trip_risk(self.name, None, f"{what}需要设备验证（扫码后自动解除）")
+                return verify
         if not data:
             msg = "接口无响应（可能触发风控）"
         elif data.get("status_code") == -1 and "空响应" in str(data.get("status_msg")):

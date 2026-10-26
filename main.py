@@ -31,10 +31,10 @@ _BOGUS_GEMINI_BASE = "https://generative-api.google.com/v1alpha2"
 
 @register(
     "astrbot_plugin_videos_analysis",
-    "视频解析与理解",
-    "抖音/B站/MC百科视频自动解析与AI理解",
-    "0.14.1",
-    "https://github.com/Zhalslar/astrbot_plugin_videos_analysis",
+    "喵喵",
+    "短视频运营助手：抖音/B站链接解析与 AI 看视频、账号运营（发布与删除需审批）",
+    "1.0.0-rc.1",
+    "https://github.com/miaoxutao123/astrbot_plugin_videos_analysis",
 )
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
