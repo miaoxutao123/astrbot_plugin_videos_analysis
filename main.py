@@ -7,6 +7,7 @@ AstrBot 视频解析与理解插件
 
 import asyncio
 import json
+import os
 import sys
 
 from astrbot.api import logger
@@ -31,7 +32,7 @@ _BOGUS_GEMINI_BASE = "https://generative-api.google.com/v1alpha2"
     "astrbot_plugin_videos_analysis",
     "视频解析与理解",
     "抖音/B站/MC百科视频自动解析与AI理解",
-    "0.14.0",
+    "0.14.1",
     "https://github.com/Zhalslar/astrbot_plugin_videos_analysis",
 )
 class hybird_videos_analysis(Star):
@@ -141,6 +142,8 @@ class hybird_videos_analysis(Star):
         try:
             status = await self.start_browser_signer()
             reason = status.get("reason", "")
+            if status.get("ok"):
+                await self._maybe_install_chrome()
             if not status.get("ok") and ("Executable doesn't exist" in reason or "playwright install" in reason):
                 # 首次部署常见：装了 playwright 包但没下载浏览器，自动下载一次（约 150MB）
                 self.browser_signer_error = "正在自动下载 Chromium（约 150MB，几分钟）"
@@ -162,6 +165,33 @@ class hybird_videos_analysis(Star):
         except Exception as e:
             self.browser_signer_error = f"启动异常: {e}"
             logger.warning(f"[setup] 后台启动抖音浏览器失败: {e}")
+
+    async def _maybe_install_chrome(self) -> None:
+        """
+        用的是 Playwright 自带的 Chromium 时，后台装一份正式版 Google Chrome，下次启动浏览器时自动换过去。
+
+        Chromium 的 Client Hints 品牌里没有 "Google Chrome"，而普通用户几乎都用正式版，
+        这是网页端最容易被识别的环境差异之一。只在 Linux 且以 root 运行（容器里，能用 apt 装依赖）时自动装；
+        正式版比配置目录的版本旧时 BrowserSigner 不会切换，避免损坏登录态。
+        """
+        s = self._browser_signer
+        if (not s or s.browser_name != "Chromium" or not self.config.get("douyin_browser_install_chrome", True)
+                or not sys.platform.startswith("linux") or getattr(os, "geteuid", lambda: 1)() != 0):
+            return
+        logger.info("[setup] 抖音浏览器是 Chromium，后台安装正式版 Google Chrome（约 120MB）...")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, "-m", "playwright", "install", "chrome",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+            )
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=900)
+        except (OSError, asyncio.TimeoutError) as e:
+            logger.warning(f"[setup] 安装 Google Chrome 失败: {e}")
+            return
+        if proc.returncode == 0:
+            logger.info("[setup] Google Chrome 安装完成，下次重载插件或 /dy_restart 时切换（登录态保留）")
+        else:
+            logger.warning(f"[setup] 安装 Google Chrome 失败: {out.decode(errors='ignore')[-300:]}")
 
     async def start_browser_signer(self) -> dict:
         """启动（或重启）抖音浏览器签名引擎，返回状态字典。"""

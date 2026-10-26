@@ -68,7 +68,7 @@
 - **资料**：`/bili_profile` 查看头像/签名/等级/粉丝，`/bili_sign <新签名>`、`/bili_avatar`（附带或引用图片，自动裁成方形）均需确认
 - **多账号**：`/va_pool save bilibili <名称>` 存多个号；命令加 `-a <名称>`、LLM 工具传 `account` 即可指定账号，
   待确认操作会记住发起时的账号，确认时仍用那个号执行；定时巡检对池里每个号分别续期
-- **抗风控**：所有请求串行并随机间隔；自动补 buvid3/4 与 bili_ticket；写操作前随机停顿；按账号计的频率闸门
+- **抗风控**：所有请求串行并随机间隔；自动补 buvid3/4、_uuid、b_nut 与 bili_ticket；带登录态的请求统一使用抖音浏览器的真实 UA / Client Hints；写操作前随机停顿；按账号计的频率闸门
   （回复 30 次/天、发评论 10 次/天、改资料 5 次/天）；同一账号 24 小时内不发重复内容；内容带链接直接拦截；
   写操作遇到 -352/-412/验证码/重复评论等风控码时，该账号写操作熔断 `risk_cooldown_minutes`（默认 60 分钟）并推送告警
 
@@ -392,7 +392,18 @@ astrbot_plugin_videos_analysis/
 
 ## 🔄 更新日志
 
-### v0.14.0（当前版本）
+### v0.14.1（当前版本）
+- 🛡️ 环境一致性（不靠降频降低风控）：
+  - 所有带登录态的 HTTP 请求统一使用抖音浏览器的真实 UA 与 Client Hints（记录在 `accounts/identity.json`），
+    不再混用 Windows Chrome 90~131、Firefox、iPhone 等七八套写死的 UA
+  - 抖音创作中心读接口在浏览器里同源请求（真实 Chrome 的 TLS 指纹与 cookie），浏览器未就绪才退回 aiohttp
+  - 去掉伪装成百度爬虫、旧版抖音 App 的下载重试；手机端兜底请求不再带 cookie
+  - 去掉 Playwright 默认的 `--disable-popup-blocking`、`--disable-extensions` 等启动参数
+  - 用 Chromium 时后台安装正式版 Google Chrome（`douyin_browser_install_chrome`，默认开），下次重载切换，登录态保留
+  - B站补齐网页端本来就有的 `_uuid`、`b_nut` 设备 cookie
+- 体检里显示抖音浏览器是 Google Chrome 还是 Chromium
+
+### v0.14.0
 - 🖼️ 图文发布：B站图文动态（HTTP，含预检）、抖音创作中心“发布图文”；`/va_post`、`video_action post`、对外 `post_request`
 - 🏷️ 发布选项：仅自己可见 / 好友可见、声明“内容由 AI 生成”（抖音视频与图文、B站图文），审批预览里会写明
 - 🗑️ B站 `/va_delete` 支持删除图文/动态；两个平台的图文都可 `dry_run` 预检（填好表单、传完图片但不发布）

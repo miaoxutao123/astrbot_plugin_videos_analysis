@@ -40,6 +40,7 @@ CATALOG: dict[str, tuple[str, str, str, bool]] = {
     # 抖音
     "douyin_browser_signer": ("抖音签名浏览器", "bool", "抖音搜索/评论/发布/扫码登录需要；只解析公开视频可关闭省内存", False),
     "douyin_browser_low_cpu": ("抖音浏览器空闲省电", "bool", "空闲时隐藏页面停动画，CPU 约 50%→10%", False),
+    "douyin_browser_install_chrome": ("自动安装正式版 Chrome", "bool", "用 Chromium 时后台装 Google Chrome，浏览器身份和普通用户一致", False),
     "douyin_proxy": ("抖音代理", "str", "如 http://127.0.0.1:7890，留空直连", False),
     # 可选的第三方模型（默认关闭）
     "video_understand_method": ("视频理解方式", "str", "llm=抽帧+转写交给当前对话模型（默认）；gemini/mimo 需先开启", False),
@@ -137,7 +138,9 @@ async def checklist(plugin, event) -> list[tuple[bool, str, str]]:
     if not plugin.douyin_browser_signer_enabled:
         add(True, "抖音浏览器", "已关闭：公开视频解析、创作中心数据照常；搜索/评论/发布/扫码登录不可用")
     elif signer and signer.is_ready:
-        add(True, "抖音浏览器", "运行中" + ("（空闲省电已开）" if cfg.get("douyin_browser_low_cpu", True) else ""))
+        name = getattr(plugin.browser_signer, "browser_name", "") or "运行中"
+        tip = "（Chromium 和普通用户的 Chrome 有差异，建议 python -m playwright install chrome 后 /dy_restart）" if name == "Chromium" else ""
+        add(True, "抖音浏览器", name + ("，空闲省电已开" if cfg.get("douyin_browser_low_cpu", True) else "") + tip)
     else:
         starting = "后台启动" in err or "自动下载" in err
         add(starting, "抖音浏览器", f"{err}（公开视频解析不受影响）" if starting

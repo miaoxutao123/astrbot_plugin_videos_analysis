@@ -25,6 +25,7 @@ from astrbot.api import logger
 from .douyin_scraper.cookie_extractor import extract_and_format_cookies, extract_douyin_cookies
 
 # 路径常量
+from .utils import client_identity
 from .utils.paths import DOUYIN_COOKIE_FILE
 from .utils.paths import IMAGE_DIR as DOUYIN_QR_IMAGE_DIR
 
@@ -41,11 +42,6 @@ _BLOCK_DOMAINS = (
     "analytics.tiktok.com",
 )
 
-# httpx 公共 User-Agent
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) "
-    "Gecko/20100101 Firefox/131.0"
-)
 
 # SSO 页面 URL
 _SSO_URL = (
@@ -74,7 +70,7 @@ async def _httpx_get(
     max_retries: int = 3,
 ) -> httpx.Response | None:
     """带重试的 httpx GET 请求"""
-    _headers = {"User-Agent": _UA}
+    _headers = client_identity.headers()
     if headers:
         _headers.update(headers)
 
@@ -105,7 +101,7 @@ async def _httpx_request_like_browser(
     body: bytes | None = None,
 ) -> tuple[int, dict, bytes] | None:
     """模拟浏览器请求，返回 (status, headers_dict, body)"""
-    _headers = {"User-Agent": _UA}
+    _headers = client_identity.headers()
     if headers:
         _headers.update(headers)
 
@@ -385,7 +381,7 @@ async def _generate_qrcode_inner(timeout_seconds: int = 180) -> dict | None:
 
     try:
         context = await browser.new_context(
-            user_agent=_UA,
+            user_agent=client_identity.ua(),
             viewport={"width": 1280, "height": 720},
             locale="zh-CN",
         )
@@ -767,7 +763,7 @@ async def check_douyin_cookie_valid() -> bool:
     # 用cookie请求抖音API验证登录状态
     check_url = "https://www.douyin.com/aweme/v1/web/query/user/"
     headers = {
-        "User-Agent": _UA,
+        **client_identity.headers(),
         "Referer": "https://www.douyin.com/",
         "Cookie": cookie_str,
     }

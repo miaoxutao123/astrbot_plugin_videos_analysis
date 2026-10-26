@@ -9,6 +9,7 @@ import aiohttp
 from astrbot.api import logger
 
 from ..douyin_scraper.cookie_extractor import extract_and_format_cookies
+from ..utils import client_identity
 
 
 # 只有抖音主站接口需要登录 cookie；CDN（douyinvod/douyinpic 等）和任何跳转后的地址都不发，避免登录态外泄
@@ -47,21 +48,11 @@ async def get_location_from_url(url, cookie=None):
     Returns:
         包含 URL 和 location 的字典。
     """
-    headers = {
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br, zstd",
-        "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
-        "Connection": "keep-alive",
-        "Host": "www.douyin.com",
-        "Priority": "u=0, i",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "TE": "trailers",
-        "Upgrade-Insecure-Requests": "1",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:136.0) Gecko/20100101 Firefox/136.0"
-    }
+    headers = client_identity.headers(
+        Accept="text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        Sec_Fetch_Dest="document", Sec_Fetch_Mode="navigate", Sec_Fetch_Site="none", Sec_Fetch_User="?1",
+        Upgrade_Insecure_Requests="1",
+    )
 
     cookie = scoped_cookie(url, cookie)
     if cookie:
@@ -96,65 +87,30 @@ async def download_douyin_image(url, filename, cookie=None):
         return True
 
     max_retries = 5
+    # 只用两种身份：和登录浏览器一致的桌面端；手机端兜底且不带 cookie。
+    # 之前还会轮换 Android、抖音 App、百度爬虫的 UA——同一个 IP 上一会儿是爬虫一会儿是 App，
+    # 这个 IP 本身会被标记，而登录账号也在这个 IP 上
     retry_strategies = [
-        # 策略1: 完整桌面端请求头
-        {
-            "Accept": "image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "DNT": "1",
-            "Pragma": "no-cache",
-            "Referer": "https://www.douyin.com/",
-            "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": '"Windows"',
-            "Sec-Fetch-Dest": "image",
-            "Sec-Fetch-Mode": "no-cors",
-            "Sec-Fetch-Site": "cross-site",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        },
-        # 策略2: iPhone移动端请求头
+        client_identity.headers(
+            Accept="image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            Referer="https://www.douyin.com/", Sec_Fetch_Dest="image", Sec_Fetch_Mode="no-cors",
+            Sec_Fetch_Site="cross-site",
+        ),
         {
             "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh-Hans;q=0.9",
-            "Connection": "keep-alive",
             "Referer": "https://www.douyin.com/",
-            "Sec-Fetch-Dest": "image",
-            "Sec-Fetch-Mode": "no-cors",
-            "Sec-Fetch-Site": "cross-site",
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1"
         },
-        # 策略3: Android移动端请求头
-        {
-            "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Connection": "keep-alive",
-            "Referer": "https://www.douyin.com/",
-            "User-Agent": "Mozilla/5.0 (Linux; Android 13; SM-G981B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36"
-        },
-        # 策略4: 模拟抖音APP请求头
-        {
-            "Accept": "*/*",
-            "Connection": "keep-alive",
-            "User-Agent": "com.ss.android.ugc.aweme/180400 (Linux; U; Android 11; zh_CN; SM-G973F; Build/RP1A.200720.012; Cronet/TTNetVersion:36a9da4a 2021-11-26 QuicVersion:8d8b5b0e 2021-11-23)",
-            "X-Requested-With": "com.ss.android.ugc.aweme"
-        },
-        # 策略5: 最简请求头
-        {
-            "User-Agent": "Mozilla/5.0 (compatible; Baiduspider/2.0; +http://www.baidu.com/search/spider.html)",
-            "Accept": "*/*"
-        }
     ]
 
-    strategy_names = ["桌面端", "iPhone", "Android", "抖音APP", "爬虫"]
+    strategy_names = ["桌面端", "iPhone"]
 
     for attempt in range(max_retries):
         current_headers = retry_strategies[attempt % len(retry_strategies)].copy()
         strategy_name = strategy_names[attempt % len(retry_strategies)]
 
-        if cookie and strategy_name not in ["抖音APP", "爬虫"]:
+        if cookie and strategy_name == "桌面端":
             current_headers["Cookie"] = clean_cookie(cookie)
 
         try:
@@ -228,8 +184,8 @@ async def download_video(url, filename="video.mp4", cookie=None):
         "Sec-Fetch-Dest": "video",
         "Sec-Fetch-Mode": "no-cors",
         "Sec-Fetch-Site": "cross-site",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
+    headers.update(client_identity.headers())
 
     if cookie:
         headers["Cookie"] = clean_cookie(cookie)
@@ -245,12 +201,11 @@ async def download_video(url, filename="video.mp4", cookie=None):
                     if response.status == 403:
                         logger.warning("403 Forbidden，尝试使用移动端请求头...")
                         mobile_headers = {
-                            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1",
+                            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1",
                             "Referer": "https://www.douyin.com/",
                             "Accept": "video/webm,video/ogg,video/*;q=0.9,application/ogg;q=0.7,audio/*;q=0.6,*/*;q=0.5"
                         }
-                        if cookie:
-                            mobile_headers["Cookie"] = clean_cookie(cookie)
+                        # 手机端兜底不带 cookie：登录态只出现在和登录浏览器一致的请求里
 
                         async with session.get(url, headers=mobile_headers, allow_redirects=True) as retry_response:
                             response = retry_response

@@ -20,14 +20,15 @@ import aiohttp
 
 from astrbot.api import logger
 
+from ...utils import client_identity
 from ...utils.paths import DOWNLOAD_DIR_DY, IMAGE_DIR
 from .base import Comment, CreatorPlatform, OpResult, Work
 from .human import GUARD, human_click, human_fill, human_hover, human_type, pause
 
 CREATOR = "https://creator.douyin.com"
 SELF_URL = "https://www.douyin.com/user/self"
-DESKTOP_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-              "Chrome/131.0.0.0 Safari/537.36")
+# 浏览器内直接请求创作中心接口时停靠的页面：创作中心前端自己最先请求的接口，返回 JSON，不渲染
+CREATOR_LANDING = "/aweme/v1/creator/user/info/"
 UPLOAD_URL = f"{CREATOR}/creator-micro/content/upload"
 MANAGE_URL = f"{CREATOR}/creator-micro/content/manage"
 # 设备参数（系统/浏览器/屏幕等）由 fetch_signed_api 按浏览器真实环境填充
@@ -583,16 +584,40 @@ class DouyinCreator(CreatorPlatform):
 
         return clean_cookie(self.plugin.effective_douyin_cookie)
 
+    @staticmethod
+    def _creator_ok(data) -> bool:
+        return isinstance(data, dict) and data.get("status_code", data.get("code", 0)) in (0, None)
+
     async def _creator_http(self, reqs: list[tuple[str, str]]) -> list[dict] | None:
-        """纯 HTTP 读创作中心接口（这些读接口只认 cookie，不需要签名）。登录失效等异常返回 None 交给页面兜底。"""
-        cookie = await self._cookie_header()
-        if "sessionid" not in cookie:
-            return None
+        """
+        直接请求创作中心读接口（只认 cookie，不需要签名）。登录失效等异常返回 None 交给页面兜底。
+
+        浏览器在跑时由浏览器发（origin_fetch：真实 Chrome 的 TLS/UA/cookie，和用户自己刷新数据页一样）；
+        浏览器没起来才用 aiohttp，UA 和 Client Hints 与浏览器保持一致。
+        """
         s = self.plugin.browser_signer
         if s and s.risk_status:
             raise RuntimeError(f"抖音风控冷却中：{s.risk_status}")
-        headers = {"User-Agent": DESKTOP_UA, "Cookie": cookie, "Referer": f"{CREATOR}/creator-micro/home",
-                   "Accept": "application/json, text/plain, */*"}
+        if s and s.is_ready:
+            try:
+                out = []
+                for i, (path, method) in enumerate(reqs):
+                    if i:
+                        await pause(0.2, 0.6)
+                    data = await s.origin_fetch(CREATOR, CREATOR_LANDING, CREATOR + path, method, {} if method == "POST" else None)
+                    if not self._creator_ok(data):
+                        logger.info(f"[douyin] 创作中心接口 {path.split('?')[0]} 返回 {str(data)[:120]}，改用页面读取")
+                        return None
+                    out.append(data)
+                return out
+            except Exception as e:
+                logger.info(f"[douyin] 浏览器内读取创作中心失败，改用页面读取: {e}")
+                return None
+        cookie = await self._cookie_header()
+        if "sessionid" not in cookie:
+            return None
+        headers = client_identity.headers(Cookie=cookie, Referer=f"{CREATOR}/creator-micro/home",
+                                          Accept="application/json, text/plain, */*")
         out = []
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
@@ -602,7 +627,7 @@ class DouyinCreator(CreatorPlatform):
                     async with session.request(method, CREATOR + path, headers=headers, proxy=self.plugin.douyin_proxy or None,
                                                **({"json": {}} if method == "POST" else {})) as resp:
                         data = await resp.json(content_type=None)
-                    if not isinstance(data, dict) or data.get("status_code", data.get("code", 0)) not in (0, None):
+                    if not self._creator_ok(data):
                         logger.info(f"[douyin] 创作中心接口 {path.split('?')[0]} 返回 {str(data)[:120]}，改用页面读取")
                         return None
                     out.append(data)
@@ -612,7 +637,7 @@ class DouyinCreator(CreatorPlatform):
         return out
 
     async def _creator_reads(self, reqs: list[tuple[str, str]]) -> list[dict]:
-        """读取若干创作中心接口：先纯 HTTP（约 1 秒），失败再打开创作中心首页在页面里读。"""
+        """读取若干创作中心接口：先直接请求（约 1 秒），失败再打开创作中心首页在页面里读。"""
         if (out := await self._creator_http(reqs)) is not None:
             return out
         if not self.signer.is_logged_in:

@@ -20,6 +20,7 @@ import aiohttp
 
 from astrbot.api import logger
 
+from ...utils import client_identity
 from ...utils.paths import CREATOR_DIR
 from .. import bili_account, bilibili_service
 from .base import Comment, CreatorPlatform, OpResult, Work
@@ -233,7 +234,7 @@ class BilibiliCreator(CreatorPlatform):
             if url:
                 os.makedirs(bilibili_service.BILI_DOWNLOAD_DIR, exist_ok=True)
                 out = os.path.join(bilibili_service.BILI_DOWNLOAD_DIR, f"{work_id}_head{max_seconds}.mp4")
-                hdr = f"Referer: https://www.bilibili.com/\r\nUser-Agent: {bili_account.UA}\r\n"
+                hdr = f"Referer: https://www.bilibili.com/\r\nUser-Agent: {client_identity.ua()}\r\n"
                 proc = await asyncio.create_subprocess_exec(
                     "ffmpeg", "-y", "-loglevel", "error", "-headers", hdr, "-t", str(max_seconds), "-i", url,
                     "-c", "copy", out, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
@@ -502,7 +503,7 @@ class BilibiliCreator(CreatorPlatform):
         if pre.get("OK") != 1:
             raise RuntimeError(f"申请上传失败: {pre.get('message') or pre}")
         url = f"https:{pre['endpoint']}/{pre['upos_uri'].removeprefix('upos://')}"
-        up_headers = {"X-Upos-Auth": pre["auth"], "User-Agent": bili_account.UA, "Referer": "https://member.bilibili.com/"}
+        up_headers = {"X-Upos-Auth": pre["auth"], "User-Agent": client_identity.ua(), "Referer": "https://member.bilibili.com/"}
         chunk_size = int(pre.get("chunk_size") or 10 * 1024 * 1024)
         chunks = max(1, -(-size // chunk_size))
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=300)) as s:
