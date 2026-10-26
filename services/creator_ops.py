@@ -14,17 +14,24 @@ import re
 import secrets
 import shutil
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 import aiohttp
 
 from astrbot.api import logger
 
 from ..utils.paths import CREATOR_DIR, UPLOAD_DIR
+from ..utils.redact import redact
 from . import audit_log
 from .creator import Comment, OpResult, get_creator
 
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".flv", ".avi"}
+PENDING_FILE = os.path.join(CREATOR_DIR, "pending.json")  # 待审批操作（重载/重启后恢复）
+PUBLISH_LOG = os.path.join(CREATOR_DIR, "published.jsonl")  # 发布结果（含来源插件），运营洞察按它统计
+MAX_TTL = 86400
+# 其他插件调用 publish_request 时可带的元数据，不传给平台
+# （B站的 source 是转载来源，所以回传用 caller / caller_ref）
+META_OPTS = ("confirm_ttl", "caller", "caller_ref")
 TAG_RE = re.compile(r"#([^\s#]+)")
 
 
@@ -43,6 +50,47 @@ class PendingOp:
     requester_admin: bool = True
 
 
+VISIBILITY = {"public": "公开", "friends": "好友可见", "private": "仅自己可见"}
+_VIS_ALIAS = {"公开": "public", "好友可见": "friends", "好友": "friends", "仅自己可见": "private", "私密": "private", "自己": "private"}
+
+
+def _publish_opts(opts: dict | None) -> dict:
+    """视频和图文都支持的发布选项：visibility（public/friends/private）、ai_generated（声明内容由 AI 生成）。"""
+    opts = opts or {}
+    out = {}
+    raw = str(opts.get("visibility") or "").strip().lower()
+    vis = _VIS_ALIAS.get(raw, raw)
+    if vis in ("friends", "private"):
+        out["visibility"] = vis
+    if opts.get("ai_generated") in (True, 1, "1", "true", "True", "是"):
+        out["ai_generated"] = True
+    return out
+
+
+def _work_url(platform: str, work_id: str) -> str:
+    if not work_id:
+        return ""
+    if platform == "bilibili":
+        return f"https://www.bilibili.com/{'opus' if work_id.isdigit() else 'video'}/{work_id}"
+    return f"https://www.douyin.com/video/{work_id}"
+
+
+def read_publish_log(limit: int = 200) -> list[dict]:
+    """最近的发布结果（新→旧）。"""
+    try:
+        with open(PUBLISH_LOG, encoding="utf-8") as f:
+            lines = f.readlines()[-limit:]
+    except FileNotFoundError:
+        return []
+    out = []
+    for line in reversed(lines):
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
 def split_title_tags(text: str) -> tuple[str, list[str]]:
     tags = TAG_RE.findall(text)
     title = TAG_RE.sub("", text).strip()
@@ -59,6 +107,8 @@ class CreatorOps:
         self.plugin = plugin
         cfg = plugin.config
         self.confirm_timeout = int(cfg.get("confirm_timeout_seconds", 60))
+        # 发布要先看视频、常常无人值守（定时生成），默认给更长的确认时间
+        self.publish_timeout = min(MAX_TTL, max(self.confirm_timeout, int(float(cfg.get("publish_confirm_minutes", 720) or 0) * 60)))
         self.reply_max = max(1, min(5, int(cfg.get("reply_max_comments", 5))))
         self.reply_window_h = int(cfg.get("reply_window_hours", 48))
         self.reply_style = cfg.get("creator_reply_style", "") or "真诚、简短、口语化，像博主本人在和粉丝聊天，不用官腔，不带链接"
@@ -70,8 +120,26 @@ class CreatorOps:
         # 最近一次列表（作品/搜索/推荐）按"会话+平台"分别保存，群里多人同时用也不会串号
         self.last_works: dict[str, list] = {}
         self.last_list_platform: dict[str, str] = {}
-        # 待确认操作只在内存里，重载后之前暂存的发布素材都已无主，直接清掉
-        shutil.rmtree(UPLOAD_DIR, ignore_errors=True)
+        self._gc_task = None
+        self._load_pending()
+
+    def start(self) -> None:
+        """后台每分钟清一次过期申请：没人查看待审批列表时，过期结果也能及时回传给来源插件。"""
+        if not self._gc_task:
+            self._gc_task = asyncio.create_task(self._gc_loop())
+
+    async def stop(self) -> None:
+        if self._gc_task:
+            self._gc_task.cancel()
+            self._gc_task = None
+
+    async def _gc_loop(self) -> None:
+        while True:
+            await asyncio.sleep(60)
+            try:
+                self._gc()
+            except Exception as e:
+                logger.warning(f"[creator] 清理过期申请失败: {e}")
 
     @staticmethod
     def _list_key(event, platform: str) -> str:
@@ -106,19 +174,63 @@ class CreatorOps:
             code=code, kind=kind, platform=platform,
             account=key or "当前登录账号", account_key=key,
             requester=requester, umo=event.unified_msg_origin,
-            requester_name=str(event.get_sender_name() or requester), requester_admin=bool(event.is_admin()),
+            requester_name=str(event.get_sender_name() or requester), requester_admin=self.plugin.admins.is_admin(event),
             expires=time.time() + (ttl or self.confirm_timeout), payload=payload,
         )
         self._pending[code] = op
+        self._save_pending()
         audit_log.record("created", op, summary=self._summary(op), admin=op.requester_admin)
         return op
 
     def _gc(self) -> None:
         now = time.time()
-        for code in [c for c, op in self._pending.items() if op.expires < now]:
+        expired = [c for c, op in self._pending.items() if op.expires < now]
+        for code in expired:
             op = self._pending.pop(code)
             audit_log.record("expired", op)
             self._remove_op_files(op)
+            self._report(op, "expired", "超过有效期没有确认，已作废")
+        if expired:
+            self._save_pending()
+
+    # ── 待审批持久化 ─────────────────────────────────────
+
+    def _save_pending(self) -> None:
+        try:
+            os.makedirs(CREATOR_DIR, exist_ok=True)
+            tmp = PENDING_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump([asdict(op) for op in self._pending.values()], f, ensure_ascii=False, default=str)
+            os.replace(tmp, PENDING_FILE)
+        except Exception as e:
+            logger.warning(f"[creator] 保存待审批列表失败: {e}")
+
+    def _load_pending(self) -> None:
+        """恢复重载前的待审批操作；暂存目录里没人引用的素材才清掉。"""
+        try:
+            with open(PENDING_FILE, encoding="utf-8") as f:
+                rows = json.load(f)
+        except FileNotFoundError:
+            rows = []
+        except Exception as e:
+            logger.warning(f"[creator] 读取待审批列表失败，按空处理: {e}")
+            rows = []
+        names = set(PendingOp.__dataclass_fields__)
+        for row in rows if isinstance(rows, list) else []:
+            try:
+                op = PendingOp(**{k: v for k, v in row.items() if k in names})
+            except TypeError:
+                continue
+            self._pending[op.code] = op
+        keep = {os.path.abspath(f) for op in self._pending.values() for f in self._op_files(op)}
+        if os.path.isdir(UPLOAD_DIR):
+            for name in os.listdir(UPLOAD_DIR):
+                path = os.path.abspath(os.path.join(UPLOAD_DIR, name))
+                if path not in keep:
+                    shutil.rmtree(path, ignore_errors=True) if os.path.isdir(path) else os.remove(path)
+        if self._pending:
+            logger.info(f"[creator] 恢复 {len(self._pending)} 个待审批操作")
+        self._gc()
 
     def pending_list(self) -> list[dict]:
         self._gc()
@@ -136,13 +248,65 @@ class CreatorOps:
         op = self._pending.pop(code, None)
         if not op:
             return f"没有待确认的操作 {code}（可能已过期）"
+        self._save_pending()
         by, by_name = self._who(event)
         by_name = by_name or via
         audit_log.record("rejected", op, by=by, by_name=by_name)
         self._remove_op_files(op)
+        self._report(op, "rejected", f"管理员拒绝了（{by_name or '管理员'}）")
         if not op.requester_admin:
             asyncio.create_task(self._send(op.umo, f"你提交的申请 [{code}]（{self._summary(op)}）未获管理员批准，已取消。"))
         return f"已取消 {code}"
+
+    # ── 发布结果回传 ─────────────────────────────────────
+
+    def _report(self, op: PendingOp, status: str, message: str, data: dict | None = None) -> None:
+        """发布类申请有了结局（published/failed/rejected/expired）：记入发布日志，并回调来源插件。"""
+        if op.kind not in ("upload", "post"):
+            return
+        p = op.payload
+        work_id = str((data or {}).get("bvid") or (data or {}).get("dyn_id") or (data or {}).get("aweme_id") or "")
+        result = {
+            "code": op.code, "status": status, "kind": "images" if op.kind == "post" else "video",
+            "platform": op.platform, "account": op.account,
+            "title": p.get("title", ""), "tags": p.get("tags", []), "work_id": work_id,
+            "url": _work_url(op.platform, work_id), "message": redact(str(message))[:300],
+            "caller": p.get("caller", ""), "caller_ref": p.get("caller_ref", ""), "at": int(time.time()),
+        }
+        try:
+            asyncio.get_running_loop().create_task(self._deliver_result(result))
+        except RuntimeError:  # 没有事件循环（理论上不会）：至少记下日志
+            logger.warning(f"[creator] 无法回传发布结果 {op.code}: {status}")
+
+    async def _deliver_result(self, result: dict) -> None:
+        if result["status"] == "published" and not result["work_id"] and result["platform"] == "douyin":
+            # 抖音发布页不返回作品 ID：稍等后按标题在作品列表里找
+            await asyncio.sleep(5)
+            try:
+                for w in await get_creator(self.plugin, "douyin").list_works(5):
+                    if result["title"] and (w.title.startswith(result["title"][:20]) or result["title"][:20] in w.title):
+                        result.update(work_id=w.id, url=w.url)
+                        break
+            except Exception as e:
+                logger.info(f"[creator] 查找刚发布的抖音作品失败: {e}")
+        try:
+            os.makedirs(CREATOR_DIR, exist_ok=True)
+            with open(PUBLISH_LOG, "a", encoding="utf-8") as f:
+                f.write(json.dumps(result, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.warning(f"[creator] 写发布日志失败: {e}")
+        caller = result.get("caller")
+        if not caller:
+            return
+        meta = self.plugin.context.get_registered_star(caller)
+        fn = getattr(getattr(meta, "star_cls", None), "on_publish_result", None) if meta else None
+        if not fn:
+            logger.info(f"[creator] 来源插件 {caller} 未提供 on_publish_result，结果只记入发布日志")
+            return
+        try:
+            await asyncio.wait_for(fn(dict(result)), timeout=30)
+        except Exception as e:
+            logger.warning(f"[creator] 回调 {caller}.on_publish_result 失败: {e}")
 
     # ── 提权审批 ─────────────────────────────────────────
 
@@ -167,6 +331,10 @@ class CreatorOps:
         preview = self.render_preview(op)
         if op.requester_admin:
             await self._send(op.umo, preview)
+            # 还没设置插件管理员：管理员在私聊里提交申请时顺带问一次
+            admins = self.plugin.admins
+            if ":FriendMessage:" in op.umo and admins.should_ask_uid(op.requester):
+                await self._send(op.umo, admins.prompt())
             return {"status": "pending_confirmation", "code": op.code,
                     "message": f"尚未执行。确认信息已发到当前会话，需要管理员本人回复「确认 {op.code}」才会执行。请如实告知，不要声称已完成，也不要替用户确认。"}
         head = (
@@ -179,6 +347,7 @@ class CreatorOps:
                 sent += 1
         if not sent:
             self._pending.pop(op.code, None)
+            self._save_pending()
             audit_log.record("dropped", op, error="管理员未设置审批通知会话（/va_notify）")
             self._remove_op_files(op)
             return {"status": "rejected", "error": "该操作需要管理员批准，但管理员还没有设置审批通知会话（管理员私聊发送 /va_notify），已取消。"}
@@ -191,6 +360,7 @@ class CreatorOps:
         op = self._pending.get(code)
         if op and op.kind in ("comment", "sign"):
             op.payload.update(text=text, drafted=False)
+            self._save_pending()
             return f"已修改 {code} 的评论内容，发送 /va_confirm {code} 执行"
         if not op or op.kind != "reply":
             return f"没有待确认的评论回复 {code}"
@@ -198,6 +368,7 @@ class CreatorOps:
         if not 1 <= index <= len(items):
             return f"序号超出范围 1~{len(items)}"
         items[index - 1]["reply"] = text
+        self._save_pending()
         return f"已修改 {code} 第 {index} 条回复，发送 /va_confirm {code} 执行"
 
     @staticmethod
@@ -225,9 +396,13 @@ class CreatorOps:
         self._gc()
         op = self._pending.get(code)
         if not op:
-            return f"没有待确认的操作 {code}（可能已过期，超时 {self.confirm_timeout} 秒）"
+            return f"没有待确认的操作 {code}（可能已过期或已处理）"
         result = await self._execute(op, picks)
         status, error = self._classify(result)
+        if op.kind in ("upload", "post"):
+            res = op.payload.get("_result") or {}
+            self._report(op, "published" if status == "ok" else "failed", res.get("message") or error or result,
+                         res.get("data") or {})
         approver, approver_name = self._who(event)
         audit_log.record("approved", op, approver=approver, approver_name=approver_name,
                          result=status, error=error, summary=self._summary(op))
@@ -237,6 +412,7 @@ class CreatorOps:
 
     async def _execute(self, op: PendingOp, picks: list[int] | None) -> str:
         self._pending.pop(op.code, None)
+        self._save_pending()
         if op.platform == "douyin" and op.account_key != (self.plugin.accounts.active_name("douyin") or ""):
             return f"❌ 申请时用的是抖音账号「{op.account}」，现在已切换到「{self.plugin.accounts.active_name('douyin') or '其他账号'}」，为避免发错账号已取消，请重新发起"
         try:
@@ -250,10 +426,20 @@ class CreatorOps:
                 opts = dict(p.get("opts") or {})
                 try:
                     res = await creator.upload(p["path"], p["title"], p["tags"], **opts)
+                    p["_result"] = {"ok": res.ok, "message": res.message, "data": dict(res.data or {})}
                 finally:
                     self._remove_staged(p["path"])  # 失败也清理，重发视频即可重试
                     self._remove_staged(opts.get("cover", ""))
                 return self._render_result(f"发布《{p['title']}》", res)
+            if op.kind == "post":
+                p = op.payload
+                try:
+                    res = await creator.post_images(p["images"], p["title"], p.get("text", ""), p["tags"], **(p.get("opts") or {}))
+                    p["_result"] = {"ok": res.ok, "message": res.message, "data": dict(res.data or {})}
+                finally:
+                    for f in p["images"]:
+                        self._remove_staged(f)
+                return self._render_result(f"发布图文《{p['title'] or p.get('text', '')[:15]}》", res)
             if op.kind == "delete":
                 res = await creator.delete(op.payload["work_id"], op.payload.get("title", ""))
                 return self._render_result(f"删除 {op.payload['work_id']}", res)
@@ -291,7 +477,15 @@ class CreatorOps:
                 o = p.get("opts") or {}
                 tid = o.get("tid") or self.plugin.config.get("bili_upload_tid", 21)
                 extra = f"，分区 {tid}，{'自定义封面' if o.get('cover') else '封面取视频第 1 秒'}"
+            o = p.get("opts") or {}
+            extra += "".join(f"，{x}" for x in (VISIBILITY.get(o.get("visibility", "")), "声明 AI 生成" if o.get("ai_generated") else "") if x)
             return f"发布《{p['title']}》 {' '.join('#' + t for t in p['tags'])}（{p['size_mb']:.1f}MB{extra}）"
+        if op.kind == "post":
+            o = p.get("opts") or {}
+            extra = "，".join(x for x in (VISIBILITY.get(o.get("visibility", "")), "声明 AI 生成" if o.get("ai_generated") else "") if x)
+            text = f"\n正文：{p['text'][:120]}" if p.get("text") else ""
+            return (f"发布图文《{p['title'] or '无标题'}》 {' '.join('#' + t for t in p['tags'])}"
+                    f"（{len(p['images'])} 张图{'，' + extra if extra else ''}）{text}")
         if op.kind == "delete":
             hint = "（B站若要求短信验证码，会改为仅自己可见）" if op.platform == "bilibili" else ""
             return f"删除作品 {p['work_id']}" + (f"《{p['title']}》" if p.get("title") else "") + hint
@@ -333,10 +527,17 @@ class CreatorOps:
 
     # ── 发布 ─────────────────────────────────────────────
 
+    @staticmethod
+    def _op_files(op: PendingOp) -> list[str]:
+        if op.kind == "post":
+            return list(op.payload.get("images") or [])
+        if op.kind not in ("upload", "avatar"):
+            return []
+        return [f for f in (op.payload.get("path", ""), (op.payload.get("opts") or {}).get("cover", "")) if f]
+
     def _remove_op_files(self, op: PendingOp) -> None:
-        if op.kind in ("upload", "avatar"):
-            self._remove_staged(op.payload.get("path", ""))
-            self._remove_staged((op.payload.get("opts") or {}).get("cover", ""))
+        for f in self._op_files(op):
+            self._remove_staged(f)
 
     def _remove_staged(self, path: str) -> None:
         if path and os.path.abspath(path).startswith(os.path.abspath(UPLOAD_DIR)) and os.path.exists(path):
@@ -365,25 +566,63 @@ class CreatorOps:
     async def prepare_upload(self, event, platform: str, source: str, title: str, tags: list[str],
                              account: str | None = None, opts: dict | None = None) -> PendingOp:
         """opts（平台特有，目前 B站用）：cover=封面图路径/链接，tid=分区 ID，desc=简介。
-        通用：confirm_ttl=这条申请等待确认的秒数（定时任务无人值守时用，最长 24 小时，默认 confirm_timeout_seconds）。"""
-        ttl = None
+        通用（不传给平台）：confirm_ttl=等待确认的秒数（最长 24 小时，默认 publish_confirm_minutes）；
+        caller=来源插件名、caller_ref=对方的任务号——执行/拒绝/过期后回调 caller 插件的 on_publish_result。"""
+        opts = dict(opts or {})
+        meta = {k: opts.pop(k) for k in META_OPTS if k in opts}
         try:
-            ttl = min(int((opts or {}).get("confirm_ttl") or 0), 86400) or None
+            ttl = min(int(meta.get("confirm_ttl") or 0), MAX_TTL) or self.publish_timeout
         except (TypeError, ValueError):
-            ttl = None
+            ttl = self.publish_timeout
         if not title:
             raise ValueError("缺少标题")
         if platform == "bilibili" and not tags:
             raise ValueError("B站投稿至少需要 1 个标签（#话题）")
+        common = _publish_opts(opts)
         opts = {k: v for k, v in (opts or {}).items() if k in ("cover", "tid", "desc", "copyright", "source") and v}
         if platform != "bilibili":
             opts = {}  # 抖音发布页暂不支持这些参数
+        opts.update(common)
         if opts.get("cover"):
             opts["cover"] = await self.stage_image(opts["cover"], "cover")
         path = await self.stage_video(source)
         size_mb = os.path.getsize(path) / 1048576
-        payload = {"path": path, "title": title, "tags": tags, "size_mb": size_mb, "opts": opts}
+        payload = {"path": path, "title": title, "tags": tags, "size_mb": size_mb, "opts": opts,
+                   "caller": str(meta.get("caller") or ""), "caller_ref": str(meta.get("caller_ref") or "")}
         return self._new_op("upload", platform, event, payload, ttl=ttl, account=account)
+
+    async def prepare_post(self, event, platform: str, images: list[str], title: str, text: str, tags: list[str],
+                           account: str | None = None, opts: dict | None = None) -> PendingOp:
+        """
+        图文发布申请。images 为本地路径或 http(s) 链接（会转成 JPEG 暂存）；
+        opts：visibility、ai_generated，以及与 prepare_upload 相同的 confirm_ttl / caller / caller_ref。
+        """
+        from .creator import get_creator
+
+        opts = dict(opts or {})
+        meta = {k: opts.pop(k) for k in META_OPTS if k in opts}
+        try:
+            ttl = min(int(meta.get("confirm_ttl") or 0), MAX_TTL) or self.publish_timeout
+        except (TypeError, ValueError):
+            ttl = self.publish_timeout
+        limit = get_creator(self.plugin, platform).max_images
+        images = [i for i in images if i][:limit]
+        if not images:
+            raise ValueError("至少需要 1 张图片")
+        if not (title or text):
+            raise ValueError("缺少标题或正文")
+        staged = []
+        try:
+            for src in images:
+                staged.append(await self.stage_image(src, "post"))
+        except Exception:
+            for f in staged:
+                self._remove_staged(f)
+            raise
+        payload = {"images": staged, "title": (title or "").strip(), "text": (text or "").strip(), "tags": tags,
+                   "opts": _publish_opts(opts),
+                   "caller": str(meta.get("caller") or ""), "caller_ref": str(meta.get("caller_ref") or "")}
+        return self._new_op("post", platform, event, payload, ttl=ttl, account=account)
 
     async def stage_image(self, source: str, prefix: str) -> str:
         """把图片（本地路径或 URL）复制到 UPLOAD_DIR 并转成 JPEG。"""

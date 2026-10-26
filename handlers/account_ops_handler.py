@@ -187,6 +187,75 @@ async def handle_upload_video_arrived(plugin, event, waiter: dict, source: str):
         yield r
 
 
+# ── 图文 ─────────────────────────────────────────────────
+
+_POST_FLAGS = {"私密": ("visibility", "private"), "仅自己可见": ("visibility", "private"), "自己可见": ("visibility", "private"),
+               "好友可见": ("visibility", "friends"), "ai": ("ai_generated", True), "ai生成": ("ai_generated", True),
+               "ai创作": ("ai_generated", True)}
+POST_USAGE = (
+    "用法（图片附在同一条消息里，或引用一条带图片的消息）：\n"
+    "/va_post [平台] [仅自己可见|好友可见] [AI] <标题> #话题1 #话题2\n"
+    "第二行起是正文（可选）\n\n"
+    "例：/va_post bilibili AI 秋天的第一杯奶茶 #日常 #治愈\n今天路过街角那家店……\n"
+    "抖音最多 35 张、B站最多 18 张；标题最多 20 字；AI = 声明“内容由 AI 生成”"
+)
+
+
+async def _extract_images(event) -> list[str]:
+    """当前消息和被引用消息里的所有图片（按出现顺序）。"""
+    from astrbot.core.message.components import Image, Reply
+
+    segs = list(getattr(event.message_obj, "message", []) or [])
+    for seg in list(segs):
+        if isinstance(seg, Reply) and seg.chain:
+            segs.extend(seg.chain)
+    out = []
+    for seg in segs:
+        if isinstance(seg, Image):
+            try:
+                out.append(await seg.convert_to_file_path())
+            except Exception:
+                if src := seg.url or seg.file:
+                    out.append(src)
+    return out
+
+
+def parse_post_text(raw: str) -> tuple[str, list[str], str, dict]:
+    """「[开关] 标题 #话题」+ 换行后的正文 → (标题, 话题, 正文, 选项)。"""
+    first, _, body = (raw or "").strip().partition("\n")
+    opts, words = {}, []
+    for w in first.split():
+        if (flag := _POST_FLAGS.get(w.lower())) is not None:
+            opts[flag[0]] = flag[1]
+        else:
+            words.append(w)
+    title, tags = split_title_tags(" ".join(words))
+    body_title, body_tags = split_title_tags(body)
+    return title, tags + [t for t in body_tags if t not in tags], body_title.strip(), opts
+
+
+async def handle_post(plugin, event):
+    raw = (event.message_str or "").strip()
+    raw = re.sub(r"^/?(va_post|发图文)\s*", "", raw)
+    first_word = raw.split(maxsplit=1)[0] if raw.split() else ""
+    platform = normalize_platform(first_word) or "douyin"
+    if normalize_platform(first_word):
+        raw = raw[len(first_word):].lstrip(" ")
+    title, tags, text, opts = parse_post_text(raw)
+    images = await _extract_images(event)
+    if not images or not (title or text):
+        yield event.plain_result(("没有找到图片。\n\n" if not images and (title or text) else "") + POST_USAGE)
+        return
+    try:
+        op = await plugin.creator_ops.prepare_post(event, platform, images, title, text, tags, opts=opts)
+    except Exception as e:
+        yield event.plain_result(f"准备图文失败: {redact(e)}")
+        return
+    res = await plugin.creator_ops.submit(op)
+    if res.get("status") == "rejected":
+        yield event.plain_result(res.get("error", "已取消"))
+
+
 async def _prepare_upload(plugin, event, platform, source, title, tags, opts=None):
     try:
         op = await plugin.creator_ops.prepare_upload(event, platform, source, title, tags, opts=opts)
@@ -266,7 +335,14 @@ async def handle_bili_refresh(plugin, event):
     yield event.plain_result("\n".join(await plugin.accounts.refresh_all_bilibili(force=force)) or "B站未登录")
 
 
+def _not_approver(plugin, event) -> str:
+    return "" if plugin.admins.is_admin(event) else f"审批由本插件管理员（{plugin.admins.names()}）处理"
+
+
 async def handle_confirm(plugin, event):
+    if msg := _not_approver(plugin, event):
+        yield event.plain_result(msg)
+        return
     args = command_args(event, "va_confirm")
     if not args:
         yield event.plain_result("用法: /va_confirm <确认码> [序号...]")
@@ -285,11 +361,17 @@ async def handle_confirm(plugin, event):
 
 
 async def handle_cancel(plugin, event):
+    if msg := _not_approver(plugin, event):
+        yield event.plain_result(msg)
+        return
     args = command_args(event, "va_cancel")
     yield event.plain_result(plugin.creator_ops.cancel(args[0], event) if args else "用法: /va_cancel <确认码>")
 
 
 async def handle_edit(plugin, event):
+    if msg := _not_approver(plugin, event):
+        yield event.plain_result(msg)
+        return
     args = command_args(event, "va_edit")
     if len(args) < 3 or not args[1].isdigit():
         yield event.plain_result("用法: /va_edit <确认码> <序号> <新回复>")

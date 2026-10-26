@@ -38,6 +38,8 @@ import time
 import sys
 from urllib.parse import urlencode
 
+from ..utils import client_identity
+
 _PLUGIN_DATA_DIR = "data/plugin_data/astrbot_plugin_videos_analysis/accounts"
 _USER_DATA_DIR = os.path.join(_PLUGIN_DATA_DIR, "dy_browser_profile")
 _COOKIE_FILE = os.path.join(_PLUGIN_DATA_DIR, "douyin_cookies.json")
@@ -288,6 +290,23 @@ def _disable_secure_dns(user_data_dir: str) -> None:
         pass
 
 
+# Playwright 默认会加的启动参数里，这些会让浏览器和普通用户的 Chrome 不一样，去掉：
+# - --enable-automation：显示"受自动化软件控制"、navigator.webdriver=true
+# - --disable-popup-blocking：无用户手势的 window.open 也能弹出，风控脚本会拿它探测自动化
+# - --disable-extensions / --disable-component-extensions-with-background-pages / --disable-default-apps /
+#   --disable-component-update：真人的 Chrome 都有内置组件扩展和组件更新
+# - --disable-field-trial-config / --force-color-profile=srgb：关掉了 Chrome 的实验分组、强制色彩配置
+_IGNORED_DEFAULT_ARGS = [
+    "--enable-automation",
+    "--disable-popup-blocking",
+    "--disable-extensions",
+    "--disable-component-extensions-with-background-pages",
+    "--disable-default-apps",
+    "--disable-component-update",
+    "--disable-field-trial-config",
+    "--force-color-profile=srgb",
+]
+
 # 抖音风控页 / 验证码的特征（接口响应头、响应体、页面 DOM）
 _RISK_HEADERS = ("x-vc-bdturing-parameters", "bdturing-verify")
 _RISK_BODY_MARKS = ("verify_check", "\"verify_type\"", "bdturing")
@@ -362,6 +381,8 @@ class BrowserSigner:
         self._sdk_ready = False
         self._logged_in = False
         self._lock = asyncio.Lock()
+        self._origin_pages: dict = {}
+        self.browser_name = ""
 
     # ── 生命周期 ─────────────────────────────────────────
 
@@ -428,7 +449,7 @@ class BrowserSigner:
             launch_kwargs = dict(
                 headless=self._headless,
                 args=launch_args,
-                ignore_default_args=["--enable-automation"],
+                ignore_default_args=_IGNORED_DEFAULT_ARGS,
                 timezone_id=self._timezone,
             )
             if self._headless:
@@ -454,7 +475,7 @@ class BrowserSigner:
                 if "Executable doesn't exist" in msg:
                     return self._make_status(
                         False,
-                        "Chromium 浏览器未安装。请运行: playwright install --with-deps chromium",
+                        "Chromium 浏览器未安装。请运行（国内镜像）: PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright python -m playwright install --with-deps --no-shell chromium",
                     )
                 if "Missing X server" in msg or "cannot open display" in msg.lower():
                     return self._make_status(
@@ -470,7 +491,8 @@ class BrowserSigner:
 
             pages = self._context.pages
             self._page = pages[0] if pages else await self._context.new_page()
-            self._log(f"浏览器: {'Google Chrome' if channel else 'Chromium'}，时区 {self._timezone}")
+            self.browser_name = "Google Chrome" if channel else "Chromium"
+            self._log(f"浏览器: {self.browser_name}，时区 {self._timezone}")
 
             # 4. 导航到 douyin.com
             self._log(f"正在加载 douyin.com (display: {display_msg}) ...")
@@ -530,6 +552,7 @@ class BrowserSigner:
                 )
 
             self._log("SDK 就绪")
+            await self._record_identity()
 
             # 7. 检查登录状态
             self._logged_in = await self._check_logged_in()
@@ -569,6 +592,7 @@ class BrowserSigner:
                 self._playwright = None
 
             self._page = None
+            self._origin_pages = {}
             self._sdk_ready = False
             self._logged_in = False
 
@@ -992,6 +1016,48 @@ class BrowserSigner:
             return ""
         cookies = await self._context.cookies()
         return "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+
+    async def _record_identity(self) -> None:
+        """记下浏览器真实的 UA / Client Hints，纯 HTTP 请求统一用它（见 utils/client_identity）。"""
+        try:
+            ident = await self._page.evaluate("""() => ({ua: navigator.userAgent,
+                brands: (navigator.userAgentData && navigator.userAgentData.brands) || [],
+                platform: (navigator.userAgentData && navigator.userAgentData.platform) || ''})""")
+            client_identity.save(ident["ua"], ident["brands"], ident["platform"])
+        except Exception as e:
+            self._log(f"读取浏览器身份失败: {e}")
+
+    _ORIGIN_FETCH_JS = """async (r) => {
+        try {
+            const resp = await fetch(r.url, {method: r.method, credentials: 'include',
+                headers: r.body !== null ? {'content-type': 'application/json'} : {},
+                body: r.body !== null ? JSON.stringify(r.body) : undefined});
+            return await resp.json();
+        } catch (e) { return null; }
+    }"""
+
+    async def origin_fetch(self, origin: str, landing: str, url: str, method: str = "GET", body=None) -> dict | None:
+        """
+        在 origin 下的空白标签页里 fetch 接口，不打开业务页面。
+
+        请求由真实 Chrome 发出：TLS 指纹、UA、Client Hints、cookie 都和用户自己浏览时一样，
+        纯 Python 请求做不到这点（aiohttp 的 TLS 指纹一眼就能认出不是浏览器）。
+        标签页停在 landing（该域名下一个返回 JSON 的接口）上，没有渲染开销，打开后复用。
+        不能用 robots.txt 之类：抖音这些站点对未知路径一律返回整个前端应用，一直开着 CPU 很高。
+        """
+        if not self._context:
+            return None
+        page = self._origin_pages.get(origin)
+        if page is None or page.is_closed():
+            page = await self._context.new_page()
+            try:
+                await page.goto(origin + landing, wait_until="domcontentloaded", timeout=15000)
+            except Exception:
+                await page.close()
+                raise
+            self._origin_pages[origin] = page
+        return await asyncio.wait_for(
+            page.evaluate(self._ORIGIN_FETCH_JS, {"url": url, "method": method, "body": body}), _API_TIMEOUT)
 
     async def cookies_for(self, url: str) -> str:
         """只导出会发给 url 的 cookie（按域名过滤），用于纯 HTTP 请求。"""

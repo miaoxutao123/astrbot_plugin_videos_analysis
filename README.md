@@ -1,4 +1,4 @@
-# AstrBot 视频解析与 AI 理解插件
+# 短视频运营助手（astrbot_plugin_videos_analysis）
 
 <div align="center">
 
@@ -6,7 +6,7 @@
 
 </div>
 
-一个功能强大的 AstrBot 插件，支持多平台视频内容解析、下载和 AI 智能分析。Agent 可主动调用视频解析与理解工具。
+AstrBot 插件：抖音/B站链接解析、下载与 AI 看视频，以及两个平台的账号运营——数据看板、消息巡检、评论回复、视频/图文发布。发布、删除、改资料等操作都要管理员审批；插件 ID 保持 `astrbot_plugin_videos_analysis` 不变，老用户直接更新即可。
 
 ## ✨ 主要功能
 
@@ -68,7 +68,7 @@
 - **资料**：`/bili_profile` 查看头像/签名/等级/粉丝，`/bili_sign <新签名>`、`/bili_avatar`（附带或引用图片，自动裁成方形）均需确认
 - **多账号**：`/va_pool save bilibili <名称>` 存多个号；命令加 `-a <名称>`、LLM 工具传 `account` 即可指定账号，
   待确认操作会记住发起时的账号，确认时仍用那个号执行；定时巡检对池里每个号分别续期
-- **抗风控**：所有请求串行并随机间隔；自动补 buvid3/4 与 bili_ticket；写操作前随机停顿；按账号计的频率闸门
+- **抗风控**：所有请求串行并随机间隔；自动补 buvid3/4、_uuid、b_nut 与 bili_ticket；带登录态的请求统一使用抖音浏览器的真实 UA / Client Hints；写操作前随机停顿；按账号计的频率闸门
   （回复 30 次/天、发评论 10 次/天、改资料 5 次/天）；同一账号 24 小时内不发重复内容；内容带链接直接拦截；
   写操作遇到 -352/-412/验证码/重复评论等风控码时，该账号写操作熔断 `risk_cooldown_minutes`（默认 60 分钟）并推送告警
 
@@ -131,17 +131,32 @@
 超过 `browse_sync_max_minutes` 的转后台看完再推送。Gemini / MiMo **默认关闭**（`gemini_enabled` / `mimo_enabled`）。
 
 ### 🎬 创作者操作（抖音 / B站，平台可扩展）
-> 发布、删除、回复评论都是**危险操作**：命令只生成预览和 4 位确认码，管理员发送 `/va_confirm <码>` 后才执行（默认 60 秒内有效）。
+> 发布、删除、回复评论都是**危险操作**：命令只生成预览和 4 位确认码，管理员发送 `/va_confirm <码>` 后才执行
+> （发布默认 12 小时内有效，其余 60 秒；待审批的申请保存在磁盘上，插件重载、容器重启都不会丢）。
 > 操作作用于账号池里**当前使用中**的账号，预览里会写明账号名。
 
 - **发布视频**：`/va_upload 标题 #话题` 时附带视频、引用一条视频消息，或在 2 分钟内补发视频；也可让 Agent 通过 `video_action upload` 发起
   - **B站投稿**：`/va_upload bilibili 标题 #话题 [tid=分区]`，preupload → upos 分片上传（失败自动重试 3 次）→ 上传封面 → `add/v3` 提交；
     同一条消息里带一张图片作为封面，不带就取视频第 1 秒；至少 1 个话题；分区默认 `bili_upload_tid`（21=日常）；按账号 5 次/天、间隔 ≥10 分钟
+- **发布图文**：`/va_post [平台] [仅自己可见|好友可见] [AI] 标题 #话题`，第二行起是正文，图片附在同一条消息里或引用图片消息；
+  也可以对 AI 说“把这几张图发成抖音图文，仅自己可见”（`video_action post`）。都要管理员确认后才发布
+  - **B站**：发图文动态（opus，带标题），图片传到 B站图床 → `submit_check` 预检 → `create/dyn`，最多 18 张；
+    支持仅自己可见、AI 创作声明；`/va_delete` 填动态 ID 或 `opus/` 链接可删除
+  - **抖音**：创作中心“发布图文”页自动操作，最多 35 张，标题最多 20 字；支持仅自己/好友可见、自主声明“内容由AI生成”
+  - 视频发布同样支持 `仅自己可见 / 好友可见` 与 AI 声明（抖音），发布次数与视频共用“发布”的频率限制
 - **删除作品**：`/va_works` 列出最近作品，`/va_delete <序号|链接|ID>`。B站 Web 端删稿要求短信验证码，插件会自动改为「仅自己可见」，要彻底删除再到 App / 创作中心操作
 - **评论精选回复**：`/va_reply [序号|链接|ID]`（默认最新作品）读取 48 小时内的一级评论，按点赞取前 10 条、随机挑 1~5 条，
   结合视频内容（复用 `understand_video` 的分析流程，按作品缓存）和 `creator_reply_style` 账号风格由 LLM 起草回复；
   可 `/va_edit <码> <序号> <新回复>` 修改、`/va_confirm <码> 1 3` 只发部分。作者本人、已回复过的评论自动跳过，多条之间随机间隔 4~9 秒
 - 浏览器自动化失败时会把创作者中心截图发回，方便判断是未登录、验证码还是页面改版
+- **与内容生产插件联动**（如 `astrbot_plugin_media_gen`）：
+  - `publish_request(event, 视频, 标题, 话题, 平台, caller=插件名, caller_ref=任务号, confirm_ttl=秒)`：提交发布申请，照常走管理员审批；
+    发布成功 / 失败 / 被拒 / 过期后回调 `await <caller>.on_publish_result(result)`，带作品 ID 和链接；
+    所有结果也写入 `accounts/creator/published.jsonl`，可用 `publish_history(caller)` 查询
+  - `post_request(event, 图片列表, 标题, 正文, 话题, 平台, visibility=, ai_generated=, caller=, caller_ref=)`：提交图文发布申请，
+    同样走审批和结果回传（`result["kind"] == "images"`）
+  - `ops_insight(platform="", days=7)`：给选题用的运营摘要（约 2KB）：账号数据与变化、同类作者对比、最近/表现最好的作品、
+    平台热点（抖音热搜词需要浏览器在跑，B站热门）、本插件发布过的内容的表现；只读，缓存 10 分钟，不会抛异常
 - 新平台只需在 `services/creator/` 实现 `CreatorPlatform`（`list_works / upload / delete / list_comments / reply_comment` 等）并登记到 `REGISTRY`，
   命令里写 `/va_works bilibili` 这样的平台参数即可复用全部流程
 
@@ -156,17 +171,22 @@
 - Python 依赖详见 [`requirements.txt`](requirements.txt)
 - **抖音浏览器（可选）**：公开视频解析、创作中心数据、消息巡检都走 HTTP，不需要浏览器；
   搜索、评论、发布、扫码登录需要 Chromium + 显示环境（抖音已拦截纯 Python 签名与无头浏览器）。
-  插件发现装了 playwright 但没下载 Chromium 时会**自动下载**；系统依赖和 Xvfb 需要自己装：
+  插件发现装了 playwright 但没下载 Chromium 时会**自动下载**：先测速，国内一般选 npmmirror 镜像（约 10MB/s，
+  官方 CDN 国内约 0.1MB/s），不下载用不到的 headless shell。Linux 容器里（root + apt）还会在后台装**正式版 Google Chrome**
+  （Chromium 的浏览器品牌和普通用户不同，容易被识别），安装包缓存在 `data/plugin_data/…/browser_cache/`，
+  容器重建后不用再下（dl.google.com 国内没有镜像，首次约 10 分钟）。Python 依赖由 AstrBot 安装，默认走阿里云 PyPI 镜像。
+  手动安装（系统依赖和 Xvfb 需要自己装）：
   ```bash
-  playwright install --with-deps chromium
+  PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright python -m playwright install --with-deps --no-shell chromium
   # Linux 无桌面环境（含 Docker）还需要 Xvfb，插件会自动启动 :99
   apt install -y xvfb
   ```
   官方 Docker 镜像（`soulter/astrbot`）默认不含以上组件，需在容器内安装，或基于官方镜像构建：
   ```dockerfile
   FROM soulter/astrbot:latest
+  ENV PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright
   RUN apt-get update && apt-get install -y --no-install-recommends xvfb \
-      && pip install playwright && playwright install --with-deps chromium \
+      && pip install playwright && playwright install --with-deps --no-shell chromium \
       && rm -rf /var/lib/apt/lists/*
   ```
   装好后发送 `/dy_restart` 即可，无需重启 AstrBot。
@@ -176,7 +196,9 @@
 2. 私聊机器人发送 **`/va_setup`**（别名「插件体检」），按清单逐项处理：每项都写了下一步怎么做
 3. 常用设置直接说中文即可，例如“用硅基流动的免费语音转写，密钥是 sk-xxx”“打开自动解析链接”“看视频抽 6 帧”；
    修改需要管理员确认，**密钥只能私聊设置**
-4. 要用账号功能：私聊发送 `/bili_login`、`/dy_login` 扫码；再私聊发送 `/va_notify` 接收审批和告警
+4. 要用账号功能：私聊发送 `/bili_login`、`/dy_login` 扫码
+5. 第一次用管理员命令时，插件会问要不要从 AstrBot 管理员里选**插件管理员**（回复 `/va_admins 1 3`、`全部`、`我` 或 `跳过`）：
+   选中的人负责审批，并在私聊里收到审批和告警，不用再单独 `/va_notify`
 
 ## ⚙️ 配置选项
 
@@ -234,7 +256,8 @@
 ### 创作者操作
 | 配置项 | 描述 | 默认值 |
 |--------|------|--------|
-| `confirm_timeout_seconds` | 危险操作确认有效期（评论回复至少 300 秒） | `60` |
+| `publish_confirm_minutes` | 发布申请确认有效期（分钟，最长 1440） | `720` |
+| `confirm_timeout_seconds` | 其他危险操作确认有效期（评论回复至少 300 秒） | `60` |
 | `reply_max_comments` | 每次精选回复最多几条（1~5） | `5` |
 | `reply_window_hours` | 只看最近多少小时的评论 | `48` |
 | `creator_reply_style` | 账号回复风格（给 LLM 的人设/语气） | `""` |
@@ -270,6 +293,8 @@ Bot：这个视频展示了...（AI详细分析）
 ```
 /va_accounts [deep]  → 查看各平台账号与 AI 服务状态（别名 /账号状态；deep 实测连通性）
 /va_logout <平台>     → 注销 douyin / bilibili 登录态
+/va_post [平台] [仅自己可见] [AI] 标题 #话题  → 发布图文（图片附在消息里；第二行起正文；别名「发图文」）
+/va_admins [1 3|全部|我|清空|跳过] → 从 AstrBot 管理员里选插件管理员（别名「插件管理员」；也可在 WebUI 设置页勾选）
 /va_setup            → 插件体检：环境、账号、模型、转写、告警会话逐项检查并给出下一步（别名「插件体检」「快速配置」）
 /bili_login          → B站扫码登录（仅私聊）
 /dy_login            → 抖音扫码登录（仅私聊）
@@ -372,7 +397,44 @@ astrbot_plugin_videos_analysis/
 
 ## 🔄 更新日志
 
-### v0.11.0（当前版本）
+### v1.0.0-rc.1（当前版本）
+- 🏷️ 显示名改为「短视频运营助手」，插件 ID 不变（老用户直接更新，配置和登录态都保留）；更正作者与仓库信息
+  （v0.3.0 的重构提交误把作者和仓库写成了别人的）
+- 📱 抖音新设备验证引导：写操作遇到"短信验证码 / 原设备扫码"时，自动切到原设备扫码，把二维码发给执行确认的管理员；
+  扫码后自动解除写操作暂停并通知（不会点"获取验证码"，不给账号绑定手机发短信）
+- 🧪 新增自动化测试（`pytest`，35 项）：脱敏、抖音链接识别、设置解析、发布选项、插件管理员、审批持久化/过期/拒绝/推送、客户端身份；
+  没装 AstrBot 也能跑
+
+### v0.14.1
+- 🛡️ 环境一致性（不靠降频降低风控）：
+  - 所有带登录态的 HTTP 请求统一使用抖音浏览器的真实 UA 与 Client Hints（记录在 `accounts/identity.json`），
+    不再混用 Windows Chrome 90~131、Firefox、iPhone 等七八套写死的 UA
+  - 抖音创作中心读接口在浏览器里同源请求（真实 Chrome 的 TLS 指纹与 cookie），浏览器未就绪才退回 aiohttp
+  - 去掉伪装成百度爬虫、旧版抖音 App 的下载重试；手机端兜底请求不再带 cookie
+  - 去掉 Playwright 默认的 `--disable-popup-blocking`、`--disable-extensions` 等启动参数
+  - 用 Chromium 时后台安装正式版 Google Chrome（`douyin_browser_install_chrome`，默认开），下次重载切换，登录态保留
+  - B站补齐网页端本来就有的 `_uuid`、`b_nut` 设备 cookie
+- 体检里显示抖音浏览器是 Google Chrome 还是 Chromium
+- ⚡ 浏览器自动安装走测速后最快的源（国内 npmmirror 约 10MB/s，官方约 0.1MB/s），不装 headless shell；Chrome 安装包缓存到数据目录，容器重建后秒装
+
+### v0.14.0
+- 🖼️ 图文发布：B站图文动态（HTTP，含预检）、抖音创作中心“发布图文”；`/va_post`、`video_action post`、对外 `post_request`
+- 🏷️ 发布选项：仅自己可见 / 好友可见、声明“内容由 AI 生成”（抖音视频与图文、B站图文），审批预览里会写明
+- 🗑️ B站 `/va_delete` 支持删除图文/动态；两个平台的图文都可 `dry_run` 预检（填好表单、传完图片但不发布）
+- 修复：发布申请里的可见范围选项被丢弃
+
+### v0.13.0
+- 🔐 插件管理员：从 AstrBot 管理员里选（`/va_admins` 或 WebUI 设置页）；没设置时，管理员第一次在私聊里用插件命令或提交审批会被询问一次（12 小时内不重复，可选跳过）
+  - 选中的人才能批准/拒绝危险操作，其他 AstrBot 管理员发起的操作变成申请交给他们审批；WebUI 面板不受名单限制
+  - 审批和告警自动推送到插件管理员的私聊（私聊过机器人就记住会话；QQ 号在 aiocqhttp 上直接推导）
+  - AstrBot 管理员列表实时读取，在 AstrBot 里取消某人的管理员身份立即失效；设置时会自动把操作者本人加入，避免把自己锁在外面
+
+### v0.12.0
+- 🔗 与内容生产插件联动：待审批申请持久化（重载、重启不丢，暂存素材保留）；发布申请默认 12 小时有效（`publish_confirm_minutes`）；
+  `publish_request` 支持 `caller` / `caller_ref`，结果回调 `on_publish_result` 并记入发布日志；新增 `ops_insight` 运营洞察与 `publish_history`
+- 📈 作品列表带播放量（抖音、B站）
+
+### v0.11.0
 - ⚡ 抖音解析改为纯 HTTP：先读公开分享页（约 0.5 秒，无水印 1080p），私密/受限作品再用浏览器签名；
   支持 `douyin.com/video|note`、`modal_id` 等长链接
 - ⚡ 创作中心数据、消息、作品列表改为直接 HTTP 读取（10~20 秒 → 约 1 秒），接口异常时自动回退页面读取
@@ -448,6 +510,11 @@ astrbot_plugin_videos_analysis/
 
 - Bug 报告：[提交 Issue](https://github.com/miaoxutao123/astrbot_plugin_videos_analysis/issues)
 - 代码贡献：Fork 项目并提交 PR
+- 运行测试（不需要安装 AstrBot）：
+  ```bash
+  pip install pytest pytest-asyncio -r requirements.txt
+  python -m pytest
+  ```
 
 ## 📄 许可证
 

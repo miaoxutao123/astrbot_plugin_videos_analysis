@@ -20,6 +20,7 @@ import aiohttp
 
 from astrbot.api import logger
 
+from ...utils import client_identity
 from ...utils.paths import CREATOR_DIR
 from .. import bili_account, bilibili_service
 from .base import Comment, CreatorPlatform, OpResult, Work
@@ -184,7 +185,7 @@ class BilibiliCreator(CreatorPlatform):
             bvid = arc.get("bvid", "")
             works.append(Work(
                 id=bvid, title=arc.get("title") or "(无标题)", create_time=int(arc.get("ptime") or arc.get("ctime") or 0),
-                digg=int(stat.get("like") or 0), comments=int(stat.get("reply") or 0),
+                digg=int(stat.get("like") or 0), comments=int(stat.get("reply") or 0), views=int(stat.get("view") or 0),
                 url=f"https://www.bilibili.com/video/{bvid}",
             ))
         return works[:limit]
@@ -200,6 +201,8 @@ class BilibiliCreator(CreatorPlatform):
         if m := bilibili_service.REG_B23.search(ref):
             info = await bilibili_service.parse_b23(m.group(0))
             return info["bvid"] if info else None
+        if m := re.search(r"(?:opus/|t\.bilibili\.com/|^)(\d{15,20})(?:[/?#]|$)", ref):
+            return m.group(1)  # 图文/动态（只用于删除）
         return None
 
     async def _view(self, bvid: str) -> dict:
@@ -231,7 +234,7 @@ class BilibiliCreator(CreatorPlatform):
             if url:
                 os.makedirs(bilibili_service.BILI_DOWNLOAD_DIR, exist_ok=True)
                 out = os.path.join(bilibili_service.BILI_DOWNLOAD_DIR, f"{work_id}_head{max_seconds}.mp4")
-                hdr = f"Referer: https://www.bilibili.com/\r\nUser-Agent: {bili_account.UA}\r\n"
+                hdr = f"Referer: https://www.bilibili.com/\r\nUser-Agent: {client_identity.ua()}\r\n"
                 proc = await asyncio.create_subprocess_exec(
                     "ffmpeg", "-y", "-loglevel", "error", "-headers", hdr, "-t", str(max_seconds), "-i", url,
                     "-c", "copy", out, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
@@ -500,7 +503,7 @@ class BilibiliCreator(CreatorPlatform):
         if pre.get("OK") != 1:
             raise RuntimeError(f"申请上传失败: {pre.get('message') or pre}")
         url = f"https:{pre['endpoint']}/{pre['upos_uri'].removeprefix('upos://')}"
-        up_headers = {"X-Upos-Auth": pre["auth"], "User-Agent": bili_account.UA, "Referer": "https://member.bilibili.com/"}
+        up_headers = {"X-Upos-Auth": pre["auth"], "User-Agent": client_identity.ua(), "Referer": "https://member.bilibili.com/"}
         chunk_size = int(pre.get("chunk_size") or 10 * 1024 * 1024)
         chunks = max(1, -(-size // chunk_size))
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=300)) as s:
@@ -617,9 +620,101 @@ class BilibiliCreator(CreatorPlatform):
         await self._check_risk(data, write=True)
         return OpResult(False, f"提交稿件失败: {self._err(data)}", data)
 
+    # ── 图文（动态） ─────────────────────────────────────
+
+    max_images = 18
+
+    async def _upload_dyn_image(self, path: str, cookies: dict) -> dict:
+        form = aiohttp.FormData()
+        form.add_field("file_up", open(path, "rb"), filename=os.path.basename(path), content_type="image/jpeg")
+        form.add_field("biz", "new_dyn")
+        form.add_field("category", "daily")
+        form.add_field("csrf", cookies.get("bili_jct", ""))
+        await _pace()
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as s:
+            async with s.post(f"{API}/x/dynamic/feed/draw/upload_bfs", data=form,
+                              headers=bili_account.headers(cookies, "https://t.bilibili.com/")) as r:
+                data = await r.json(content_type=None)
+        if data.get("code") != 0:
+            await self._check_risk(data, write=True)
+            raise RuntimeError(f"上传图片失败: {self._err(data)}")
+        d = data["data"]
+        return {"img_src": d["image_url"], "img_width": d["image_width"], "img_height": d["image_height"],
+                "img_size": round(os.path.getsize(path) / 1024, 3)}
+
+    def _dyn_request(self, pics: list[dict], title: str, text: str, tags: list[str], mid: str, **opts) -> dict:
+        """与 t.bilibili.com 发布器一致的 dyn_req；话题写成 #话题# 放在正文末尾。"""
+        body = (text or "").strip()
+        if tags:
+            body = (body + "\n" if body else "") + " ".join(f"#{t}#" for t in tags)
+        option = {"aigc": 1 if opts.get("ai_generated") else 2, "pic_mode": 0}
+        if opts.get("visibility") == "private":
+            option["private_pub"] = 1
+        req = {
+            "content": {"contents": [{"raw_text": body or "分享图片", "type": 1, "biz_id": ""}]},
+            "pics": pics, "scene": 2, "upload_id": f"{mid}_{int(time.time())}_{random.randint(1000, 9999)}",
+            "meta": {"app_meta": {"from": "create.dynamic.web", "mobi_app": "web"}}, "option": option,
+        }
+        if title:
+            req["content"]["title"] = title
+        return req
+
+    async def _dyn_post(self, path: str, body: dict, cookies: dict, params: dict | None = None) -> dict:
+        await _pace()
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as s:
+            async with s.post(f"{API}{path}", params={"csrf": cookies.get("bili_jct", ""), **(params or {})}, json=body,
+                              headers=bili_account.headers(cookies, "https://t.bilibili.com/")) as r:
+                return await r.json(content_type=None)
+
+    async def post_images(self, images: list[str], title: str, text: str, tags: list[str], **opts) -> OpResult:
+        """发图文动态（opus）：逐张上传到 B站图床 → submit_check 预检 → create/dyn。dry_run=True 只预检不发布。"""
+        if reason := self._write_precheck():
+            return OpResult(False, f"已拦截：{reason}")
+        images = [p for p in images if os.path.isfile(p)][:self.max_images]
+        if not images:
+            return OpResult(False, "没有可发布的图片")
+        title = (title or "").strip()[:20]
+        tags = [t.strip().lstrip("#")[:20] for t in tags if t.strip().lstrip("#")][:10]
+        dry = bool(opts.get("dry_run"))
+        if not dry and (refused := await GUARD.acquire(self.name, "upload", self._sent_key())):
+            return self._guard_refused(refused)
+        try:
+            cookies = await self._cookies()
+            pics = [await self._upload_dyn_image(p, cookies) for p in images]
+            req = self._dyn_request(pics, title, text, tags, cookies.get("DedeUserID", "0"), **opts)
+            check = await self._dyn_post("/x/dynamic/feed/create/submit_check",
+                                         {"content": req["content"], "pics": pics, "scene": 2, "create_option": req["option"]}, cookies)
+            if check.get("code") != 0:
+                await self._check_risk(check, write=True)
+                return OpResult(False, f"B站预检没通过: {self._err(check)}", check)
+            if dry:
+                return OpResult(True, f"预检通过（{len(pics)} 张图，未发布）", {"dyn_req": req})
+            data = await self._dyn_post("/x/dynamic/feed/create/dyn", {"dyn_req": req}, cookies, {"platform": "web"})
+        except Exception as e:
+            logger.warning(f"[bili] 发布图文失败: {e}")
+            return OpResult(False, f"发布图文失败: {e}")
+        if data.get("code") == 0:
+            dyn_id = str((data.get("data") or {}).get("dyn_id_str") or (data.get("data") or {}).get("dyn_id") or "")
+            vis = "（仅自己可见）" if opts.get("visibility") == "private" else ""
+            return OpResult(True, f"已用「{self.account_label}」发布图文 {dyn_id}{vis}", {"dyn_id": dyn_id})
+        await self._check_risk(data, write=True)
+        return OpResult(False, f"发布图文失败: {self._err(data)}", data)
+
+    async def _delete_dynamic(self, dyn_id: str) -> OpResult:
+        if refused := await GUARD.acquire(self.name, "delete", self._sent_key()):
+            return self._guard_refused(refused)
+        cookies = await self._cookies()
+        data = await self._dyn_post("/x/dynamic/feed/operate/remove", {"dyn_id_str": dyn_id}, cookies)
+        if data.get("code") == 0:
+            return OpResult(True, f"已删除图文/动态 {dyn_id}")
+        await self._check_risk(data, write=True)
+        return OpResult(False, f"删除动态失败: {self._err(data)}", data)
+
     async def delete(self, work_id: str, title: str = "") -> OpResult:
         if reason := self._write_precheck():
             return OpResult(False, f"已拦截：{reason}")
+        if m := re.search(r"(?:opus/|t\.bilibili\.com/|^)(\d{15,20})$", work_id.strip().rstrip("/")):
+            return await self._delete_dynamic(m.group(1))  # 图文/动态 ID 是 18~19 位纯数字
         try:
             aid = await self._aid(work_id)
         except RuntimeError:

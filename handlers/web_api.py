@@ -43,6 +43,8 @@ class PanelEvent:
         self.message_obj = None
         self._plugin = plugin
 
+    _panel = True  # WebUI 登录即最高权限，插件管理员名单对面板不生效
+
     def is_admin(self) -> bool:
         return True
 
@@ -190,6 +192,19 @@ def register_web_apis(plugin) -> None:
                       "help": "关闭后本页面不可用，需在插件配置里重新打开", "secret": False,
                       "value": plugin.config.get("debug_webui_enabled", False)})
         return _ok({"items": items})
+
+    async def admins_get(**kwargs):
+        a = plugin.admins
+        return _ok({"configured": a.configured, "candidates": a.candidates(), "text": a.status_text()})
+
+    async def admins_set(**kwargs):
+        """面板里勾选插件管理员：ids 为空表示清空（恢复为所有 AstrBot 管理员都可审批）。"""
+        b = await body()
+        a, cands = plugin.admins, plugin.admins.candidates()
+        chosen = {str(i) for i in b.get("ids") or []}
+        picks = [str(c["index"]) for c in cands if c["id"] in chosen]
+        msg = a.select(PanelEvent(plugin, username=request.username or ""), picks or ["清空"])
+        return _ok({"message": msg, "text": a.status_text()})
 
     async def settings_save(**kwargs):
         """面板里的修改由已登录 WebUI 的管理员本人操作，直接生效（不再走聊天审批），并自动重载插件。"""
@@ -344,6 +359,8 @@ def register_web_apis(plugin) -> None:
         ("report", report_get, "GET", "运营数据报表"),
         ("inbox", inbox_get, "GET", "消息概况"),
         ("setup", setup_get, "GET", "插件体检"),
+        ("admins", admins_get, "GET", "插件管理员"),
+        ("admins/set", admins_set, "POST", "设置插件管理员"),
         ("inbox/patrol", inbox_patrol, "POST", "立即巡检消息"),
         ("job", job, "GET", "后台任务状态"),
         ("cache", cache_get, "GET", "缓存占用"),

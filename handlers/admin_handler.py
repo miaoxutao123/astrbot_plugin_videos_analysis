@@ -74,7 +74,7 @@ async def handle_douyin_login(plugin, event):
         reason = plugin.browser_signer_error or "未知原因"
         yield event.plain_result(
             f"抖音浏览器签名引擎未就绪：{reason}\n\n"
-            "需要: pip install playwright && playwright install --with-deps chromium\n"
+            "需要: pip install playwright && PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright python -m playwright install --with-deps --no-shell chromium\n"
             "Linux 无桌面还需: apt install xvfb\n"
             "装好后发送 /dy_restart 重启签名引擎。"
         )

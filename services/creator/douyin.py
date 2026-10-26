@@ -20,14 +20,15 @@ import aiohttp
 
 from astrbot.api import logger
 
+from ...utils import client_identity
 from ...utils.paths import DOWNLOAD_DIR_DY, IMAGE_DIR
 from .base import Comment, CreatorPlatform, OpResult, Work
 from .human import GUARD, human_click, human_fill, human_hover, human_type, pause
 
 CREATOR = "https://creator.douyin.com"
 SELF_URL = "https://www.douyin.com/user/self"
-DESKTOP_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-              "Chrome/131.0.0.0 Safari/537.36")
+# 浏览器内直接请求创作中心接口时停靠的页面：创作中心前端自己最先请求的接口，返回 JSON，不渲染
+CREATOR_LANDING = "/aweme/v1/creator/user/info/"
 UPLOAD_URL = f"{CREATOR}/creator-micro/content/upload"
 MANAGE_URL = f"{CREATOR}/creator-micro/content/manage"
 # 设备参数（系统/浏览器/屏幕等）由 fetch_signed_api 按浏览器真实环境填充
@@ -40,6 +41,9 @@ WEB_PARAMS = {
 
 # 写接口返回这些码说明账号被风控/要求验证，熔断该账号的写操作
 WRITE_RISK_CODES = {-1, 8, 2154, 2155, 3057, 2496}
+# 新设备验证弹窗的文字特征，和"使用原设备扫码"后等待扫码的最长时间
+_VERIFY_MARKS = ("短信验证码", "原设备扫码", "验证身份", "身份验证")
+VERIFY_WAIT = 180
 
 
 class CaptchaError(RuntimeError):
@@ -72,11 +76,11 @@ class DouyinCreator(CreatorPlatform):
             raise RuntimeError(f"抖音风控冷却中：{s.risk_status}")
         return s
 
-    async def _screenshot(self, page, tag: str) -> str:
+    async def _screenshot(self, page, tag: str, full: bool = False) -> str:
         try:
             os.makedirs(IMAGE_DIR, exist_ok=True)
             path = os.path.join(IMAGE_DIR, f"creator_{tag}_{int(time.time())}.png")
-            await page.screenshot(path=path, full_page=False)
+            await page.screenshot(path=path, full_page=full)
             return path
         except Exception:
             return ""
@@ -112,8 +116,73 @@ class DouyinCreator(CreatorPlatform):
             return f"已拦截：{refused}（防风控频率限制）"
         return ""
 
+    async def _verify_dialog(self, page) -> bool:
+        for mark in _VERIFY_MARKS:
+            try:
+                if await page.get_by_text(mark).count():
+                    return True
+            except Exception:
+                pass
+        return False
+
+    async def _start_device_verify(self, what: str) -> OpResult | None:
+        """
+        新设备上第一次写操作时，抖音会弹"短信验证码 / 使用原设备扫码"验证本人，接口返回空。
+
+        没有弹窗返回 None。有弹窗时切到"使用原设备扫码"，把二维码截图返回给执行确认的管理员，
+        后台等扫码完成（最多 VERIFY_WAIT 秒）：完成后解除写操作暂停并通知管理员。
+        不点"获取验证码"——那会给账号绑定的手机发短信，机器人也不该代收验证码。
+        """
+        s = self.signer
+        page = s._page
+        if not page:
+            return None
+        was_idle = await s._set_idle(False)
+        found = False
+        for _ in range(12):  # 弹窗在接口返回后才渲染
+            if found := await self._verify_dialog(page):
+                break
+            await asyncio.sleep(0.5)
+        if not found:
+            if was_idle:
+                await s._set_idle(True)
+            return None
+        try:
+            await page.get_by_text("使用原设备扫码").first.click(timeout=5000)
+            await asyncio.sleep(3)  # 等二维码加载
+        except Exception:
+            pass
+        shot = await self._screenshot(page, "device_verify")
+        asyncio.get_running_loop().create_task(self._await_device_verify(page, was_idle))
+        return OpResult(False, (
+            f"{what}需要先验证本人：抖音把机器人的浏览器当成了新设备。\n"
+            f"请用登录这个抖音号的手机打开抖音 App，点首页左上角或「我」→右上角 ≡ →「扫一扫」，扫描下面的二维码"
+            f"（{VERIFY_WAIT // 60} 分钟内有效）。验证一次后这台设备就被信任，之后不用再扫。\n"
+            f"扫码完成后插件会通知你，再重新提交刚才的操作即可。"), screenshot=shot)
+
+    async def _await_device_verify(self, page, was_idle: bool) -> None:
+        notify = self.plugin.accounts.notify
+        try:
+            for _ in range(VERIFY_WAIT // 2):
+                await asyncio.sleep(2)
+                if not await self._verify_dialog(page):
+                    self.plugin.accounts.clear_risk(self.name)
+                    logger.info("[creator] 抖音设备验证已完成")
+                    await notify("✅ 抖音设备验证已完成，写操作已恢复，可以重新提交刚才的操作。")
+                    return
+            await notify("⌛ 抖音设备验证二维码已过期（没有扫码）。重新提交操作会再次生成二维码。")
+        except Exception as e:
+            logger.warning(f"[creator] 等待抖音设备验证失败: {e}")
+        finally:
+            if was_idle:
+                await self.signer._set_idle(True)
+
     async def _write_failed(self, data: dict | None, what: str) -> OpResult:
-        """统一处理写接口失败：风控类错误熔断该账号的写操作。"""
+        """统一处理写接口失败：风控类错误熔断该账号的写操作；新设备验证则引导原设备扫码。"""
+        if data and data.get("status_code") == -1 and "空响应" in str(data.get("status_msg")):
+            if verify := await self._start_device_verify(what):
+                await self.plugin.accounts.trip_risk(self.name, None, f"{what}需要设备验证（扫码后自动解除）")
+                return verify
         if not data:
             msg = "接口无响应（可能触发风控）"
         elif data.get("status_code") == -1 and "空响应" in str(data.get("status_msg")):
@@ -162,7 +231,8 @@ class DouyinCreator(CreatorPlatform):
             works.append(Work(
                 id=str(a.get("aweme_id")), title=a.get("desc") or a.get("item_title") or "(无标题)",
                 create_time=int(a.get("create_time") or 0), digg=st.get("digg_count", 0),
-                comments=st.get("comment_count", 0), url=f"https://www.douyin.com/video/{a.get('aweme_id')}",
+                comments=st.get("comment_count", 0), views=int(st.get("play_count") or 0),
+                url=f"https://www.douyin.com/video/{a.get('aweme_id')}",
             ))
         return works
 
@@ -308,6 +378,8 @@ class DouyinCreator(CreatorPlatform):
                 await human_type(page, f" #{tag}")
                 await pause(0.6, 1.2)
                 await page.keyboard.press("Space")
+            await self._dismiss_tips(page)
+            await self._apply_publish_opts(page, opts)
 
             # 等视频上传完成：出现“重新上传”说明文件已传完；“上传失败”直接退出
             for _ in range(300):
@@ -333,6 +405,109 @@ class DouyinCreator(CreatorPlatform):
         except Exception as e:
             logger.warning(f"[creator] 抖音发布失败: {e}")
             return OpResult(False, f"发布失败: {e}", screenshot=await self._screenshot(page, "upload_err"))
+        finally:
+            await page.close()
+
+    # ── 图文 ─────────────────────────────────────────────
+
+    max_images = 35
+    _VISIBILITY = {"private": "仅自己可见", "friends": "好友可见"}
+
+    async def _dismiss_tips(self, page) -> None:
+        """首次进入发布页会弹“发文助手”引导，点掉。"""
+        btn = page.get_by_role("button", name="完成", exact=True)
+        if await btn.count():
+            try:
+                await human_click(page, btn.first)
+                await pause(0.5, 1.2)
+            except Exception:
+                pass
+
+    async def _apply_publish_opts(self, page, opts: dict) -> None:
+        """自主声明（内容由 AI 生成）与可见范围，视频和图文发布页通用。"""
+        if opts.get("ai_generated"):
+            entry = page.get_by_text("请选择自主声明")
+            if await entry.count():
+                await human_click(page, entry.first)
+                await pause(0.8, 1.5)
+                await human_click(page, page.get_by_text("内容由AI生成", exact=True).first)
+                await pause(0.4, 0.9)
+                await human_click(page, page.get_by_role("button", name="确定", exact=True).first)
+                await pause(0.6, 1.2)
+        label = self._VISIBILITY.get(opts.get("visibility") or "")
+        if label:
+            await human_click(page, page.get_by_text(label, exact=True).first)
+            await pause(0.4, 0.9)
+
+    async def post_images(self, images: list[str], title: str, text: str, tags: list[str], **opts) -> OpResult:
+        """创作中心“发布图文”：选图 → 标题/描述/话题 → 声明与可见范围 → 等图片传完 → 发布（dry_run=True 不点发布）。"""
+        if not opts.get("dry_run") and (refused := await self._write_gate("upload")):
+            return OpResult(False, refused)
+        images = [p for p in images if os.path.isfile(p)][:self.max_images]
+        if not images:
+            return OpResult(False, "没有可发布的图片")
+        try:
+            page = await self._creator_page(f"{UPLOAD_URL}?default-tab=3")
+        except CaptchaError as e:
+            return OpResult(False, str(e))
+        try:
+            if await self._is_login_page(page):
+                return OpResult(False, "创作者中心未登录，先 /dy_login 扫码", screenshot=await self._screenshot(page, "note_login"))
+            picker = page.locator("input[type=file][accept*='image']")
+            if not await picker.count():
+                await human_click(page, page.get_by_text("发布图文", exact=True).first)
+                await pause()
+            await picker.first.set_input_files(images)
+            await page.wait_for_url(re.compile(r".*/content/post/image.*"), timeout=60000)
+
+            await pause(1.5, 3.0)
+            await self._check_captcha(page, "上传图片")
+            await self._dismiss_tips(page)
+            title_input = page.locator("input[placeholder*='标题']")
+            if title and await title_input.count():
+                await human_fill(page, title_input.first, title[:20])
+                await pause()
+            editor = page.locator(".zone-container, [contenteditable='true']").first
+            await human_click(page, editor)
+            if text:
+                await human_type(page, text[:900])
+            for tag in tags:
+                await human_type(page, f" #{tag}")
+                await pause(0.6, 1.2)
+                await page.keyboard.press("Space")
+            await self._apply_publish_opts(page, opts)
+
+            # 等所有图片传完：出现“已添加N张图片”且没有“上传中”
+            done = page.get_by_text(f"已添加{len(images)}张图片")
+            for _ in range(90):
+                if await page.get_by_text("上传失败").count():
+                    return OpResult(False, "抖音提示图片上传失败", screenshot=await self._screenshot(page, "note_fail"))
+                if await done.count() and not await page.get_by_text("上传中").count():
+                    break
+                await asyncio.sleep(2)
+            else:
+                return OpResult(False, "等待图片上传完成超时（3 分钟）", screenshot=await self._screenshot(page, "note_timeout"))
+
+            if opts.get("dry_run"):  # 预检：表单填好、图片传完就停，不点发布
+                shot = await self._screenshot(page, "note_dryrun", full=True)
+                state = {"ai_declared": await page.get_by_text("内容由AI生成").count() > 0,
+                         "title": await title_input.first.input_value() if await title_input.count() else ""}
+                return OpResult(True, f"预检通过（{len(images)} 张图已上传，表单已填好，未发布）", state, screenshot=shot)
+            await pause(2.0, 4.0)
+            await human_click(page, page.get_by_role("button", name="发布", exact=True))
+            await pause(1.5, 3.0)
+            await self._check_captcha(page, "发布图文")
+            try:
+                await page.wait_for_url(re.compile(r".*/content/manage.*"), timeout=60000)
+            except Exception:
+                return OpResult(False, "点了发布但没跳转到作品管理页（可能需要验证码/审核弹窗）", screenshot=await self._screenshot(page, "note_publish"))
+            vis = f"（{self._VISIBILITY[opts['visibility']]}）" if opts.get("visibility") in self._VISIBILITY else ""
+            return OpResult(True, f"已发布图文{vis}，抖音审核通过后可见")
+        except CaptchaError as e:
+            return OpResult(False, str(e))
+        except Exception as e:
+            logger.warning(f"[creator] 抖音图文发布失败: {e}")
+            return OpResult(False, f"发布图文失败: {e}", screenshot=await self._screenshot(page, "note_err"))
         finally:
             await page.close()
 
@@ -477,16 +652,40 @@ class DouyinCreator(CreatorPlatform):
 
         return clean_cookie(self.plugin.effective_douyin_cookie)
 
+    @staticmethod
+    def _creator_ok(data) -> bool:
+        return isinstance(data, dict) and data.get("status_code", data.get("code", 0)) in (0, None)
+
     async def _creator_http(self, reqs: list[tuple[str, str]]) -> list[dict] | None:
-        """纯 HTTP 读创作中心接口（这些读接口只认 cookie，不需要签名）。登录失效等异常返回 None 交给页面兜底。"""
-        cookie = await self._cookie_header()
-        if "sessionid" not in cookie:
-            return None
+        """
+        直接请求创作中心读接口（只认 cookie，不需要签名）。登录失效等异常返回 None 交给页面兜底。
+
+        浏览器在跑时由浏览器发（origin_fetch：真实 Chrome 的 TLS/UA/cookie，和用户自己刷新数据页一样）；
+        浏览器没起来才用 aiohttp，UA 和 Client Hints 与浏览器保持一致。
+        """
         s = self.plugin.browser_signer
         if s and s.risk_status:
             raise RuntimeError(f"抖音风控冷却中：{s.risk_status}")
-        headers = {"User-Agent": DESKTOP_UA, "Cookie": cookie, "Referer": f"{CREATOR}/creator-micro/home",
-                   "Accept": "application/json, text/plain, */*"}
+        if s and s.is_ready:
+            try:
+                out = []
+                for i, (path, method) in enumerate(reqs):
+                    if i:
+                        await pause(0.2, 0.6)
+                    data = await s.origin_fetch(CREATOR, CREATOR_LANDING, CREATOR + path, method, {} if method == "POST" else None)
+                    if not self._creator_ok(data):
+                        logger.info(f"[douyin] 创作中心接口 {path.split('?')[0]} 返回 {str(data)[:120]}，改用页面读取")
+                        return None
+                    out.append(data)
+                return out
+            except Exception as e:
+                logger.info(f"[douyin] 浏览器内读取创作中心失败，改用页面读取: {e}")
+                return None
+        cookie = await self._cookie_header()
+        if "sessionid" not in cookie:
+            return None
+        headers = client_identity.headers(Cookie=cookie, Referer=f"{CREATOR}/creator-micro/home",
+                                          Accept="application/json, text/plain, */*")
         out = []
         try:
             async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
@@ -496,7 +695,7 @@ class DouyinCreator(CreatorPlatform):
                     async with session.request(method, CREATOR + path, headers=headers, proxy=self.plugin.douyin_proxy or None,
                                                **({"json": {}} if method == "POST" else {})) as resp:
                         data = await resp.json(content_type=None)
-                    if not isinstance(data, dict) or data.get("status_code", data.get("code", 0)) not in (0, None):
+                    if not self._creator_ok(data):
                         logger.info(f"[douyin] 创作中心接口 {path.split('?')[0]} 返回 {str(data)[:120]}，改用页面读取")
                         return None
                     out.append(data)
@@ -506,7 +705,7 @@ class DouyinCreator(CreatorPlatform):
         return out
 
     async def _creator_reads(self, reqs: list[tuple[str, str]]) -> list[dict]:
-        """读取若干创作中心接口：先纯 HTTP（约 1 秒），失败再打开创作中心首页在页面里读。"""
+        """读取若干创作中心接口：先直接请求（约 1 秒），失败再打开创作中心首页在页面里读。"""
         if (out := await self._creator_http(reqs)) is not None:
             return out
         if not self.signer.is_logged_in:

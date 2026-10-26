@@ -150,6 +150,12 @@
         "default": true,
         "hint": "空闲时隐藏抖音页面、停止动画，浏览器 CPU 从约 50% 降到约 10%。签名不受影响；遇到异常可关闭对比"
     },
+    "douyin_browser_install_chrome": {
+        "description": "自动安装正式版 Google Chrome",
+        "type": "bool",
+        "default": true,
+        "hint": "抖音浏览器是 Playwright 自带的 Chromium 时，在后台安装正式版 Google Chrome（Linux 容器内，约 120MB），下次重载插件时切换。Chromium 的浏览器品牌和普通用户不一样，容易被识别。登录态保留"
+    },
     "video_understand_method": {
         "description": "视频理解首选方式",
         "type": "string",
@@ -209,10 +215,16 @@
         "type": "int",
         "default": 30
     },
+    "publish_confirm_minutes": {
+        "description": "发布申请的确认有效期（分钟）",
+        "type": "int",
+        "default": 720,
+        "hint": "发布要先看视频，生成插件的定时任务也常在没人时提交，默认 12 小时；最长 24 小时。待审批的申请会保存到磁盘，插件重载不会丢"
+    },
     "confirm_timeout_seconds": {
         "description": "危险操作二次确认有效期（秒）",
         "type": "int",
-        "hint": "发布/删除用这个时长；评论回复至少 300 秒（需要时间审阅和修改）",
+        "hint": "删除、改资料等用这个时长；评论回复至少 300 秒；发布单独看 publish_confirm_minutes",
         "default": 60
     },
     "reply_max_comments": {

@@ -18,6 +18,7 @@ log_callback = logger.info
 
 # 路径常量
 from ..utils.paths import BILI_COOKIE_FILE as COOKIE_FILE
+from ..utils import client_identity
 from .bili_account import REFRESH_KEY, cookie_header, ensure_buvid
 from ..utils.paths import DOWNLOAD_DIR_BILI as BILI_DOWNLOAD_DIR
 from ..utils.paths import IMAGE_DIR
@@ -67,10 +68,7 @@ async def bili_request(url, return_json=True):
     if not url or not isinstance(url, str):
         return {"code": -400, "message": "Invalid URL"}
 
-    headers = {
-        "referer": "https://www.bilibili.com/",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
-    }
+    headers = client_identity.headers(Referer="https://www.bilibili.com/")
 
     try:
         timeout = aiohttp.ClientTimeout(total=30)  # 30秒超时
@@ -130,7 +128,7 @@ async def check_cookie_valid():
 
     # 增强请求头
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        **client_identity.headers(),
         "Referer": "https://space.bilibili.com/",
         "Origin": "https://space.bilibili.com",
         "Cookie": cookie_header(cookies)
@@ -175,7 +173,7 @@ async def get_login_info(cookies: dict | None = None) -> dict | None:
     if not cookies:
         return None
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        **client_identity.headers(),
         "Referer": "https://www.bilibili.com/",
         "Cookie": cookie_header(cookies),
     }
@@ -245,7 +243,7 @@ async def download_video(aid, cid, bvid, quality=16):
     os.makedirs(os.path.dirname(filename), exist_ok=True)
     headers = {
         "Referer": "https://www.bilibili.com/",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+        **client_identity.headers(),
     }
     # 流式写盘，长视频不会因为 30 秒总超时或整段读进内存而失败
     try:
@@ -325,7 +323,7 @@ async def generate_qrcode():
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(url, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+                **client_identity.headers(),
             })
             data = resp.json()
     except Exception as e:
@@ -367,7 +365,7 @@ async def check_login_status(qrcode_key):
     """检查登录状态（新版API，使用httpx）"""
     url = f"https://passport.bilibili.com/x/passport-login/web/qrcode/poll?qrcode_key={qrcode_key}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
+        **client_identity.headers(),
     }
 
     try:
@@ -545,7 +543,7 @@ async def get_video_download_url_with_cookie(bvid, quality=80, event=None):
     # 使用Cookie请求高清视频
     api_url = f"https://api.bilibili.com/x/player/playurl?avid={aid}&cid={cid}&qn={quality}&fnval=16&fourk=1"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:137.0) Gecko/20100101 Firefox/137.0",
+        **client_identity.headers(),
         "Referer": "https://www.bilibili.com/",
         "Cookie": cookie_header(cookies)
     }
@@ -611,7 +609,7 @@ async def download_video_with_cookie(aid, cid, bvid, quality=80, event=None):
 
     headers = {
         "Referer": "https://www.bilibili.com/",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:137.0) Gecko/20100101 Firefox/137.0"
+        **client_identity.headers(),
     }
 
     if isinstance(result, str):

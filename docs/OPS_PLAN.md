@@ -58,7 +58,7 @@
 |------|-----------|------|
 | 解析公开视频/图文 | `iesdouyin.com/share/note/{id}` 的 SSR `_ROUTER_DATA`，`playwm→play` + `ratio=1080p` | ✅ 纯 HTTP，约 0.5 秒，不带 cookie；偶发空数据换路径重试，私密/受限作品回退浏览器 |
 | 下载视频 | `aweme.snssdk.com/aweme/v1/play/` → douyinvod CDN | ✅ 纯 HTTP，不需要 cookie |
-| 创作中心读接口（user/info、overview、diagnosis、消息、work_list、item/list） | aiohttp + cookie | ✅ 纯 HTTP，约 1 秒；失败回退页面内 fetch |
+| 创作中心读接口（user/info、overview、diagnosis、消息、work_list、item/list） | 浏览器同源 fetch（v0.14.1）/ aiohttp + cookie | ✅ 不需要签名，约 1 秒；浏览器在跑时由浏览器发，失败回退页面内 fetch |
 | www.douyin.com 读接口（评论列表、搜索、推荐、详情） | 页面内 fetch，SDK 自动补 a_bogus | ❌ 需要 a_bogus；内置纯 Python 算法 2026-06 起失效，继续用浏览器 |
 | 所有写接口（评论、删稿、改资料、发布） | 页面内 fetch / 页面自动化 | ❌ web_protect 设备证书（bd-ticket-guard）绑定浏览器配置目录，只能在浏览器里发 |
 | 扫码登录 | 浏览器 | ❌ 登录后还要过新设备验证，留在浏览器 |
@@ -66,6 +66,37 @@
 
 浏览器常驻成本：抖音首页渲染进程约 40%~100% CPU（推荐视频 + Lottie 动画，几乎都是渲染不是 JS）。
 v0.11 在空闲时隐藏整页、停动画（`douyin_browser_low_cpu`），实测约 7%~12%，签名与页面内 fetch 不受影响。
+
+## 1.4 环境一致性（v0.14.1，实测 2026-10-26）
+
+风控看的是"这是不是同一个真人的同一台设备"，不看代码是否开源。降低风险靠环境一致，而不是混淆或降频：
+
+| 检查项 | 之前 | 现在 |
+|---|---|---|
+| navigator.webdriver / CDP 注入痕迹 | false / 无 | 不变（不靠 JS 注入伪装） |
+| 浏览器品牌（Client Hints） | Chromium 156（普通用户几乎都是 Google Chrome） | 自动安装正式版 Chrome 156 并切换，配置目录与登录态保留 |
+| 带 cookie 的 HTTP 请求 UA | Windows Chrome 90/119/120/130/131、Firefox 131/136/137、iPhone 混用 | 统一为浏览器真实 UA + sec-ch-ua（`accounts/identity.json`） |
+| 创作中心读接口 TLS 指纹 | aiohttp（Python OpenSSL，一眼可辨） | 浏览器同源 fetch，与真人刷新数据页一致 |
+| 下载重试 | 轮换百度爬虫、2021 版抖音 App UA；手机 UA 也带 cookie | 只剩桌面（浏览器身份）+ 不带 cookie 的手机端 |
+| Playwright 默认参数 | --disable-popup-blocking、--disable-extensions 等 | 去掉 |
+| B站设备 cookie | 只有 buvid3/4、bili_ticket | 补 _uuid、b_nut，随账号固定 |
+
+仍然存在、插件内无法消除的差异：
+- WebGL 是 SwiftShader（容器没有显卡）。要消除得把宿主机 GPU 透传进容器，代价和风险都大，暂不做
+- 系统是 Linux（抖音网页端里少见，但前后一致，伪装成 Windows 反而会和字体、WebGL 等矛盾）
+- B站请求仍是 aiohttp 的 TLS 指纹；若出现 -352 增多，可考虑 curl_cffi（impersonate=chrome）或改走浏览器
+- IP 信誉：家庭宽带出口、与登录地一致最重要，机房代理是最大的风险源
+
+### 自动化驱动选型（实测 2026-10-26，Google Chrome 156 + Xvfb）
+
+| 驱动 | BrowserScan bot 检测 | CDP Runtime.enable 泄露 | webdriver | 对本插件的代价 |
+|---|---|---|---|---|
+| Playwright 1.64（当前，去掉自动化参数） | Normal | 未触发 | false | — |
+| Patchright 1.64.3（阿里云 PyPI 可装） | Normal | 未触发 | false | `evaluate` 默认跑在隔离世界，看不到抖音 SDK 改过的 `fetch`，签名请求要逐处改成主世界；关掉了 Console API |
+| Camoufox（Firefox 内核） | 未测 | 不适用（Juggler 协议） | — | 换内核等于换设备：现有 Chrome 配置目录、bd-ticket-guard 设备证书和登录态全部作废，要重新扫码并过新设备验证；国内 Firefox + Linux 用户极少，反而更显眼；指纹随机化是给"多身份爬虫"设计的，单账号长期运营需要的是同一台设备不变；原作者已交接给 Clover Labs，2026 版本仍标注为实验性 |
+
+结论：当前配置在公开检测里已经和真人 Chrome 一致，暂不换驱动。Patchright 作为备选：
+若以后出现"打开页面就弹验证码"且排除了 IP/频率原因，再改成 Patchright（API 相同，需要给 SDK 相关的 evaluate 指定主世界）。
 
 ---
 
@@ -81,7 +112,7 @@ v0.11 在空闲时隐藏整页、停动画（`douyin_browser_low_cpu`），实�
 | 4 | 删除作品走接口 | 页面内 fetch `/web/api/media/aweme/delete`，失败再回退页面点击 | **是**（要拿一条测试作品验证） |
 | 5 | 可见性（仅自己可见） | `update_v2` 改权限；作为独立审批操作 `video_action(action="hide")`，删除失败时同样回退 | **是** |
 | 6 | 回复走创作者接口 / 批量回复 | `creator/comment/reply`、`multi_publish`；一次审批多条回复只发一个请求 | **是**（需要一条测试评论） |
-| 7 | **设备验证引导** | 检测到"短信验证码 / 原设备扫码"弹窗时：截取原设备二维码推给管理员；或管理员回复「验证码 123456」由插件填入（走审批同款权限：仅管理员、带操作编号） | **是** |
+| 7 | ✅ v1.0 **设备验证引导**（原设备扫码；短信验证码未做） | 检测到"短信验证码 / 原设备扫码"弹窗时：截取原设备二维码推给管理员；或管理员回复「验证码 123456」由插件填入（走审批同款权限：仅管理员、带操作编号） | **是** |
 
 ### P3 · 内容运营（数据跑通后）
 

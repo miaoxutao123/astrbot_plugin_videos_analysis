@@ -257,7 +257,7 @@ async def video_account(plugin, event, action: str, platform: str = "", target: 
 
 
 async def video_action(plugin, event, action: str, target: str = "", text: str = "", platform: str = "",
-                       account: str = "", title: str = "", tags: str = "") -> dict:
+                       account: str = "", title: str = "", tags: str = "", options: str = "") -> dict:
     if denied := _allow_request(plugin, event):
         return denied
     action = (action or "").strip().lower()
@@ -303,10 +303,42 @@ async def video_action(plugin, event, action: str, target: str = "", text: str =
     elif action == "upload":
         from .creator_tool import handle_creator_upload
 
-        return await handle_creator_upload(plugin, event, target, title or text, tags, platform or "douyin", account)
+        return await handle_creator_upload(plugin, event, target, title or text, tags, platform or "douyin", account,
+                                           _post_options(options))
+    elif action == "post":
+        from ..handlers.account_ops_handler import _extract_images
+        from .understand_tool import _ALLOWED_LOCAL_ROOT, _is_public_http_url
+
+        def allowed(t: str) -> bool:  # 公网图片链接，或 AstrBot data 目录下的图片（防止被诱导发布任意本地文件）
+            if t.startswith(("http://", "https://")):
+                return _is_public_http_url(t)
+            real = os.path.realpath(t)
+            return (os.path.isfile(real) and os.path.splitext(real)[1].lower() in (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+                    and os.path.commonpath([real, _ALLOWED_LOCAL_ROOT]) == _ALLOWED_LOCAL_ROOT)
+
+        images = [t for t in re.split(r"[\s,，]+", target or "") if t and allowed(t)]
+        images = images or await _extract_images(event)
+        if not images:
+            return {"error": "没有图片：让用户把图片和要求一起发出来（或引用图片消息），或在 target 填图片链接"}
+        plat = normalize_platform(platform) or "douyin"
+        tag_list = [t.lstrip("#") for t in re.split(r"[\s,，]+", tags or "") if t.strip("#")]
+        res = await ops.prepare_post(event, plat, images, title, text, tag_list, acc, _post_options(options))
     else:
-        return {"error": "action 只能是 comment / reply / sign / avatar / delete / switch_account / upload"}
+        return {"error": "action 只能是 comment / reply / sign / avatar / delete / switch_account / upload / post"}
     return {"error": res} if isinstance(res, str) else await ops.submit(res)
+
+
+def _post_options(options: str) -> dict:
+    """“仅自己可见 / 好友可见 / AI”这类自然语言开关 → 发布选项。"""
+    o = (options or "").lower()
+    out = {}
+    if any(k in o for k in ("仅自己", "私密", "private", "自己可见")):
+        out["visibility"] = "private"
+    elif any(k in o for k in ("好友", "friends")):
+        out["visibility"] = "friends"
+    if "ai" in o:
+        out["ai_generated"] = True
+    return out
 
 
 # ── video_plugin_settings ────────────────────────────────

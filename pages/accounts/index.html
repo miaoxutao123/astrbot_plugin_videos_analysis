@@ -111,6 +111,8 @@
     <div class="pane" id="pane-st">
       <div class="toolbar"><button id="save">保存修改</button><span class="meta">保存后插件自动重载生效；密钥留空表示不修改，填 <code>__clear__</code> 清空</span></div>
       <div id="savemsg"></div>
+      <div class="card"><b>插件管理员</b><div class="meta">从 AstrBot 管理员里选：选中的人负责审批发布、删除等操作，并在私聊里收到审批和告警。都不选 = 所有 AstrBot 管理员都可审批</div>
+        <div id="admins" class="empty">加载中…</div><div class="toolbar"><button id="admins-save" class="ghost">保存插件管理员</button><span class="meta" id="admins-st"></span></div></div>
       <div class="card" id="settings"></div>
     </div>
 
@@ -246,6 +248,22 @@
       }).join('');
     });
   }
+  function loadAdmins() {
+    return bridge.apiGet('admins').then(function (d) {
+      $('admins').className = '';
+      $('admins').innerHTML = d.candidates.map(function (c) {
+        return '<label class="set-row"><input type="checkbox" class="adm" value="' + esc(c.id) + '"' + (c.chosen ? ' checked' : '') + '> ' +
+          esc(c.name || '（还没在机器人这里说过话）') + ' <span class="meta">' + esc(c.masked) + (c.platform ? ' · ' + esc(c.platform) : '') +
+          ' · ' + (c.reachable ? '私聊可推送' : '私聊会话未知') + '</span></label>';
+      }).join('') || '<span class="meta">AstrBot 里还没有配置管理员</span>';
+    });
+  }
+  function saveAdmins(btn) {
+    var ids = Array.prototype.map.call(document.querySelectorAll('.adm:checked'), function (x) { return x.value; });
+    btn.disabled = true;
+    bridge.apiPost('admins/set', { ids: ids }).then(function (d) { $('admins-st').textContent = d.message; return loadAdmins(); })
+      .catch(function (e) { $('admins-st').textContent = '失败：' + e.message; }).then(function () { btn.disabled = false; });
+  }
   function collectChanges() {
     var changes = {};
     settingsCache.forEach(function (it) {
@@ -326,7 +344,7 @@
   }
 
   // ── 通用 ──
-  var LOADERS = { ov: loadOverview, ap: loadPending, au: loadAudit, st: loadSettings, da: function () { return Promise.resolve(); }, lg: function () { return Promise.resolve(); }, dbg: loadCache };
+  var LOADERS = { ov: loadOverview, ap: loadPending, au: loadAudit, st: function () { return Promise.all([loadSettings(), loadAdmins()]); }, da: function () { return Promise.resolve(); }, lg: function () { return Promise.resolve(); }, dbg: loadCache };
   var current = 'ov';
   function show(tab) {
     current = tab;
@@ -343,6 +361,7 @@
   }
 
   function bind() {
+    $('admins-save').addEventListener('click', function () { saveAdmins(this); });
     $('refresh').addEventListener('click', reload);
     $('check').addEventListener('click', function (e) { post('check', {}, e.target); });
     $('save').addEventListener('click', function (e) {

@@ -7,6 +7,7 @@ AstrBot 视频解析与理解插件
 
 import asyncio
 import json
+import os
 import sys
 
 from astrbot.api import logger
@@ -15,10 +16,12 @@ from astrbot.api.event.filter import EventMessageType
 from astrbot.api.star import Context, Star, register
 
 from .douyin_login import load_douyin_cookies
+from .utils import browser_install
 from .douyin_scraper.browser_signer import BrowserSigner
 from .douyin_scraper.douyin_parser import DOUYIN_LINK, DouyinParser
 from .services.account_manager import AccountManager
 from .services.creator_ops import CreatorOps
+from .services.plugin_admins import COMMAND_PREFIXES, PluginAdmins
 from .utils.paths import DOUYIN_BROWSER_PROFILE, migrate_legacy_data
 from .utils.redact import redact
 
@@ -28,10 +31,10 @@ _BOGUS_GEMINI_BASE = "https://generative-api.google.com/v1alpha2"
 
 @register(
     "astrbot_plugin_videos_analysis",
-    "视频解析与理解",
-    "抖音/B站/MC百科视频自动解析与AI理解",
-    "0.11.0",
-    "https://github.com/Zhalslar/astrbot_plugin_videos_analysis",
+    "喵喵",
+    "短视频运营助手：抖音/B站链接解析与 AI 看视频、账号运营（发布与删除需审批）",
+    "1.0.0-rc.1",
+    "https://github.com/miaoxutao123/astrbot_plugin_videos_analysis",
 )
 class hybird_videos_analysis(Star):
     def __init__(self, context: Context, config: dict):
@@ -92,6 +95,7 @@ class hybird_videos_analysis(Star):
         self._browser_signer: BrowserSigner | None = None
         self.browser_signer_error: str = ""
 
+        self.admins = PluginAdmins(self)
         self.accounts = AccountManager(self)
         self.creator_ops = CreatorOps(self)
 
@@ -130,6 +134,7 @@ class hybird_videos_analysis(Star):
         from .handlers.web_api import register_web_apis
         register_web_apis(self)
         self.accounts.start_scheduler()
+        self.creator_ops.start()
         from .services.ops_monitor import OpsMonitor
         self.monitor = OpsMonitor(self)
         self.monitor.start()
@@ -138,27 +143,54 @@ class hybird_videos_analysis(Star):
         try:
             status = await self.start_browser_signer()
             reason = status.get("reason", "")
+            if status.get("ok"):
+                await self._maybe_install_chrome()
             if not status.get("ok") and ("Executable doesn't exist" in reason or "playwright install" in reason):
-                # 首次部署常见：装了 playwright 包但没下载浏览器，自动下载一次（约 150MB）
-                self.browser_signer_error = "正在自动下载 Chromium（约 150MB，几分钟）"
-                logger.info("[setup] 未找到 Chromium，正在执行 playwright install chromium ...")
-                proc = await asyncio.create_subprocess_exec(
-                    sys.executable, "-m", "playwright", "install", "chromium",
-                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
-                )
-                out, _ = await asyncio.wait_for(proc.communicate(), timeout=900)
-                if proc.returncode == 0:
+                # 首次部署常见：装了 playwright 包但没下载浏览器，自动下载一次（约 170MB，测速选镜像）
+                self.browser_signer_error = "正在自动下载 Chromium（约 170MB，自动选最快的下载源）"
+                logger.info("[setup] 未找到 Chromium，正在自动安装 ...")
+                ok, out = await browser_install.install_chromium()
+                if ok:
                     logger.info("[setup] Chromium 下载完成，重新启动抖音浏览器")
                     await self.start_browser_signer()
+                    await self._maybe_install_chrome()
                 else:
                     self.browser_signer_error = ("自动下载 Chromium 失败，请在 AstrBot 所在环境执行: "
+                                                 "PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright "
                                                  "python -m playwright install --with-deps chromium")
-                    logger.warning(f"[setup] playwright install 失败: {out.decode(errors='ignore')[-500:]}")
+                    logger.warning(f"[setup] playwright install 失败: {out}")
         except asyncio.CancelledError:
             raise
         except Exception as e:
             self.browser_signer_error = f"启动异常: {e}"
             logger.warning(f"[setup] 后台启动抖音浏览器失败: {e}")
+
+    async def _maybe_install_chrome(self) -> None:
+        """
+        用的是 Playwright 自带的 Chromium 时，后台装一份正式版 Google Chrome，下次启动浏览器时自动换过去。
+
+        Chromium 的 Client Hints 品牌里没有 "Google Chrome"，而普通用户几乎都用正式版，
+        这是网页端最容易被识别的环境差异之一。只在 Linux 且以 root 运行（容器里，能用 apt 装依赖）时自动装；
+        正式版比配置目录的版本旧时 BrowserSigner 不会切换，避免损坏登录态。
+        """
+        s = self._browser_signer
+        if (not s or s.browser_name != "Chromium" or not self.config.get("douyin_browser_install_chrome", True)
+                or not sys.platform.startswith("linux") or getattr(os, "geteuid", lambda: 1)() != 0):
+            return
+        if os.path.exists("/opt/google/chrome/chrome"):
+            return  # 已装但比配置目录的版本旧，等 Chrome 正式版追上后自动切换
+        if not os.path.exists("/usr/bin/apt-get"):
+            logger.info("[setup] 非 Debian/Ubuntu 系统，跳过自动安装 Google Chrome")
+            return
+        logger.info("[setup] 抖音浏览器是 Chromium，后台安装正式版 Google Chrome ...")
+        try:
+            ok, out = await browser_install.install_chrome()
+        except Exception as e:
+            ok, out = False, str(e)
+        if ok:
+            logger.info("[setup] Google Chrome 安装完成，下次重载插件或 /dy_restart 时切换（登录态保留）")
+        else:
+            logger.warning(f"[setup] 安装 Google Chrome 失败: {out[-300:]}")
 
     async def start_browser_signer(self) -> dict:
         """启动（或重启）抖音浏览器签名引擎，返回状态字典。"""
@@ -202,7 +234,10 @@ class hybird_videos_analysis(Star):
 
         video_path 可以是本地文件或 http(s) 直链；返回 dict，不会抛异常。
         B站可选 opts：cover=封面图路径/直链，tid=分区 ID，desc=简介（不给封面就取视频第 1 秒）。
-        通用 opts：confirm_ttl=审批有效期（秒，最长 24 小时），无人值守的定时发布用。
+        通用 opts：confirm_ttl=审批有效期（秒，最长 24 小时；默认 publish_confirm_minutes，12 小时）；
+        caller=你的插件名、caller_ref=你的任务号——发布成功/失败/被拒/过期后会调用
+        ``await <caller 插件>.on_publish_result(result: dict)``，result 含 status(published/failed/rejected/expired)、
+        code、platform、title、work_id、url、message、caller_ref。待审批申请保存在磁盘上，本插件重载不会丢。
         """
         from .services.creator import normalize_platform
 
@@ -215,12 +250,55 @@ class hybird_videos_analysis(Star):
             return {"status": "rejected", "error": f"准备发布失败: {e}"}
         return await self.creator_ops.submit(op)
 
+    async def post_request(self, event, images: list[str], title: str = "", text: str = "", tags: list[str] | None = None,
+                           platform: str = "douyin", account: str | None = None, **opts) -> dict:
+        """
+        其他插件申请发布图文（与 publish_request 相同：走审批，管理员确认后才发布；返回 dict，不会抛异常）。
+
+        images：本地图片路径或 http(s) 链接（抖音最多 35 张，B站最多 18 张）；title 最多 20 字，可只给 text。
+        opts：visibility=public/friends/private，ai_generated=True 声明“内容由 AI 生成”，
+        以及 confirm_ttl / caller / caller_ref（结局回调 on_publish_result，result["kind"] == "images"）。
+        """
+        from .services.creator import normalize_platform
+
+        plat = normalize_platform(platform)
+        if not plat:
+            return {"status": "rejected", "error": f"不支持的平台: {platform}"}
+        try:
+            op = await self.creator_ops.prepare_post(event, plat, list(images or []), title, text, list(tags or []), account, opts)
+        except Exception as e:
+            return {"status": "rejected", "error": f"准备图文失败: {redact(e)}"}
+        return await self.creator_ops.submit(op)
+
+    async def ops_insight(self, platform: str = "", days: int = 7, refresh: bool = False) -> dict:
+        """
+        给内容生产插件（如 media_gen）选题用的运营摘要，只读、不需要审批，结果缓存 10 分钟。
+
+        返回 {"days", "platforms": [{platform, label, account, totals, change, period, vs_similar,
+        recent_works, best_works, posts_in_period, trending, our_publishes} 或 {platform, error}]}；不会抛异常。
+        """
+        from .services import ops_monitor
+
+        try:
+            return await ops_monitor.insight(self, platform, days, refresh)
+        except Exception as e:
+            logger.warning(f"[insight] 生成运营洞察失败: {e}")
+            return {"days": days, "platforms": [], "error": redact(e)[:200]}
+
+    def publish_history(self, caller: str = "", limit: int = 20) -> list[dict]:
+        """发布结果记录（新→旧），可按来源插件过滤；与 on_publish_result 回调内容相同。"""
+        from .services.creator_ops import read_publish_log
+
+        rows = read_publish_log(500)
+        return [r for r in rows if not caller or r.get("caller") == caller][:max(1, int(limit))]
+
     async def terminate(self):
         """插件卸载/重载时关闭浏览器与 Xvfb，避免进程泄漏。"""
         task = getattr(self, "_signer_task", None)
         if task and not task.done():
             task.cancel()
         await self.accounts.stop_scheduler()
+        await self.creator_ops.stop()
         if getattr(self, "monitor", None):
             await self.monitor.stop()
         if self._browser_signer:
@@ -349,6 +427,34 @@ class hybird_videos_analysis(Star):
         async for response in handle_health_check(self, event):
             yield response
 
+    @filter.event_message_type(EventMessageType.ALL)
+    async def observe_admins(self, event):
+        """记下 AstrBot 管理员的私聊会话；管理员私聊里用本插件命令、且还没设置插件管理员时，问一次要不要设置。"""
+        self.admins.observe(event)
+        text = (event.message_str or "").strip().lstrip("/")
+        if (text.startswith(COMMAND_PREFIXES) and not text.startswith("va_admins") and event.is_private_chat()
+                and self.admins.should_ask(event)):
+            asyncio.create_task(self._ask_admins(event.unified_msg_origin))
+        if False:  # 本 handler 不回复消息，只是让 AstrBot 把它当作异步生成器
+            yield
+
+    async def _ask_admins(self, umo: str) -> None:
+        from astrbot.core.message.message_event_result import MessageChain
+
+        await asyncio.sleep(2)  # 等命令自己的回复先发出去
+        try:
+            await self.context.send_message(umo, MessageChain().message(self.admins.prompt()))
+        except Exception as e:
+            logger.warning(f"[admins] 发送插件管理员设置提示失败: {e}")
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_admins", alias={"插件管理员"})
+    async def plugin_admins_command(self, event):
+        """从 AstrBot 管理员里选本插件管理员：/va_admins [1 3|全部|我|清空|跳过]"""
+        from .handlers.account_ops_handler import command_args
+
+        yield event.plain_result(self.admins.select(event, command_args(event, "va_admins")))
+
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("va_notify")
     async def accounts_notify_command(self, event):
@@ -373,6 +479,14 @@ class hybird_videos_analysis(Star):
         """查看当前账号最近作品：/va_works [平台]"""
         from .handlers.account_ops_handler import handle_works
         async for response in handle_works(self, event):
+            yield response
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("va_post", alias={"发图文"})
+    async def creator_post_command(self, event):
+        """发布图文：/va_post [平台] [仅自己可见] [AI] <标题> #话题，第二行起正文，图片附在消息里或引用图片消息"""
+        from .handlers.account_ops_handler import handle_post
+        async for response in handle_post(self, event):
             yield response
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -472,6 +586,10 @@ class hybird_videos_analysis(Star):
         m = _re.match(r"^\s*(确认|同意|批准|执行|拒绝|取消|驳回)\s*(\d{4})((?:\s+\d{1,2})*)\s*$", event.message_str or "")
         if not m or not event.is_admin() or not self.creator_ops.has_pending(m.group(2)):
             return  # 不是待审批的码，交给其他插件/LLM 正常处理
+        if not self.admins.is_admin(event):
+            yield event.plain_result(f"这条申请由本插件管理员（{self.admins.names()}）审批")
+            event.stop_event()
+            return
         verb, code = m.group(1), m.group(2)
         if verb in ("拒绝", "取消", "驳回"):
             result = self.creator_ops.cancel(code, event)
@@ -613,21 +731,23 @@ class hybird_videos_analysis(Star):
         return await self._run_tool(ops_tools.video_account, event, action, platform, target, account)
 
     @filter.llm_tool(name="video_action")
-    async def llm_video_action(self, event, action: str, target: str = "", text: str = "", platform: str = "", account: str = "", title: str = "", tags: str = ""):
+    async def llm_video_action(self, event, action: str, target: str = "", text: str = "", platform: str = "", account: str = "",
+                               title: str = "", tags: str = "", options: str = ""):
         """用机器人的平台账号执行操作。不会立即执行，只提交申请，管理员本人确认后才执行；拿到结果后如实告诉用户“已提交审批”，不要说已完成，也不要替用户确认。
-comment=在视频下发评论（text 留空则自动起草）；reply=回复自己作品的评论（text 可填只回复某人的昵称/UID）；sign=改签名；avatar=换头像（用用户发的图）；delete=删除作品；switch_account=切换当前账号；upload=发布视频。
+comment=在视频下发评论（text 留空则自动起草）；reply=回复自己作品的评论（text 可填只回复某人的昵称/UID）；sign=改签名；avatar=换头像（用用户发的图）；delete=删除作品；switch_account=切换当前账号；upload=发布视频；post=发布图文（用用户发的图片）。
 
         Args:
-            action(string): comment / reply / sign / avatar / delete / switch_account / upload
-            target(string): comment/delete/reply 填视频或作品（序号/BV号/链接）；switch_account 填账号名；upload 填视频直链；avatar 可填图片链接
-            text(string): 评论内容 / 新签名 / reply 时只回复的人 / upload 时的标题
-            platform(string): bilibili 或 douyin，可留空自动识别
+            action(string): comment / reply / sign / avatar / delete / switch_account / upload / post
+            target(string): comment/delete/reply 填视频或作品（序号/BV号/链接）；switch_account 填账号名；upload 填视频直链；avatar/post 可填图片链接（post 多张用空格分隔，留空用用户发的图）
+            text(string): 评论内容 / 新签名 / reply 时只回复的人 / upload 时的标题 / post 的正文
+            platform(string): bilibili 或 douyin，可留空自动识别（post 默认 douyin）
             account(string): 用账号池里哪个账号，留空=当前账号
-            title(string): upload 的标题
-            tags(string): upload 的话题，空格分隔
+            title(string): upload/post 的标题（post 最多 20 字）
+            tags(string): upload/post 的话题，空格分隔
+            options(string): upload/post 可选：仅自己可见 / 好友可见，AI（声明内容由 AI 生成）
         """
         from .tools import ops_tools
-        return await self._run_tool(ops_tools.video_action, event, action, target, text, platform, account, title, tags)
+        return await self._run_tool(ops_tools.video_action, event, action, target, text, platform, account, title, tags, options)
 
     @filter.llm_tool(name="video_plugin_settings")
     async def llm_video_plugin_settings(self, event, action: str, setting: str = "", value: str = ""):

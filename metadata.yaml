@@ -1,5 +1,7 @@
 name: astrbot_plugin_videos_analysis
-desc: 抖音/B站/MC百科视频解析与AI理解插件
-version: 0.11.0
-author: Zhalslar
-repo: https://github.com/Zhalslar/astrbot_plugin_videos_analysis
+display_name: 短视频运营助手
+desc: 抖音/B站链接解析与 AI 看视频；账号数据看板、消息巡检、评论回复、视频/图文发布（危险操作需管理员审批）
+help: 私聊发送 /va_setup（插件体检）按清单完成配置；设置可以直接用中文说
+version: 1.0.0-rc.1
+author: 喵喵
+repo: https://github.com/miaoxutao123/astrbot_plugin_videos_analysis

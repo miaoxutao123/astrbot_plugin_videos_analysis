@@ -73,6 +73,16 @@ class CreatorPlatform(ABC):
     async def upload(self, video_path: str, title: str, tags: list[str], **opts) -> OpResult:
         """发布视频（危险操作，只能由二次确认流程调用）。opts 为平台特有参数（如 B站 cover/tid/desc）。"""
 
+    # 图文单次最多几张图（平台限制）
+    max_images = 9
+
+    async def post_images(self, images: list[str], title: str, text: str, tags: list[str], **opts) -> OpResult:
+        """
+        发布图文（危险操作，只能由二次确认流程调用）。images 为本地 JPEG 路径。
+        opts：visibility=public/friends/private，ai_generated=True 时声明“内容由 AI 生成”。
+        """
+        return OpResult(False, f"{self.label}暂不支持发布图文")
+
     @abstractmethod
     async def delete(self, work_id: str, title: str = "") -> OpResult:
         """删除作品（危险操作，只能由二次确认流程调用）。"""

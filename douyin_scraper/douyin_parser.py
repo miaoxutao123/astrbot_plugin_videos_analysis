@@ -7,6 +7,7 @@ import httpx
 
 from astrbot.api import logger
 
+from ..utils import client_identity
 from .cookie_extractor import extract_and_format_cookies
 from .crawlers.douyin.web.endpoints import DouyinAPIEndpoints
 from .crawlers.douyin.web.utils import AwemeIdFetcher, BogusManager
@@ -45,7 +46,7 @@ class DouyinParser:
         # 使用cookie_extractor格式化cookie
         self.cookie = extract_and_format_cookies(cookie) if cookie else ""
         self.id_fetcher = AwemeIdFetcher()
-        self.user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36"
+        self.user_agent = client_identity.ua()  # 和登录浏览器一致，同一 cookie 不出现在两种设备上
         self.headers = {
             "Accept-Language": "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
             "User-Agent": self.user_agent,

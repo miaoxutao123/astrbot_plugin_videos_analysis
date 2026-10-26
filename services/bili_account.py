@@ -12,6 +12,7 @@ cookie 字典里以 "__" 开头的键是插件自己的元数据（如 __refresh
 5. POST passport /confirm/refresh       → 用新 bili_jct 确认，让旧 refresh_token 失效
 """
 
+import random
 import re
 import time
 
@@ -19,7 +20,8 @@ import aiohttp
 
 from astrbot.api import logger
 
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+from ..utils import client_identity
+
 META_PREFIX = "__"
 REFRESH_KEY = "__refresh_token"
 PASSPORT = "https://passport.bilibili.com/x/passport-login/web"
@@ -38,10 +40,9 @@ def cookie_header(cookies: dict | None) -> str:
 
 
 def headers(cookies: dict | None = None, referer: str = "https://www.bilibili.com/") -> dict:
-    h = {"User-Agent": UA, "Referer": referer, "Origin": "https://www.bilibili.com"}
-    if cookies:
-        h["Cookie"] = cookie_header(cookies)
-    return h
+    """和抖音浏览器同一套 UA / Client Hints：一台机器上一个人用的是同一个浏览器。"""
+    return client_identity.headers(Referer=referer, Origin="https://www.bilibili.com",
+                                   Cookie=cookie_header(cookies) if cookies else "")
 
 
 def _correspond_path(ts_ms: int) -> str:
@@ -63,21 +64,36 @@ def _merge_set_cookies(cookies: dict, resp: aiohttp.ClientResponse) -> dict:
     return out
 
 
+def _gen_uuid() -> str:
+    """网页端首次访问时 JS 生成的 _uuid：8-4-4-4-12 位大写十六进制 + 毫秒时间戳后 5 位 + infoc。"""
+    hx = lambda n: "".join(random.choice("0123456789ABCDEF") for _ in range(n))
+    return f"{hx(8)}-{hx(4)}-{hx(4)}-{hx(4)}-{hx(12)}{int(time.time() * 1000) % 100000:05d}infoc"
+
+
 async def ensure_buvid(cookies: dict) -> dict:
-    """扫码登录拿到的 cookie 没有 buvid3/buvid4，缺了它们评论等写接口容易被风控（-352）。"""
-    if cookies.get("buvid3") and cookies.get("buvid4"):
-        return cookies
+    """
+    补齐浏览器访问 B站时本来就有的设备 cookie。
+
+    扫码登录拿到的 cookie 没有 buvid3/buvid4/_uuid/b_nut，真实浏览器里这些先于登录态存在；
+    缺了它们评论、搜索等接口容易被风控（-352/-412）。生成一次后随账号保存，之后不再变。
+    """
+    out = dict(cookies)
+    if not out.get("_uuid"):
+        out["_uuid"] = _gen_uuid()
+    if not out.get("b_nut"):
+        out["b_nut"] = str(int(time.time()))
+    if out.get("buvid3") and out.get("buvid4"):
+        return out
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
             async with s.get("https://api.bilibili.com/x/frontend/finger/spi", headers=headers()) as r:
                 data = (await r.json(content_type=None)).get("data") or {}
-        out = dict(cookies)
         out.setdefault("buvid3", data.get("b_3", ""))
         out.setdefault("buvid4", data.get("b_4", ""))
         return {k: v for k, v in out.items() if v}
     except Exception as e:
         logger.warning(f"[bili] 获取 buvid 失败: {e}")
-        return cookies
+        return out
 
 
 async def needs_refresh(cookies: dict) -> tuple[bool | None, int]:
