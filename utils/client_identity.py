@@ -56,7 +56,7 @@ def save(ua: str, brands: list | None, platform: str) -> None:
     """浏览器启动后调用，记下真实的 UA 和 Client Hints。"""
     global _cache
     data = {"ua": ua, "brands": brands or [], "platform": platform or get()["platform"]}
-    if data == get():
+    if data == get() and os.path.exists(IDENTITY_FILE):
         return
     _cache = data
     try:
