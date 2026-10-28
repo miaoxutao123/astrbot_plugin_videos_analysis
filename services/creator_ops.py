@@ -170,7 +170,7 @@ class CreatorOps:
         if len(mine) >= self.max_pending_per_user:
             raise RuntimeError(f"你已有 {len(mine)} 个待审批的操作，请等管理员处理或 /va_cancel 后再提交")
         code = f"{secrets.randbelow(10000):04d}"
-        while code in self._pending:
+        while code in self._pending or code in self._executions:
             code = f"{secrets.randbelow(10000):04d}"
         key = account or self.plugin.accounts.active_name(platform) or ""
         op = PendingOp(
@@ -198,7 +198,7 @@ class CreatorOps:
 
     # ── 待审批持久化 ─────────────────────────────────────
 
-    def _save_pending(self) -> None:
+    def _save_pending(self, *, strict: bool = False) -> None:
         try:
             os.makedirs(CREATOR_DIR, exist_ok=True)
             tmp = PENDING_FILE + ".tmp"
@@ -207,6 +207,8 @@ class CreatorOps:
             os.replace(tmp, PENDING_FILE)
         except Exception as e:
             logger.warning(f"[creator] 保存待审批列表失败: {e}")
+            if strict:
+                raise RuntimeError("待审批状态持久化失败；已禁止执行外部操作") from e
 
     def _load_pending(self) -> None:
         """恢复重载前的待审批操作；暂存目录里没人引用的素材才清掉。"""
@@ -269,8 +271,8 @@ class CreatorOps:
             raise RuntimeError("执行日志持久化失败；操作未启动，避免未知状态") from exc
 
     def _begin_execution(self, op: PendingOp, event=None) -> None:
-        if op.code in self._executions and self._executions[op.code].get("state") in ("executing", "uncertain"):
-            raise RuntimeError("操作存在未核实的执行记录；禁止重复执行")
+        if op.code in self._executions:
+            raise RuntimeError("操作已有执行记录；禁止重新执行同一申请码")
         # A new approval code may reuse an old completed four-digit code.
         approver, _ = self._who(event)
         self._executions[op.code] = {
@@ -309,12 +311,7 @@ class CreatorOps:
              "expires_in": int(op.expires - time.time()), "summary": self._summary(op), "state": "pending"}
             for op in self._pending.values()
         ]
-        return pending + [
-            {"code": x["code"], "kind": x["kind"], "platform": x["platform"],
-             "account": x["account"], "expires_in": 0, "summary": x.get("summary", ""),
-             "state": "uncertain"}
-            for x in self.unresolved_executions()
-        ]
+        return pending
 
     def has_pending(self, code: str) -> bool:
         self._gc()
@@ -477,7 +474,10 @@ class CreatorOps:
             self._begin_execution(op, event)
         except RuntimeError as exc:
             return str(exc)
-        result = await self._execute(op, picks)
+        try:
+            result = await self._execute(op, picks)
+        except RuntimeError as exc:
+            return str(exc)
         status, error = self._classify(result)
         if op.kind in ("upload", "post"):
             res = op.payload.get("_result") or {}
@@ -493,7 +493,11 @@ class CreatorOps:
 
     async def _execute(self, op: PendingOp, picks: list[int] | None) -> str:
         self._pending.pop(op.code, None)
-        self._save_pending()
+        try:
+            self._save_pending(strict=True)
+        except RuntimeError:
+            self._pending[op.code] = op
+            raise
         if op.platform == "douyin" and op.account_key != (self.plugin.accounts.active_name("douyin") or ""):
             return f"❌ 申请时用的是抖音账号「{op.account}」，现在已切换到「{self.plugin.accounts.active_name('douyin') or '其他账号'}」，为避免发错账号已取消，请重新发起"
         try:
