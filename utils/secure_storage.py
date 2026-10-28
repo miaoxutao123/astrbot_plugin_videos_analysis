@@ -67,9 +67,27 @@ def write_secure_json(path: str, value) -> None:
     _restrict_dir(folder)
     try:
         data = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        payload = _HEADER + _fernet(path).encrypt(data)
     except (TypeError, ValueError) as exc:
         raise CredentialStoreError("cannot serialize credential data") from exc
+    cipher = _fernet(path)
+    # Never erase unreadable encrypted data (e.g. a missing or rotated key).
+    # This also prevents malformed legacy JSON from being silently replaced.
+    try:
+        with open(path, "rb") as previous:
+            existing = previous.read()
+    except FileNotFoundError:
+        existing = None
+    except OSError as exc:
+        raise CredentialStoreError("cannot inspect existing credentials") from exc
+    if existing is not None:
+        try:
+            if existing.startswith(_HEADER):
+                json.loads(cipher.decrypt(existing[len(_HEADER):]).decode("utf-8"))
+            else:
+                json.loads(existing.decode("utf-8"))
+        except (InvalidToken, UnicodeError, ValueError, TypeError) as exc:
+            raise CredentialStoreError("refusing to overwrite unreadable credentials") from exc
+    payload = _HEADER + cipher.encrypt(data)
     name = None
     try:
         fd, name = tempfile.mkstemp(prefix=".credential-", dir=folder)
