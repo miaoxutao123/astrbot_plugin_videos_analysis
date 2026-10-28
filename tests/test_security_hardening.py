@@ -88,7 +88,7 @@ async def test_crash_during_external_post_stays_uncertain(journal_isolated, monk
     assert len(unresolved) == 1
     assert unresolved[0]["code"] == op.code and unresolved[0]["state"] == "uncertain"
     assert not restored.has_pending(op.code)
-    assert "uncertain" in {x["state"] for x in restored.pending_list()}
+    assert restored.pending_list() == []
     assert "没有待确认" in await restored.confirm(op.code, event=FakeEvent())
 
 
