@@ -304,7 +304,7 @@ class CreatorOps:
     def _finish_execution(self, code: str, outcome: str) -> None:
         record = self._executions.get(code)
         if record:
-            record["state"] = "done"
+            record["state"] = "uncertain" if outcome == "uncertain" else "done"
             record["outcome"] = outcome
             record["finished_at"] = time.time()
             # Keep bounded recent history; never prune uncertain/executing entries.
@@ -505,7 +505,9 @@ class CreatorOps:
         approver, approver_name = self._who(event)
         audit_log.record("approved", op, approver=approver, approver_name=approver_name,
                          result=status, error=error, summary=self._summary(op))
-        self._finish_execution(code, status)
+        # A transport/runtime exception after a write was attempted does not
+        # establish that the platform rejected it; reconcile before retrying.
+        self._finish_execution(code, "uncertain" if result.startswith("执行失败:") else status)
         if not op.requester_admin:
             await self._send(op.umo, f"你提交的申请 [{code}] 已由管理员批准并执行：\n{result}")
         return result
@@ -562,8 +564,9 @@ class CreatorOps:
                     self._remove_staged(op.payload["path"])
                 return self._render_result("修改头像", res)
         except Exception as e:
-            logger.warning(f"[creator] 执行 {op.kind} 失败: {e}")
-            return f"执行失败: {e}"
+            safe_error = redact(str(e))
+            logger.warning(f"[creator] 执行 {op.kind} 失败: {safe_error}")
+            return f"执行失败: {safe_error}"
         return f"未知操作类型 {op.kind}"
 
     @staticmethod
