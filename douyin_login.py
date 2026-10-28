@@ -26,6 +26,7 @@ from .douyin_scraper.cookie_extractor import extract_and_format_cookies, extract
 
 # 路径常量
 from .utils import client_identity
+from .utils.secure_storage import read_secure_json, write_secure_json, CredentialStoreError
 from .utils.paths import DOUYIN_COOKIE_FILE
 from .utils.paths import IMAGE_DIR as DOUYIN_QR_IMAGE_DIR
 
@@ -675,15 +676,13 @@ async def save_manual_douyin_cookie(cookie_string: str) -> str | None:
 # ==================== Cookie 持久化 ====================
 
 async def save_douyin_cookies(cookies: dict) -> bool:
-    """保存cookie到JSON文件"""
+    """Save authenticated encrypted Cookie JSON, preserving old data on failure."""
     try:
-        os.makedirs(os.path.dirname(DOUYIN_COOKIE_FILE), exist_ok=True)
-        async with aiofiles.open(DOUYIN_COOKIE_FILE, "w", encoding="utf-8") as f:
-            await f.write(json.dumps(cookies, ensure_ascii=False, indent=2))
-        logger.info(f"抖音cookie已保存到: {DOUYIN_COOKIE_FILE}")
+        await asyncio.to_thread(write_secure_json, DOUYIN_COOKIE_FILE, cookies)
+        logger.info("抖音 Cookie 已加密保存")
         return True
-    except Exception as e:
-        logger.error(f"保存抖音cookie失败: {e}")
+    except CredentialStoreError:
+        logger.error("抖音 Cookie 加密保存失败，原文件未覆盖")
         return False
 
 
@@ -698,11 +697,7 @@ async def load_douyin_cookies() -> str | None:
         return None
 
     try:
-        async with aiofiles.open(DOUYIN_COOKIE_FILE, encoding="utf-8") as f:
-            content = await f.read()
-            if not content.strip():
-                return None
-            cookies = json.loads(content)
+        cookies = await asyncio.to_thread(read_secure_json, DOUYIN_COOKIE_FILE)
             if not isinstance(cookies, dict) or not cookies:
                 return None
 
