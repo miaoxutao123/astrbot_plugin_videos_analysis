@@ -200,11 +200,24 @@ class CreatorOps:
 
     def _save_pending(self, *, strict: bool = False) -> None:
         try:
-            os.makedirs(CREATOR_DIR, exist_ok=True)
+            os.makedirs(CREATOR_DIR, mode=0o700, exist_ok=True)
+            if os.name == "posix":
+                os.chmod(CREATOR_DIR, 0o700)
             tmp = PENDING_FILE + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                if os.name == "posix":
+                    os.fchmod(f.fileno(), 0o600)
                 json.dump([asdict(op) for op in self._pending.values()], f, ensure_ascii=False, default=str)
+                f.flush()
+                os.fsync(f.fileno())
             os.replace(tmp, PENDING_FILE)
+            if os.name == "posix":
+                dir_fd = os.open(CREATOR_DIR, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
         except Exception as e:
             logger.warning(f"[creator] 保存待审批列表失败: {e}")
             if strict:
@@ -267,6 +280,12 @@ class CreatorOps:
                 file.flush()
                 os.fsync(file.fileno())
             os.replace(tmp, EXECUTION_FILE)
+            if os.name == "posix":
+                dir_fd = os.open(CREATOR_DIR, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
         except OSError as exc:
             raise RuntimeError("执行日志持久化失败；操作未启动，避免未知状态") from exc
 
