@@ -19,6 +19,7 @@ log_callback = logger.info
 # 路径常量
 from ..utils.paths import BILI_COOKIE_FILE as COOKIE_FILE
 from ..utils import client_identity
+from ..utils.secure_storage import read_secure_json, write_secure_json, CredentialStoreError
 from .bili_account import REFRESH_KEY, cookie_header, ensure_buvid
 from ..utils.paths import DOWNLOAD_DIR_BILI as BILI_DOWNLOAD_DIR
 from ..utils.paths import IMAGE_DIR
@@ -285,36 +286,25 @@ async def get_video_download_url_by_bvid(bvid, quality=16):
 
 # 添加缺失的Cookie相关函数
 async def save_cookies_dict(cookies):
-    """保存Cookie到文件"""
+    """Persist credentials with authenticated encryption and atomic replacement."""
     try:
-        async with aiofiles.open(COOKIE_FILE, "w", encoding="utf-8") as f:
-            await f.write(json.dumps(cookies, ensure_ascii=False, indent=2))
-        log_callback(f"Cookie已保存到: {COOKIE_FILE}")
+        await asyncio.to_thread(write_secure_json, COOKIE_FILE, cookies)
+        log_callback("B站 Cookie 已加密保存")
         return True
-    except Exception as e:
-        log_callback(f"保存Cookie失败: {str(e)}")
+    except CredentialStoreError:
+        logger.error("B站 Cookie 加密保存失败；保留原文件")
         return False
 
+
 async def load_cookies():
-    """从文件加载Cookie"""
-    if not os.path.exists(COOKIE_FILE):
-        log_callback(f"Cookie文件不存在: {COOKIE_FILE}")
+    """Read credentials; migrate legacy plaintext JSON once (fail closed)."""
+    try:
+        cookies = await asyncio.to_thread(read_secure_json, COOKIE_FILE)
+        return cookies if isinstance(cookies, dict) and cookies else None
+    except CredentialStoreError:
+        logger.error("B站 Cookie 解密失败，请检查 VA_CREDENTIAL_KEY / .credentials.key；不会自动覆盖数据")
         return None
 
-    try:
-        async with aiofiles.open(COOKIE_FILE, encoding="utf-8") as f:
-            content = await f.read()
-            if not content.strip():
-                log_callback("Cookie文件为空")
-                return None
-            cookies = json.loads(content)
-            return cookies
-    except json.JSONDecodeError:
-        log_callback("Cookie文件格式错误")
-        return None
-    except Exception as e:
-        log_callback(f"加载Cookie失败: {str(e)}")
-        return None
 
 async def generate_qrcode():
     """生成B站登录二维码（新版API，使用httpx）"""
