@@ -28,6 +28,8 @@ from .creator import Comment, OpResult, get_creator
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".flv", ".avi"}
 PENDING_FILE = os.path.join(CREATOR_DIR, "pending.json")  # 待审批操作（重载/重启后恢复）
 PUBLISH_LOG = os.path.join(CREATOR_DIR, "published.jsonl")  # 发布结果（含来源插件），运营洞察按它统计
+EXECUTION_FILE = os.path.join(CREATOR_DIR, "executions.json")  # 持久化执行日志：崩溃不自动重试
+
 MAX_TTL = 86400
 # 其他插件调用 publish_request 时可带的元数据，不传给平台
 # （B站的 source 是转载来源，所以回传用 caller / caller_ref）
@@ -121,6 +123,7 @@ class CreatorOps:
         self.last_works: dict[str, list] = {}
         self.last_list_platform: dict[str, str] = {}
         self._gc_task = None
+        self._executions = self._load_executions()
         self._load_pending()
 
     def start(self) -> None:
@@ -232,12 +235,85 @@ class CreatorOps:
             logger.info(f"[creator] 恢复 {len(self._pending)} 个待审批操作")
         self._gc()
 
+    def _load_executions(self) -> dict:
+        """Restore execution journal. Unknown outcomes must be reconciled manually."""
+        try:
+            with open(EXECUTION_FILE, encoding="utf-8") as file:
+                records = json.load(file)
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as exc:
+            raise RuntimeError("无法读取执行日志；为避免重复投稿，停止加载审批系统") from exc
+        if not isinstance(records, dict):
+            raise RuntimeError("执行日志格式非法；为避免重复投稿，停止加载审批系统")
+        for record in records.values():
+            if not isinstance(record, dict):
+                raise RuntimeError("执行日志记录非法")
+            if record.get("state") == "executing":
+                record["state"] = "uncertain"
+        return records
+
+    def _save_executions(self) -> None:
+        os.makedirs(CREATOR_DIR, exist_ok=True)
+        tmp = EXECUTION_FILE + ".tmp"
+        try:
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                if os.name == "posix":
+                    os.fchmod(file.fileno(), 0o600)
+                json.dump(self._executions, file, ensure_ascii=False)
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(tmp, EXECUTION_FILE)
+        except OSError as exc:
+            raise RuntimeError("执行日志持久化失败；操作未启动，避免未知状态") from exc
+
+    def _begin_execution(self, op: PendingOp, event=None) -> None:
+        if op.code in self._executions and self._executions[op.code].get("state") in ("executing", "uncertain"):
+            raise RuntimeError("操作存在未核实的执行记录；禁止重复执行")
+        # A new approval code may reuse an old completed four-digit code.
+        approver, _ = self._who(event)
+        self._executions[op.code] = {
+            "state": "executing", "kind": op.kind, "platform": op.platform,
+            "account": op.account, "summary": redact(self._summary(op))[:160],
+            "approver": approver, "started_at": time.time(),
+        }
+        self._save_executions()
+
+    def _finish_execution(self, code: str, outcome: str) -> None:
+        record = self._executions.get(code)
+        if record:
+            record["state"] = "done"
+            record["outcome"] = outcome
+            record["finished_at"] = time.time()
+            # Keep bounded recent history; never prune uncertain/executing entries.
+            complete = sorted(
+                ((k, v.get("finished_at", 0)) for k, v in self._executions.items() if v.get("state") == "done"),
+                key=lambda pair: pair[1], reverse=True,
+            )
+            for old, _ in complete[200:]:
+                self._executions.pop(old, None)
+            self._save_executions()
+
+    def unresolved_executions(self) -> list[dict]:
+        return [
+            {"code": code, **record}
+            for code, record in self._executions.items()
+            if record.get("state") in ("uncertain", "executing")
+        ]
+
     def pending_list(self) -> list[dict]:
         self._gc()
-        return [
+        pending = [
             {"code": op.code, "kind": op.kind, "platform": op.platform, "account": op.account,
-             "expires_in": int(op.expires - time.time()), "summary": self._summary(op)}
+             "expires_in": int(op.expires - time.time()), "summary": self._summary(op), "state": "pending"}
             for op in self._pending.values()
+        ]
+        return pending + [
+            {"code": x["code"], "kind": x["kind"], "platform": x["platform"],
+             "account": x["account"], "expires_in": 0, "summary": x.get("summary", ""),
+             "state": "uncertain"}
+            for x in self.unresolved_executions()
         ]
 
     def has_pending(self, code: str) -> bool:
@@ -397,6 +473,10 @@ class CreatorOps:
         op = self._pending.get(code)
         if not op:
             return f"没有待确认的操作 {code}（可能已过期或已处理）"
+        try:
+            self._begin_execution(op, event)
+        except RuntimeError as exc:
+            return str(exc)
         result = await self._execute(op, picks)
         status, error = self._classify(result)
         if op.kind in ("upload", "post"):
@@ -406,6 +486,7 @@ class CreatorOps:
         approver, approver_name = self._who(event)
         audit_log.record("approved", op, approver=approver, approver_name=approver_name,
                          result=status, error=error, summary=self._summary(op))
+        self._finish_execution(code, status)
         if not op.requester_admin:
             await self._send(op.umo, f"你提交的申请 [{code}] 已由管理员批准并执行：\n{result}")
         return result
