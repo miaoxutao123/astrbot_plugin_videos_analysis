@@ -102,3 +102,18 @@ async def test_journal_failure_prevents_external_operation(journal_isolated, mon
     result = await ops.confirm(op.code, event=FakeEvent())
     assert "执行日志" in result
     assert ops.has_pending(op.code)
+
+
+async def test_external_timeout_is_uncertain_not_retryable(journal_isolated, monkeypatch):
+    class TimeoutCreator:
+        async def post_images(self, *args, **kwargs):
+            raise TimeoutError("platform connection dropped after submission")
+    monkeypatch.setattr(co, "get_creator", lambda *args, **kwargs: TimeoutCreator())
+    ops = co.CreatorOps(Plugin())
+    op = post_op(ops, FakeEvent())
+    response = await ops.confirm(op.code, event=FakeEvent())
+    assert response.startswith("执行失败:")
+    unresolved = ops.unresolved_executions()
+    assert len(unresolved) == 1 and unresolved[0]["code"] == op.code
+    assert unresolved[0]["state"] == "uncertain"
+    assert not ops.has_pending(op.code)
