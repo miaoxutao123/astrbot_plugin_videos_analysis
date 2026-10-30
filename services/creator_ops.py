@@ -855,57 +855,47 @@ class CreatorOps:
         return sorted(random.sample(top, k), key=lambda c: c.digg, reverse=True)
 
     def cache_summary(self, platform: str, work_id: str, text: str) -> None:
-        cache_file = os.path.join(CREATOR_DIR, "video_context.json")
-        try:
-            with open(cache_file, encoding="utf-8") as f:
-                cache = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            cache = {}
-        cache[f"{platform}:{work_id}"] = text.strip()
-        os.makedirs(CREATOR_DIR, exist_ok=True)
-        with open(cache_file, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False, indent=1)
+        """把视频概要写入带 TTL 的 SQLite 缓存。"""
+        from .analysis_cache import put_summary
+
+        put_summary(platform, work_id, text)
 
     async def _video_summary(self, platform: str, work_id: str, ctx: dict, event=None) -> str:
-        cache_file = os.path.join(CREATOR_DIR, "video_context.json")
-        try:
-            with open(cache_file, encoding="utf-8") as f:
-                cache = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            cache = {}
-        key = f"{platform}:{work_id}"
-        if key in cache:
-            return cache[key]
+        """读取带 TTL 的概要缓存；未命中时走现有视频理解流程。"""
+        from .analysis_cache import get_summary, put_summary
+
+        ttl_days = float(self.plugin.config.get("analysis_cache_ttl_days", 7) or 7)
+        cached = get_summary(platform, work_id, ttl_days)
+        if cached:
+            return cached
         if not (self.reply_use_video and ctx.get("media_url")):
             return ""
         if event is not None:
-            # B站走轻量浏览（字幕/线上ASR + 抽帧），结果会写进缓存
             from .browse_service import browse_work
-
             try:
-                return (await browse_work(self.plugin, event, platform, work_id, ctx)).get("summary", "")
-            except Exception as e:
-                logger.info(f"[creator] 浏览视频失败，仅用文案起草: {e}")
+                result = await browse_work(self.plugin, event, platform, work_id, ctx)
+                return result.get("summary", "") or ""
+            except Exception as exc:
+                logger.info("[creator] 浏览视频失败，仅用文案起草 (%s)", type(exc).__name__)
                 return ""
         from ..tools.understand_tool import handle_understand_video
-
         try:
             path = await get_creator(self.plugin, platform).fetch_video(work_id, ctx)
-        except Exception as e:
-            logger.info(f"[creator] 下载作品视频失败，仅用文案起草: {e}")
+        except Exception as exc:
+            logger.info("[creator] 下载作品视频失败，仅用文案起草 (%s)", type(exc).__name__)
             path = None
         if not path or not os.path.exists(path):
             return ""
-        # 走插件统一的视频理解流程（按 video_understand_method 选择 Gemini/MiMo/本地 ASR 并自动回退）
-        res = await handle_understand_video(self.plugin, path, "用 150 字以内概括这个短视频的内容、看点和情绪基调，供博主回复评论时参考。", event)
+        res = await handle_understand_video(
+            self.plugin, path,
+            "用 150 字以内概括这个短视频的内容、看点和情绪基调，供博主回复评论时参考。",
+            event,
+        )
         text = res.get("analysis") if isinstance(res, dict) else ""
-        if not text:
-            logger.info(f"[creator] 视频理解失败，仅用文案起草回复: {res.get('error') if isinstance(res, dict) else res}")
         if text:
-            cache[key] = text.strip()
-            os.makedirs(CREATOR_DIR, exist_ok=True)
-            with open(cache_file, "w", encoding="utf-8") as f:
-                json.dump(cache, f, ensure_ascii=False, indent=1)
+            put_summary(platform, work_id, text)
+        else:
+            logger.info("[creator] 视频理解失败，仅用文案起草回复")
         return text or ""
 
     async def _draft(self, event, ctx: dict, summary: str, picked: list[Comment]) -> list[str]:
