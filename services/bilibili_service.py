@@ -135,7 +135,7 @@ async def check_cookie_valid(cookies: dict | None = None, force: bool = False):
         info = await get_login_info(cookies)
         if info is None:
             # A network failure is not evidence that a credential has expired.
-            COOKIE_VALID = False
+            COOKIE_VALID = None
             return False
         valid = bool(info.get("isLogin")) and str(info.get("mid", "")) == str(cookies.get("DedeUserID", ""))
         _COOKIE_VALID_CACHE[fingerprint] = (valid, time.monotonic())
@@ -514,7 +514,7 @@ async def get_video_download_url_with_cookie(bvid, quality=80, event=None, video
         return await get_video_download_url_by_bvid(bvid, 16, video_info=video_info)
     cookies = await load_cookies()
     if not cookies or not await check_cookie_valid(cookies):
-        if os.path.exists(COOKIE_FILE):
+        if COOKIE_VALID is False and os.path.exists(COOKIE_FILE):
             await _report_failure("cookie 校验失败")
         log_callback("Cookie无效或不存在，将使用匿名默认画质")
         return await get_video_download_url_by_bvid(bvid, 16, video_info=video_info)
@@ -712,7 +712,7 @@ async def process_bili_video(url, download_flag=True, quality=80, use_login=True
             if not is_valid:
                 log_callback("B站 Cookie 无效或不存在，本次使用匿名方式。管理员可私聊发送 /bili_login 登录。")
                 use_login = False
-                if os.path.exists(COOKIE_FILE):
+                if COOKIE_VALID is False and os.path.exists(COOKIE_FILE):
                     await _report_failure("cookie 校验失败")
         if use_login:
             log_callback("使用登录状态获取视频链接")
