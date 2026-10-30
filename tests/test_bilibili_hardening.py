@@ -43,6 +43,8 @@ async def test_nav_network_failure_is_not_cached_as_invalid(monkeypatch):
     assert await bili.check_cookie_valid(cookies) is False
     assert bili.COOKIE_VALID is None
     assert await bili.check_cookie_valid(cookies) is False
+    assert calls == 1
+    assert await bili.check_cookie_valid(cookies, force=True) is False
     assert calls == 2
 
 
