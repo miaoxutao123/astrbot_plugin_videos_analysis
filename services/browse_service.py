@@ -127,7 +127,9 @@ async def bili_subtitle(bvid: str) -> list[dict]:
         if not text.lstrip().startswith("{"):
             raise RuntimeError(f"字幕接口返回非 JSON（HTTP {status}）")
         payload = json.loads(text)
-        if isinstance(payload, dict) and payload.get("code") in bilibili_service.RISK_CODES:
+        if not isinstance(payload, dict):
+            return []
+        if payload.get("code") in bilibili_service.RISK_CODES:
             await bilibili_service._open_bili_read_circuit(payload.get("code"), payload.get("message", ""))
             return []
         subs = ((payload.get("data") or {}).get("subtitle") or {}).get("subtitles") or []
