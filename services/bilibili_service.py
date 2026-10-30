@@ -180,7 +180,7 @@ def _cookie_validation_is_definitive(cookies: dict | None) -> bool:
 async def get_login_info(cookies: dict | None = None) -> dict | None:
     """查询当前 cookie 对应的登录信息（x/web-interface/nav），失败返回 None。"""
     cookies = cookies if cookies is not None else await load_cookies()
-    if not cookies:
+    if not cookies or bili_read_circuit_open():
         return None
     headers = {
         **client_identity.headers(),
@@ -193,7 +193,13 @@ async def get_login_info(cookies: dict | None = None) -> dict | None:
             "https://api.bilibili.com/x/web-interface/nav",
             headers=headers, timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
+            if resp.status in (412, 429):
+                await _open_bili_read_circuit(resp.status, f"nav HTTP {resp.status}")
+                return None
             data = await resp.json(content_type=None)
+        if isinstance(data, dict) and data.get("code") in RISK_CODES:
+            await _open_bili_read_circuit(data.get("code"), data.get("message", ""))
+            return None
         if not isinstance(data, dict) or data.get("code") != 0:
             return None
         value = data.get("data")
