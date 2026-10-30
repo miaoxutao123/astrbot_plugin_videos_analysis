@@ -120,11 +120,11 @@ async def check_cookie_valid(cookies: dict | None = None, force: bool = False):
     if not isinstance(cookies, dict) or not cookies:
         COOKIE_VALID = False
         return False
+    fingerprint = hashlib.sha256(cookie_header(cookies).encode("utf-8")).hexdigest()
     if not cookies.get("SESSDATA") or not str(cookies.get("DedeUserID", "")).isdigit():
+        _COOKIE_VALID_CACHE[fingerprint] = (False, time.monotonic())
         COOKIE_VALID = False
         return False
-
-    fingerprint = hashlib.sha256(cookie_header(cookies).encode("utf-8")).hexdigest()
     now = time.monotonic()
     cached = _COOKIE_VALID_CACHE.get(fingerprint)
     if not force and cached:
@@ -160,6 +160,15 @@ async def check_cookie_valid(cookies: dict | None = None, force: bool = False):
         else:
             log_callback("B站登录态已失效或账号 UID 不匹配")
         return valid
+
+
+def _cookie_validation_is_definitive(cookies: dict | None) -> bool:
+    """True only when nav explicitly proved this exact cookie set invalid."""
+    if not isinstance(cookies, dict) or not cookies:
+        return False
+    fingerprint = hashlib.sha256(cookie_header(cookies).encode("utf-8")).hexdigest()
+    cached = _COOKIE_VALID_CACHE.get(fingerprint)
+    return bool(cached and cached[0] is False)
 
 
 async def get_login_info(cookies: dict | None = None) -> dict | None:
@@ -518,14 +527,14 @@ async def _open_bili_read_circuit(code, message: str) -> None:
             logger.warning("[bili] 风控告警推送失败 (%s)", type(exc).__name__)
 
 
-async def get_video_download_url_with_cookie(bvid, quality=80, event=None, video_info=None):
+async def get_video_download_url_with_cookie(bvid, quality=80, event=None, video_info=None, cookies=None):
     """使用登录态获取 DASH 音视频地址；明确风控后当日不再重试登录态接口。"""
     if bili_read_circuit_open():
         log_callback("B站登录态下载已触发当日熔断，改用匿名通道")
         return await get_video_download_url_by_bvid(bvid, 16, video_info=video_info)
-    cookies = await load_cookies()
+    cookies = cookies if cookies is not None else await load_cookies()
     if not cookies or not await check_cookie_valid(cookies):
-        if COOKIE_VALID is False and os.path.exists(COOKIE_FILE):
+        if _cookie_validation_is_definitive(cookies) and os.path.exists(COOKIE_FILE):
             await _report_failure("cookie 校验失败")
         log_callback("Cookie无效或不存在，将使用匿名默认画质")
         return await get_video_download_url_by_bvid(bvid, 16, video_info=video_info)
@@ -718,17 +727,19 @@ async def process_bili_video(url, download_flag=True, quality=80, use_login=True
         if use_login and bili_read_circuit_open():
             log_callback("B站登录态下载已触发当日熔断，改用匿名通道")
             use_login = False
+        cookies = None
         if use_login:
-            is_valid = await check_cookie_valid()
+            cookies = await load_cookies()
+            is_valid = await check_cookie_valid(cookies)
             if not is_valid:
-                log_callback("B站 Cookie 无效或不存在，本次使用匿名方式。管理员可私聊发送 /bili_login 登录。")
+                log_callback("B站 Cookie 无效或当前无法验证，本次使用匿名方式。管理员可私聊发送 /bili_login 登录。")
                 use_login = False
-                if COOKIE_VALID is False and os.path.exists(COOKIE_FILE):
+                if _cookie_validation_is_definitive(cookies) and os.path.exists(COOKIE_FILE):
                     await _report_failure("cookie 校验失败")
         if use_login:
             log_callback("使用登录状态获取视频链接")
             direct_url = await get_video_download_url_with_cookie(
-                bvid, quality, event, video_info=video_info
+                bvid, quality, event, video_info=video_info, cookies=cookies
             )
         else:
             log_callback("使用匿名方式获取视频链接")
