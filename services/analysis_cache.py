@@ -8,11 +8,25 @@ import json
 import os
 import sqlite3
 import time
+from contextlib import contextmanager
 
 from ..utils.paths import CREATOR_DIR
 
 DB_FILE = os.path.join(CREATOR_DIR, "analysis_cache.sqlite3")
 LEGACY_FILE = os.path.join(CREATOR_DIR, "video_context.json")
+
+
+@contextmanager
+def _db():
+    conn = _connect()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _connect() -> sqlite3.Connection:
@@ -73,7 +87,7 @@ def _migrate_legacy(conn: sqlite3.Connection) -> None:
 def get_summary(platform: str, work_id: str, ttl_days: float = 7) -> str:
     if not platform or not work_id:
         return ""
-    with _connect() as conn:
+    with _db() as conn:
         row = conn.execute(
             "SELECT analysis_text, created_ts FROM analysis_cache WHERE platform=? AND work_id=?",
             (platform, work_id),
