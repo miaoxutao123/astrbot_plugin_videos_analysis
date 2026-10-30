@@ -12,7 +12,6 @@ def _isolate_cache(tmp_path, monkeypatch):
 
 def test_legacy_json_is_migrated_once(tmp_path, monkeypatch):
     _isolate_cache(tmp_path, monkeypatch)
-    cache.LEGACY_FILE
     with open(cache.LEGACY_FILE, "w", encoding="utf-8") as file:
         json.dump({"bilibili:BV1AbCdEfGhI": "legacy summary"}, file)
     assert cache.get_summary("bilibili", "BV1AbCdEfGhI", 7) == "legacy summary"
