@@ -93,7 +93,6 @@ async def test_process_reuses_one_playurl_result_for_download(tmp_path, monkeypa
 @pytest.mark.asyncio
 async def test_anonymous_download_accepts_previously_resolved_url(tmp_path, monkeypatch):
     monkeypatch.setattr(bili, "BILI_DOWNLOAD_DIR", str(tmp_path))
-    request = AsyncMock()
     async def write_file(url, path, headers):
         with open(path, "wb") as file:
             file.write(b"video")
