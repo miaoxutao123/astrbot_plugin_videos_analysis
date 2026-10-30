@@ -121,3 +121,13 @@ async def test_risk_circuit_fails_closed_in_memory_if_disk_write_fails(monkeypat
     assert len(notified) == 1
     await bili._open_bili_read_circuit(-412, "another risk")
     assert len(notified) == 1
+
+
+def test_definitive_invalid_cookie_status_expires_with_negative_cache(monkeypatch):
+    cookies = {"SESSDATA": "test-session", "DedeUserID": "123"}
+    fingerprint = bili.hashlib.sha256(bili.cookie_header(cookies).encode("utf-8")).hexdigest()
+    bili._COOKIE_VALID_CACHE[fingerprint] = (False, bili.time.monotonic() - bili._COOKIE_INVALID_TTL - 1)
+    assert not bili._cookie_validation_is_definitive(cookies)
+    bili._COOKIE_VALID_CACHE[fingerprint] = (False, bili.time.monotonic())
+    assert bili._cookie_validation_is_definitive(cookies)
+    bili._COOKIE_VALID_CACHE.pop(fingerprint, None)
