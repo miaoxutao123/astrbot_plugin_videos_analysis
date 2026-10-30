@@ -344,6 +344,27 @@ class CreatorOps:
         }
         self._save_executions()
 
+    def _abort_execution(self, code: str) -> None:
+        """Remove a journal entry only when _execute failed before starting a write.
+
+        _execute raises RuntimeError only when the pending-state file could not be
+        durably saved. In that case it restores the pending operation and no
+        external platform call has begun, so the approval may safely be retried.
+        """
+        record = self._executions.get(code)
+        if not record or record.get("state") != "executing":
+            return
+        self._executions.pop(code, None)
+        try:
+            self._save_executions()
+        except Exception as exc:
+            # Disk still contains "executing"; keep an in-memory quarantine and
+            # never allow this code to be executed again in the current process.
+            record["state"] = "uncertain"
+            record["outcome"] = "preflight_abort_journal_write_failed"
+            self._executions[code] = record
+            raise RuntimeError("审批日志无法安全回滚；该操作已隔离，请人工核验后再处理") from exc
+
     def _finish_execution(self, code: str, outcome: str) -> None:
         record = self._executions.get(code)
         if record:
@@ -539,6 +560,10 @@ class CreatorOps:
         try:
             result = await self._execute(op, picks)
         except RuntimeError as exc:
+            try:
+                self._abort_execution(code)
+            except RuntimeError as journal_exc:
+                return str(journal_exc)
             return str(exc)
         status, error = self._classify(result)
         if op.kind in ("upload", "post"):
