@@ -783,7 +783,7 @@ async def check_douyin_cookie_valid() -> bool:
                 return True
 
     except Exception as e:
-        logger.debug(f"抖音cookie验证异常: {type(e).__name__}: {e}")
+        logger.debug("抖音cookie验证异常: %s", type(e).__name__)
 
     logger.info("抖音cookie验证失败，可能已过期")
     DOUYIN_COOKIE_VALID = False
