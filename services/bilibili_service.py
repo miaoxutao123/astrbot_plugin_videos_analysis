@@ -30,10 +30,11 @@ from ..utils.paths import IMAGE_DIR
 
 # Cookie有效性缓存
 COOKIE_VALID = None
-_COOKIE_VALID_CACHE: dict[str, tuple[bool, float]] = {}
+_COOKIE_VALID_CACHE: dict[str, tuple[bool | None, float]] = {}
 _COOKIE_VALID_LOCK = asyncio.Lock()
 _COOKIE_VALID_TTL = 6 * 3600
 _COOKIE_INVALID_TTL = 60
+_COOKIE_UNKNOWN_TTL = 5
 _BILI_DOWNLOAD_SEMAPHORE = asyncio.Semaphore(1)
 RISK_NOTIFY_HOOK = None
 RISK_CODES = {-352, -412}
@@ -129,23 +130,24 @@ async def check_cookie_valid(cookies: dict | None = None, force: bool = False):
     cached = _COOKIE_VALID_CACHE.get(fingerprint)
     if not force and cached:
         valid, checked_at = cached
-        ttl = _COOKIE_VALID_TTL if valid else _COOKIE_INVALID_TTL
+        ttl = _COOKIE_VALID_TTL if valid is True else _COOKIE_INVALID_TTL if valid is False else _COOKIE_UNKNOWN_TTL
         if now - checked_at < ttl:
             COOKIE_VALID = valid
-            return valid
+            return bool(valid)
 
     async with _COOKIE_VALID_LOCK:
         now = time.monotonic()
         cached = _COOKIE_VALID_CACHE.get(fingerprint)
         if not force and cached:
             valid, checked_at = cached
-            ttl = _COOKIE_VALID_TTL if valid else _COOKIE_INVALID_TTL
+            ttl = _COOKIE_VALID_TTL if valid is True else _COOKIE_INVALID_TTL if valid is False else _COOKIE_UNKNOWN_TTL
             if now - checked_at < ttl:
                 COOKIE_VALID = valid
-                return valid
+                return bool(valid)
         info = await get_login_info(cookies)
         if info is None:
-            # A network failure is not evidence that a credential has expired.
+            # Briefly coalesce network failures without treating them as credential expiry.
+            _COOKIE_VALID_CACHE[fingerprint] = (None, time.monotonic())
             COOKIE_VALID = None
             return False
         valid = bool(info.get("isLogin")) and str(info.get("mid", "")) == str(cookies.get("DedeUserID", ""))
