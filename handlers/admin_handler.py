@@ -5,6 +5,7 @@
 import asyncio
 import base64 as b64mod
 import os
+import uuid
 
 import astrbot.api.message_components as Comp
 from astrbot.api import logger
@@ -47,20 +48,31 @@ async def handle_bili_login(plugin, event):
         return
 
     image_dir = IMAGE_DIR
-    os.makedirs(image_dir, exist_ok=True)
-    image_path = os.path.join(image_dir, "bili_login_qrcode.png")
-    with open(image_path, "wb") as f:
-        f.write(b64mod.b64decode(qr_data["image_base64"]))
+    os.makedirs(image_dir, mode=0o700, exist_ok=True)
+    image_path = os.path.join(image_dir, f"bili_login_qrcode_{uuid.uuid4().hex[:10]}.png")
+    try:
+        fd = os.open(image_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(b64mod.b64decode(qr_data["image_base64"]))
+        if os.name == "posix":
+            os.chmod(image_path, 0o600)
 
-    nap_path = await send_file_if_needed(image_path, plugin.nap_server_address, plugin.nap_server_port)
-    yield event.chain_result([Comp.Image.fromFileSystem(nap_path)])
-    yield event.plain_result("请使用B站APP扫描上方二维码登录（2 分钟内有效）")
+        nap_path = await send_file_if_needed(image_path, plugin.nap_server_address, plugin.nap_server_port)
+        yield event.chain_result([Comp.Image.fromFileSystem(nap_path)])
+        yield event.plain_result("请使用B站APP扫描上方二维码登录（2 分钟内有效）")
 
-    cookies = await bili_check_login_status_loop(qr_data["qrcode_key"])
-    if cookies:
-        yield event.plain_result("B站登录成功！cookie已自动保存，后续将使用登录状态获取高清视频。")
-    else:
-        yield event.plain_result("B站登录超时或失败，请重试。")
+        cookies = await bili_check_login_status_loop(qr_data["qrcode_key"])
+        if cookies:
+            yield event.plain_result("B站登录成功！cookie已自动保存，后续将使用登录状态获取高清视频。")
+        else:
+            yield event.plain_result("B站登录超时或失败，请重试。")
+    finally:
+        # QR carries a one-time login credential; remove it after delivery/timeout.
+        try:
+            os.remove(image_path)
+        except OSError:
+            pass
+
 
 
 async def handle_douyin_login(plugin, event):
