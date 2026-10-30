@@ -56,6 +56,11 @@ def trip(code: int | str, reason: str = "") -> bool:
             os.replace(tmp, STATE_FILE)
             if os.name == "posix":
                 os.chmod(STATE_FILE, 0o600)
+                dir_fd = os.open(ACCOUNTS_DIR, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
             return True
         except Exception:
             try:
