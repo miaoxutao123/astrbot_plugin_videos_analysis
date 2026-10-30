@@ -94,7 +94,7 @@ async def ensure_buvid(cookies: dict) -> dict:
         out.setdefault("buvid4", data.get("b_4", ""))
         return {k: v for k, v in out.items() if v}
     except Exception as e:
-        logger.warning(f"[bili] 获取 buvid 失败: {e}")
+        logger.warning("[bili] 获取 buvid 失败 (%s)", type(e).__name__)
         return out
 
 
@@ -240,5 +240,5 @@ async def ensure_ticket(cookies: dict) -> tuple[dict, bool]:
         out["bili_ticket_expires"] = str(int(d.get("created_at") or ts) + int(d.get("ttl") or 259200))
         return out, True
     except Exception as e:
-        logger.info(f"[bili] 生成 bili_ticket 异常: {e}")
+        logger.info("[bili] 生成 bili_ticket 异常 (%s)", type(e).__name__)
         return cookies, False
