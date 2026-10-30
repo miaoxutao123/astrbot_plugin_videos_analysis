@@ -107,12 +107,12 @@ async def test_anonymous_download_accepts_previously_resolved_url(tmp_path, monk
 
 @pytest.mark.asyncio
 async def test_risk_circuit_fails_closed_in_memory_if_disk_write_fails(monkeypatch):
-    bili._RISK_CIRCUIT_LOCAL_OPEN = False
-    bili._RISK_CIRCUIT_LOCAL_DATE = ""
+    monkeypatch.setattr(bili, "_RISK_CIRCUIT_LOCAL_OPEN", False)
+    monkeypatch.setattr(bili, "_RISK_CIRCUIT_LOCAL_DATE", "")
     async def notify(message):
         notified.append(message)
     notified = []
-    async def fail_write(*args, **kwargs):
+    def fail_write(*args, **kwargs):
         raise OSError("disk unavailable")
     monkeypatch.setattr(bili, "trip_bili_read_circuit", fail_write)
     monkeypatch.setattr(bili, "RISK_NOTIFY_HOOK", notify)
