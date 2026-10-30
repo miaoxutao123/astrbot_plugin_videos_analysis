@@ -25,6 +25,7 @@ from astrbot.api import logger
 
 from ..utils.paths import CREATOR_DIR, DOWNLOAD_DIR
 from . import bili_account, bilibili_service
+from .bili_http import get_session
 from .video_analysis import _get_video_duration, local_asr_available
 
 TMP_ROOT = os.path.join(DOWNLOAD_DIR, "browse_tmp")
@@ -85,49 +86,53 @@ def cleanup_browse_files(video_path: str) -> None:
 async def bili_subtitle(bvid: str) -> list[dict]:
     """B站字幕（需要登录 cookie 才返回字幕列表）；优先人工中文字幕，其次 AI 字幕。"""
     cookies = await bilibili_service.load_cookies() or {}
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as s:
-        async with s.get("https://api.bilibili.com/x/web-interface/view", params={"bvid": bvid},
-                         headers=bili_account.headers(cookies)) as r:
-            view = (await r.json(content_type=None)).get("data") or {}
-        if not view:
-            return []
-        # view 接口给出本视频字幕的 id（但不给 url）；x/player/v2 给 url，却时常混入别的视频的
-        # AI 字幕，所以必须校验：id 一致，或 url 路径以 "{aid}{cid}" 开头
-        expect_ids = {str(x.get("id_str") or x.get("id")) for x in (view.get("subtitle") or {}).get("list") or []}
-        if not expect_ids:
-            return []
-        prefix = f"{view['aid']}{view['cid']}"
+    session = get_session()
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with session.get("https://api.bilibili.com/x/web-interface/view", params={"bvid": bvid},
+                           headers=bili_account.headers(cookies), timeout=timeout) as r:
+        view = (await r.json(content_type=None)).get("data") or {}
+    if not view:
+        return []
+    # view 接口给出本视频字幕的 id（但不给 url）；x/player/v2 给 url，却时常混入别的视频的
+    # AI 字幕，所以必须校验：id 一致，或 url 路径以 aid+cid 开头
+    expect_ids = {str(x.get("id_str") or x.get("id")) for x in (view.get("subtitle") or {}).get("list") or []}
+    if not expect_ids:
+        return []
+    prefix = f"{view['aid']}{view['cid']}"
 
-        def rank(x):  # 人工中文 → AI 中文 → 其他语言
-            lan = x.get("lan", "")
-            return 0 if lan.startswith("zh") else 1 if lan.startswith("ai-zh") else 2
+    def rank(x):
+        lan = x.get("lan", "")
+        return 0 if lan.startswith("zh") else 1 if lan.startswith("ai-zh") else 2
 
-        url = ""
-        for _ in range(4):
-            # 用非 wbi 的 x/player/v2：wbi 版对脚本请求经常直接 412
-            async with s.get("https://api.bilibili.com/x/player/v2", params={"aid": view["aid"], "cid": view["cid"]},
-                             headers=bili_account.headers(cookies, f"https://www.bilibili.com/video/{bvid}")) as r:
-                text = await r.text()
-            if not text.lstrip().startswith("{"):
-                raise RuntimeError(f"字幕接口被拦截 (HTTP {r.status})")
-            subs = ((json.loads(text).get("data") or {}).get("subtitle") or {}).get("subtitles") or []
-            good = [
-                x for x in subs
-                if x.get("subtitle_url") and (
-                    str(x.get("id_str") or x.get("id")) in expect_ids
-                    or x["subtitle_url"].rsplit("/", 1)[-1].startswith(prefix)
-                )
-            ]
-            if good:
-                url = sorted(good, key=rank)[0]["subtitle_url"]
-                break
-            await asyncio.sleep(0.5)
-        if not url:
-            logger.info(f"[browse] {bvid} 的字幕接口返回的都不是本视频的字幕，改用语音转写")
-            return []
-        async with s.get("https:" + url if url.startswith("//") else url) as r:
-            body = (await r.json(content_type=None)).get("body") or []
-    return [{"start": float(b.get("from", 0)), "end": float(b.get("to", 0)), "text": b.get("content", "")} for b in body if b.get("content")]
+    url = ""
+    for _ in range(4):
+        async with session.get("https://api.bilibili.com/x/player/v2",
+                               params={"aid": view["aid"], "cid": view["cid"]},
+                               headers=bili_account.headers(cookies, f"https://www.bilibili.com/video/{bvid}"),
+                               timeout=timeout) as r:
+            text = await r.text()
+            status = r.status
+        if not text.lstrip().startswith("{"):
+            raise RuntimeError(f"字幕接口返回非 JSON（HTTP {status}）")
+        subs = ((json.loads(text).get("data") or {}).get("subtitle") or {}).get("subtitles") or []
+        good = [
+            x for x in subs
+            if x.get("subtitle_url") and (
+                str(x.get("id_str") or x.get("id")) in expect_ids
+                or x["subtitle_url"].rsplit("/", 1)[-1].startswith(prefix)
+            )
+        ]
+        if good:
+            url = sorted(good, key=rank)[0]["subtitle_url"]
+            break
+        await asyncio.sleep(0.5)
+    if not url:
+        logger.info(f"[browse] {bvid} 的字幕接口返回的都不是本视频的字幕，改用语音转写")
+        return []
+    async with session.get("https:" + url if url.startswith("//") else url, timeout=timeout) as r:
+        body = (await r.json(content_type=None)).get("body") or []
+    return [{"start": float(b.get("from", 0)), "end": float(b.get("to", 0)), "text": b.get("content", "")}
+            for b in body if b.get("content")]
 
 
 async def _post_asr(audio_path: str, base: str, key: str, model: str, verbose: bool) -> dict:
