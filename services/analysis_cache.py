@@ -16,6 +16,13 @@ DB_FILE = os.path.join(CREATOR_DIR, "analysis_cache.sqlite3")
 LEGACY_FILE = os.path.join(CREATOR_DIR, "video_context.json")
 
 
+def configured_ttl_days(config) -> float:
+    try:
+        return max(0.0, float(config.get("analysis_cache_ttl_days", 7)))
+    except (AttributeError, TypeError, ValueError):
+        return 7.0
+
+
 @contextmanager
 def _db():
     conn = _connect()
