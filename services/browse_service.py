@@ -525,9 +525,9 @@ async def browse(plugin, event, video_path: str, meta: dict, platform: str = "",
 
 
 def cached_summary(plugin, platform: str, work_id: str) -> str:
-    from .analysis_cache import get_summary
+    from .analysis_cache import configured_ttl_days, get_summary
 
-    ttl_days = float(plugin.config.get("analysis_cache_ttl_days", 7) or 7)
+    ttl_days = configured_ttl_days(plugin.config)
     return get_summary(platform, work_id, ttl_days)
 
 def max_seconds(plugin) -> int:
