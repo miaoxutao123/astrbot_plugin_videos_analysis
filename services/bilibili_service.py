@@ -156,7 +156,7 @@ async def check_cookie_valid(cookies: dict | None = None, force: bool = False):
                 _COOKIE_VALID_CACHE.pop(key, None)
         COOKIE_VALID = valid
         if valid:
-            log_callback(f"Cookie验证通过，账号 UID={cookies.get('DedeUserID')}")
+            log_callback("B站登录态验证通过")
         else:
             log_callback("B站登录态已失效或账号 UID 不匹配")
         return valid
