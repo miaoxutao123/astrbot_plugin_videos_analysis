@@ -22,7 +22,6 @@ def get_session() -> aiohttp.ClientSession:
         limit=16,
         limit_per_host=8,
         ttl_dns_cache=300,
-        enable_cleanup_closed=True,
     )
     _SESSION = aiohttp.ClientSession(
         connector=connector,
