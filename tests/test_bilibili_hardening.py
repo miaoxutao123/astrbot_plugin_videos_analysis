@@ -94,10 +94,13 @@ async def test_process_reuses_one_playurl_result_for_download(tmp_path, monkeypa
 async def test_anonymous_download_accepts_previously_resolved_url(tmp_path, monkeypatch):
     monkeypatch.setattr(bili, "BILI_DOWNLOAD_DIR", str(tmp_path))
     request = AsyncMock()
-    download = AsyncMock()
-    monkeypatch.setattr(bili, "bili_request", request)
+    async def write_file(url, path, headers):
+        with open(path, "wb") as file:
+            file.write(b"video")
+    monkeypatch.setattr(bili, "bili_request", AsyncMock())
+    download = AsyncMock(side_effect=write_file)
     monkeypatch.setattr(bili, "download_file", download)
     result = await bili.download_video(1, 2, "BV1AbCdEfGhI", video_url="https://cdn.example/video")
     assert result == str(tmp_path / "BV1AbCdEfGhI.mp4")
-    request.assert_not_awaited()
+    bili.bili_request.assert_not_awaited()
     download.assert_awaited_once()
