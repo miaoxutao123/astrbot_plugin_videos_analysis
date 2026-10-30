@@ -35,6 +35,10 @@ async def handle_bili_login(plugin, event):
     if msg := _group_guard(event, "扫码登录", "并抢先扫描二维码", "bili_login"):
         yield event.plain_result(msg)
         return
+    from ..services import bilibili_service
+    if bilibili_service.bili_read_circuit_open():
+        yield event.plain_result("B站接口今日已触发风控熔断。为避免反复登录加重账号风险，今天不再发起扫码；请等待次日自动解除后再检查。")
+        return
     is_valid = await bili_check_cookie_valid()
     if is_valid:
         yield event.plain_result("B站cookie仍然有效，无需重新登录。如需切换账号，请先发送 /va_logout bilibili。")
