@@ -197,8 +197,6 @@ class hybird_videos_analysis(Star):
         if self._browser_signer:
             await self._browser_signer.stop()
             self._browser_signer = None
-        from .services.bili_http import close_session
-        await close_session()
         try:
             signer = BrowserSigner(headless=False, user_data_dir=DOUYIN_BROWSER_PROFILE,
                                    low_cpu=bool(self.config.get("douyin_browser_low_cpu", True)))
@@ -306,6 +304,8 @@ class hybird_videos_analysis(Star):
         if self._browser_signer:
             await self._browser_signer.stop()
             self._browser_signer = None
+        from .services.bili_http import close_session
+        await close_session()
 
     # ==================== 被动解析 ====================
 
