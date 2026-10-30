@@ -184,12 +184,11 @@ async def parse_b23(short_url):
         async with session.head(f"https://{short_url}", allow_redirects=True,
                                 timeout=aiohttp.ClientTimeout(total=15)) as response:
             real_url = str(response.url)
-
-                if REG_BV.search(real_url):
-                    return await parse_video(REG_BV.search(real_url).group())
-                elif REG_AV.search(real_url):
-                    return await parse_video(aid=REG_AV.search(real_url).group()[2:])
-                return None
+        if REG_BV.search(real_url):
+            return await parse_video(REG_BV.search(real_url).group())
+        if REG_AV.search(real_url):
+            return await parse_video(aid=REG_AV.search(real_url).group()[2:])
+        return None
     except aiohttp.ClientError:
         return None
 
@@ -220,23 +219,20 @@ async def parse_video(bvid=None, aid=None):
         }
     }
 
-async def download_video(aid, cid, bvid, quality=16):
-    """下载视频"""
-
-    api_url = f"https://api.bilibili.com/x/player/playurl?avid={aid}&cid={cid}&qn={quality}&type=mp4&platform=html5"
-    data = await bili_request(api_url)
-
-    if data.get("code") != 0:
-        return None
-
-    video_url = data["data"]["durl"][0]["url"]
+async def download_video(aid, cid, bvid, quality=16, video_url=None):
+    """下载匿名 MP4；可复用上游已请求的 playurl，避免重复打接口。"""
+    if not video_url:
+        api_url = f"https://api.bilibili.com/x/player/playurl?avid={aid}&cid={cid}&qn={quality}&type=mp4&platform=html5"
+        data = await bili_request(api_url)
+        if data.get("code") != 0:
+            return None
+        try:
+            video_url = data["data"]["durl"][0]["url"]
+        except (KeyError, IndexError, TypeError):
+            return None
     filename = f"{BILI_DOWNLOAD_DIR}/{bvid}.mp4"
     os.makedirs(os.path.dirname(filename), exist_ok=True)
-    headers = {
-        "Referer": "https://www.bilibili.com/",
-        **client_identity.headers(),
-    }
-    # 流式写盘，长视频不会因为 30 秒总超时或整段读进内存而失败
+    headers = {"Referer": "https://www.bilibili.com/", **client_identity.headers()}
     try:
         await download_file(video_url, filename, headers)
     except Exception:
