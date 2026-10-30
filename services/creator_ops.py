@@ -930,9 +930,9 @@ class CreatorOps:
 
     async def _video_summary(self, platform: str, work_id: str, ctx: dict, event=None) -> str:
         """读取带 TTL 的概要缓存；未命中时走现有视频理解流程。"""
-        from .analysis_cache import get_summary, put_summary
+        from .analysis_cache import configured_ttl_days, get_summary, put_summary
 
-        ttl_days = float(self.plugin.config.get("analysis_cache_ttl_days", 7) or 7)
+        ttl_days = configured_ttl_days(self.plugin.config)
         cached = get_summary(platform, work_id, ttl_days)
         if cached:
             return cached
