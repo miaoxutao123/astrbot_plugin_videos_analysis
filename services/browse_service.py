@@ -507,12 +507,10 @@ async def browse(plugin, event, video_path: str, meta: dict, platform: str = "",
 
 
 def cached_summary(plugin, platform: str, work_id: str) -> str:
-    try:
-        with open(os.path.join(CREATOR_DIR, "video_context.json"), encoding="utf-8") as f:
-            return json.load(f).get(f"{platform}:{work_id}", "")
-    except (OSError, ValueError):
-        return ""
+    from .analysis_cache import get_summary
 
+    ttl_days = float(plugin.config.get("analysis_cache_ttl_days", 7) or 7)
+    return get_summary(platform, work_id, ttl_days)
 
 def max_seconds(plugin) -> int:
     return int(float(plugin.config.get("browse_max_minutes", 20) or 20) * 60)
