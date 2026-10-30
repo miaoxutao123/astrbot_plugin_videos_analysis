@@ -105,6 +105,7 @@ class AccountManager:
         self._rotate_lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
         bilibili_service.FAILURE_HOOK = lambda reason: self.report_failure("bilibili", reason)
+        bilibili_service.RISK_NOTIFY_HOOK = self.notify
 
     # ── 状态查询 ─────────────────────────────────────────
 
