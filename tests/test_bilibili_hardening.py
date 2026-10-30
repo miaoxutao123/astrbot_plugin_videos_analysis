@@ -103,3 +103,21 @@ async def test_anonymous_download_accepts_previously_resolved_url(tmp_path, monk
     assert result == str(tmp_path / "BV1AbCdEfGhI.mp4")
     bili.bili_request.assert_not_awaited()
     download.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_risk_circuit_fails_closed_in_memory_if_disk_write_fails(monkeypatch):
+    bili._RISK_CIRCUIT_LOCAL_OPEN = False
+    bili._RISK_CIRCUIT_LOCAL_DATE = ""
+    async def notify(message):
+        notified.append(message)
+    notified = []
+    async def fail_write(*args, **kwargs):
+        raise OSError("disk unavailable")
+    monkeypatch.setattr(bili, "trip_bili_read_circuit", fail_write)
+    monkeypatch.setattr(bili, "RISK_NOTIFY_HOOK", notify)
+    await bili._open_bili_read_circuit(-352, "risk")
+    assert bili.bili_read_circuit_open()
+    assert len(notified) == 1
+    await bili._open_bili_read_circuit(-412, "another risk")
+    assert len(notified) == 1
