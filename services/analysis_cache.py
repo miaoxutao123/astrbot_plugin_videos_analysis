@@ -105,7 +105,7 @@ def put_summary(platform: str, work_id: str, analysis_text: str) -> None:
     text = str(analysis_text or "").strip()
     if not platform or not work_id or not text:
         return
-    with _connect() as conn:
+    with _db() as conn:
         conn.execute(
             """INSERT INTO analysis_cache(platform, work_id, analysis_text, created_ts)
                VALUES (?, ?, ?, ?)
