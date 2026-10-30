@@ -24,7 +24,7 @@ from ..utils import client_identity
 from ..utils.secure_storage import read_secure_json, write_secure_json, CredentialStoreError
 from .bili_account import REFRESH_KEY, cookie_header, ensure_buvid
 from .bili_http import get_session
-from .bili_read_circuit import is_open as bili_read_circuit_open, trip as trip_bili_read_circuit
+from .bili_read_circuit import is_open as _is_bili_read_circuit_open, trip as trip_bili_read_circuit
 from ..utils.paths import DOWNLOAD_DIR_BILI as BILI_DOWNLOAD_DIR
 from ..utils.paths import IMAGE_DIR
 
@@ -37,6 +37,11 @@ _COOKIE_INVALID_TTL = 60
 _BILI_DOWNLOAD_SEMAPHORE = asyncio.Semaphore(1)
 RISK_NOTIFY_HOOK = None
 RISK_CODES = {-352, -412}
+_RISK_CIRCUIT_LOCAL_OPEN = False
+
+
+def bili_read_circuit_open() -> bool:
+    return _RISK_CIRCUIT_LOCAL_OPEN or _is_bili_read_circuit_open()
 
 # 正则表达式
 REG_B23 = re.compile(r"(b23\.tv|bili2233\.cn)\/[\w]+")
@@ -477,7 +482,6 @@ async def check_login_status_loop(qrcode_key, timeout_seconds: int = 150):
 
 # 账号池轮换钩子：AccountManager 注册 async (reason) -> None，遇到失效/风控时调用
 FAILURE_HOOK = None
-RISK_CODES = {-352, -412}
 
 
 async def _report_failure(reason: str):
@@ -490,11 +494,13 @@ async def _report_failure(reason: str):
 
 async def _open_bili_read_circuit(code, message: str) -> None:
     """Open the daily read circuit once and notify configured admins once."""
+    global _RISK_CIRCUIT_LOCAL_OPEN
     try:
         first = await asyncio.to_thread(trip_bili_read_circuit, code, message)
     except Exception as exc:
-        logger.error("[bili] 无法持久化当日风控熔断状态 (%s)", type(exc).__name__)
-        first = False
+        logger.error("[bili] 无法持久化当日风控熔断状态 (%s)，本进程内仍将停止登录态请求", type(exc).__name__)
+        first = not _RISK_CIRCUIT_LOCAL_OPEN
+        _RISK_CIRCUIT_LOCAL_OPEN = True
     if not first:
         return
     logger.warning("[bili] 收到风控响应 %s；当日停止登录态 playurl 请求，后续降级匿名解析", code)
