@@ -27,3 +27,9 @@ def test_expired_summary_is_deleted(tmp_path, monkeypatch):
     assert cache.get_summary("bilibili", "BV1AbCdEfGhI", 7) == ""
     with sqlite3.connect(cache.DB_FILE) as db:
         assert db.execute("SELECT COUNT(*) FROM analysis_cache").fetchone()[0] == 0
+
+
+def test_cache_ttl_is_configurable_including_zero():
+    assert cache.configured_ttl_days({"analysis_cache_ttl_days": 3}) == 3
+    assert cache.configured_ttl_days({"analysis_cache_ttl_days": 0}) == 0
+    assert cache.configured_ttl_days({"analysis_cache_ttl_days": "invalid"}) == 7
