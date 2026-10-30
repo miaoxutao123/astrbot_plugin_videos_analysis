@@ -488,7 +488,7 @@ async def check_login_status_loop(qrcode_key, timeout_seconds: int = 150):
                     else:
                         log_callback("扫码结果里没有 refresh_token，cookie 到期后需要重新扫码")
                     cookies = await ensure_buvid(cookies)
-                    log_callback(f"B站登录成功: DedeUserID={cookies.get('DedeUserID')}")
+                    log_callback("B站登录成功，Cookie 已加密保存")
                     await save_cookies_dict(cookies)
                     return cookies
                 except Exception as e:
