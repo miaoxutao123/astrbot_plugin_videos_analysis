@@ -477,7 +477,7 @@ async def check_login_status_loop(qrcode_key, timeout_seconds: int = 150):
 
 # 账号池轮换钩子：AccountManager 注册 async (reason) -> None，遇到失效/风控时调用
 FAILURE_HOOK = None
-RISK_CODES = {-101, -352, -412}
+RISK_CODES = {-352, -412}
 
 
 async def _report_failure(reason: str):
