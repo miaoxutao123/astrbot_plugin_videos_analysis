@@ -21,6 +21,7 @@ import aiohttp
 from astrbot.api import logger
 
 from ..utils import client_identity
+from .bili_http import get_session
 
 META_PREFIX = "__"
 REFRESH_KEY = "__refresh_token"
@@ -85,9 +86,10 @@ async def ensure_buvid(cookies: dict) -> dict:
     if out.get("buvid3") and out.get("buvid4"):
         return out
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
-            async with s.get("https://api.bilibili.com/x/frontend/finger/spi", headers=headers()) as r:
-                data = (await r.json(content_type=None)).get("data") or {}
+        s = get_session()
+        async with s.get("https://api.bilibili.com/x/frontend/finger/spi", headers=headers(),
+                         timeout=aiohttp.ClientTimeout(total=10)) as r:
+            data = (await r.json(content_type=None)).get("data") or {}
         out.setdefault("buvid3", data.get("b_3", ""))
         out.setdefault("buvid4", data.get("b_4", ""))
         return {k: v for k, v in out.items() if v}
@@ -99,9 +101,9 @@ async def ensure_buvid(cookies: dict) -> dict:
 async def needs_refresh(cookies: dict) -> tuple[bool | None, int]:
     """返回 (是否需要刷新, 服务器毫秒时间戳)。None 表示无法判断（未登录/网络错误）。"""
     url = f"{PASSPORT}/cookie/info?csrf={cookies.get('bili_jct', '')}"
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
-        async with s.get(url, headers=headers(cookies)) as r:
-            data = await r.json(content_type=None)
+    s = get_session()
+    async with s.get(url, headers=headers(cookies), timeout=aiohttp.ClientTimeout(total=10)) as r:
+        data = await r.json(content_type=None)
     if data.get("code") != 0:
         return None, 0
     d = data.get("data") or {}
@@ -119,7 +121,7 @@ async def refresh_cookies(cookies: dict, force: bool = False) -> tuple[dict | No
     try:
         need, ts = await needs_refresh(cookies)
     except Exception as e:
-        return None, f"检查是否需要续期失败: {e}"
+        return None, f"检查是否需要续期失败: {type(e).__name__}"
     if need is None:
         return None, "cookie 已失效，无法续期，请重新 /bili_login"
     if not need and not force:
@@ -128,38 +130,43 @@ async def refresh_cookies(cookies: dict, force: bool = False) -> tuple[dict | No
         ts = int(time.time() * 1000)
 
     timeout = aiohttp.ClientTimeout(total=15)
+    session = get_session()
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as s:
-            async with s.get(f"https://www.bilibili.com/correspond/1/{_correspond_path(ts)}", headers=headers(cookies)) as r:
-                html = await r.text()
-            m = re.search(r'<div id="1-name">\s*([0-9a-f]+)\s*</div>', html)
-            if not m:
-                return None, "未能从 correspond 页面取到 refresh_csrf（可能时间戳过期或接口改版）"
-            form = {
-                "csrf": cookies.get("bili_jct", ""), "refresh_csrf": m.group(1),
-                "source": "main_web", "refresh_token": token,
-            }
-            async with s.post(f"{PASSPORT}/cookie/refresh", data=form, headers=headers(cookies)) as r:
-                data = await r.json(content_type=None)
-                new = _merge_set_cookies(cookies, r)
-            if data.get("code") != 0:
-                return None, f"续期失败: {data.get('code')} {data.get('message')}"
-            new_token = (data.get("data") or {}).get("refresh_token")
-            if not new_token or new.get("SESSDATA") == cookies.get("SESSDATA"):
-                return None, "续期接口没有返回新的 SESSDATA"
-            new[REFRESH_KEY] = new_token
-            # 用新 cookie 确认，旧 refresh_token 随之作废；失败不影响新 cookie 使用
-            async with s.post(
-                f"{PASSPORT}/confirm/refresh",
-                data={"csrf": new.get("bili_jct", ""), "refresh_token": token},
-                headers=headers(new),
-            ) as r:
-                confirm = await r.json(content_type=None)
-            if confirm.get("code") != 0:
-                logger.warning(f"[bili] 确认续期返回 {confirm.get('code')} {confirm.get('message')}（新 cookie 仍可用）")
+        async with session.get(
+            f"https://www.bilibili.com/correspond/1/{_correspond_path(ts)}",
+            headers=headers(cookies), timeout=timeout,
+        ) as r:
+            html = await r.text()
+        m = re.search(r'<div id="1-name">\s*([0-9a-f]+)\s*</div>', html)
+        if not m:
+            return None, "未能从 correspond 页面取到 refresh_csrf（可能时间戳过期或接口改版）"
+        form = {
+            "csrf": cookies.get("bili_jct", ""), "refresh_csrf": m.group(1),
+            "source": "main_web", "refresh_token": token,
+        }
+        async with session.post(
+            f"{PASSPORT}/cookie/refresh", data=form, headers=headers(cookies), timeout=timeout,
+        ) as r:
+            data = await r.json(content_type=None)
+            new = _merge_set_cookies(cookies, r)
+        if data.get("code") != 0:
+            return None, f"续期失败: {data.get('code')} {data.get('message')}"
+        new_token = (data.get("data") or {}).get("refresh_token")
+        if not new_token or new.get("SESSDATA") == cookies.get("SESSDATA"):
+            return None, "续期接口没有返回新的 SESSDATA"
+        new[REFRESH_KEY] = new_token
+        # 用新 cookie 确认，旧 refresh_token 随之作废；失败不影响新 cookie 使用
+        async with session.post(
+            f"{PASSPORT}/confirm/refresh",
+            data={"csrf": new.get("bili_jct", ""), "refresh_token": token},
+            headers=headers(new), timeout=timeout,
+        ) as r:
+            confirm = await r.json(content_type=None)
+        if confirm.get("code") != 0:
+            logger.warning(f"[bili] 确认续期返回 {confirm.get('code')} {confirm.get('message')}（新 cookie 仍可用）")
         return new, "已续期"
     except Exception as e:
-        return None, f"续期请求失败: {e}"
+        return None, f"续期请求失败: {type(e).__name__}"
 
 
 def encode_refresh_preview(token: str) -> str:
@@ -182,9 +189,10 @@ _wbi_cache: dict = {"key": "", "at": 0.0}
 async def _mixin_key(cookies: dict | None) -> str:
     if _wbi_cache["key"] and time.time() - _wbi_cache["at"] < 3600:
         return _wbi_cache["key"]
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
-        async with s.get("https://api.bilibili.com/x/web-interface/nav", headers=headers(cookies)) as r:
-            img = ((await r.json(content_type=None)).get("data") or {}).get("wbi_img") or {}
+    s = get_session()
+    async with s.get("https://api.bilibili.com/x/web-interface/nav", headers=headers(cookies),
+                     timeout=aiohttp.ClientTimeout(total=10)) as r:
+        img = ((await r.json(content_type=None)).get("data") or {}).get("wbi_img") or {}
     raw = "".join(u.rsplit("/", 1)[-1].split(".")[0] for u in (img.get("img_url", ""), img.get("sub_url", "")))
     if len(raw) < 64:
         raise RuntimeError("获取 WBI 密钥失败")
@@ -218,10 +226,11 @@ async def ensure_ticket(cookies: dict) -> tuple[dict, bool]:
     sign = hmac.new(b"XgwSnGZ1p", f"ts{ts}".encode(), hashlib.sha256).hexdigest()
     params = {"key_id": "ec02", "hexsign": sign, "context[ts]": ts, "csrf": cookies.get("bili_jct", "")}
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as s:
-            async with s.post("https://api.bilibili.com/bapis/bilibili.api.ticket.v1.Ticket/GenWebTicket",
-                              params=params, headers=headers(cookies)) as r:
-                data = await r.json(content_type=None)
+        s = get_session()
+        async with s.post("https://api.bilibili.com/bapis/bilibili.api.ticket.v1.Ticket/GenWebTicket",
+                          params=params, headers=headers(cookies),
+                          timeout=aiohttp.ClientTimeout(total=10)) as r:
+            data = await r.json(content_type=None)
         d = data.get("data") or {}
         if data.get("code") != 0 or not d.get("ticket"):
             logger.info(f"[bili] 生成 bili_ticket 失败: {data.get('code')} {data.get('message')}")
