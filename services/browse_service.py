@@ -85,12 +85,21 @@ def cleanup_browse_files(video_path: str) -> None:
 
 async def bili_subtitle(bvid: str) -> list[dict]:
     """B站字幕（需要登录 cookie 才返回字幕列表）；优先人工中文字幕，其次 AI 字幕。"""
+    if bilibili_service.bili_read_circuit_open():
+        return []
     cookies = await bilibili_service.load_cookies() or {}
     session = get_session()
     timeout = aiohttp.ClientTimeout(total=15)
     async with session.get("https://api.bilibili.com/x/web-interface/view", params={"bvid": bvid},
                            headers=bili_account.headers(cookies), timeout=timeout) as r:
-        view = (await r.json(content_type=None)).get("data") or {}
+        if r.status in (412, 429):
+            await bilibili_service._open_bili_read_circuit(r.status, f"subtitle view HTTP {r.status}")
+            return []
+        payload = await r.json(content_type=None)
+        if isinstance(payload, dict) and payload.get("code") in bilibili_service.RISK_CODES:
+            await bilibili_service._open_bili_read_circuit(payload.get("code"), payload.get("message", ""))
+            return []
+        view = payload.get("data") or {} if isinstance(payload, dict) else {}
     if not view:
         return []
     # view 接口给出本视频字幕的 id（但不给 url）；x/player/v2 给 url，却时常混入别的视频的
@@ -112,9 +121,16 @@ async def bili_subtitle(bvid: str) -> list[dict]:
                                timeout=timeout) as r:
             text = await r.text()
             status = r.status
+        if status in (412, 429):
+            await bilibili_service._open_bili_read_circuit(status, f"subtitle player HTTP {status}")
+            return []
         if not text.lstrip().startswith("{"):
             raise RuntimeError(f"字幕接口返回非 JSON（HTTP {status}）")
-        subs = ((json.loads(text).get("data") or {}).get("subtitle") or {}).get("subtitles") or []
+        payload = json.loads(text)
+        if isinstance(payload, dict) and payload.get("code") in bilibili_service.RISK_CODES:
+            await bilibili_service._open_bili_read_circuit(payload.get("code"), payload.get("message", ""))
+            return []
+        subs = ((payload.get("data") or {}).get("subtitle") or {}).get("subtitles") or []
         good = [
             x for x in subs
             if x.get("subtitle_url") and (
