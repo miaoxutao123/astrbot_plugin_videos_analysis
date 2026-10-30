@@ -117,3 +117,22 @@ async def test_external_timeout_is_uncertain_not_retryable(journal_isolated, mon
     assert len(unresolved) == 1 and unresolved[0]["code"] == op.code
     assert unresolved[0]["state"] == "uncertain"
     assert not ops.has_pending(op.code)
+
+
+async def test_pending_persistence_failure_aborts_preflight_journal(journal_isolated, monkeypatch):
+    plugin = Plugin()
+    ops = co.CreatorOps(plugin)
+    op = post_op(ops, FakeEvent())
+    original_save = ops._save_pending
+
+    def fail_strict(*, strict=False):
+        if strict:
+            raise RuntimeError("待审批状态持久化失败")
+        return original_save(strict=strict)
+
+    monkeypatch.setattr(ops, "_save_pending", fail_strict)
+    result = await ops.confirm(op.code, event=FakeEvent())
+    assert "待审批状态持久化失败" in result
+    assert ops.has_pending(op.code)
+    assert op.code not in ops._executions
+    assert ops.unresolved_executions() == []
