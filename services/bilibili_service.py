@@ -390,23 +390,21 @@ async def bili_login(event=None):
         qr_text += line + "\n"
     qr_text += "==========================\n"
 
-    # 使用print直接输出到控制台，确保二维码能正常显示
-    logger.info(qr_text)
-
-    # 同时使用logger记录
-    logger.info("B站登录二维码已显示在控制台")
+    # 登录二维码包含一次性凭据，不输出到日志或控制台。
 
 
     # 保存二维码图片到指定路径
     image_dir = IMAGE_DIR
     os.makedirs(image_dir, exist_ok=True)
-    image_path = os.path.join(image_dir, "bili_login_qrcode.png")
-    with open(image_path, "wb") as f:
+    image_path = os.path.join(image_dir, f"bili_login_qrcode_{os.urandom(5).hex()}.png")
+    fd = os.open(image_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as f:
         f.write(base64.b64decode(qr_data["image_base64"]))
+    if os.name == "posix":
+        os.chmod(image_path, 0o600)
     # logger.info(f"二维码图片已保存到: {image_path}")
 
-    log_callback(f"\n如果上方二维码显示异常，请查看二维码文件: {image_path}")
-    logger.info(f"二维码图片已保存到: {image_path}")
+    # 仅记录文件已生成，不暴露二维码 URL、base64 或可扫码内容。
     # 二维码内容包含一次性登录凭据；绝不写入日志或控制台。
 
     # 创建一个异步任务来检查登录状态
@@ -462,7 +460,7 @@ async def check_login_status_loop(qrcode_key, timeout_seconds: int = 150):
                     await save_cookies_dict(cookies)
                     return cookies
                 except Exception as e:
-                    log_callback(f"登录异常: {e}（响应字段: {sorted(data)}，Set-Cookie: {sorted(status.get('_set_cookies') or {})}）")
+                    log_callback(f"登录异常: {type(e).__name__}（响应字段: {sorted(data)}，Set-Cookie 字段数: {len(status.get('_set_cookies') or {})}）")
                     return None
 
             elif data.get("code") == -2:
