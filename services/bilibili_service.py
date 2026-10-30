@@ -168,7 +168,11 @@ def _cookie_validation_is_definitive(cookies: dict | None) -> bool:
         return False
     fingerprint = hashlib.sha256(cookie_header(cookies).encode("utf-8")).hexdigest()
     cached = _COOKIE_VALID_CACHE.get(fingerprint)
-    return bool(cached and cached[0] is False)
+    return bool(
+        cached
+        and cached[0] is False
+        and time.monotonic() - cached[1] < _COOKIE_INVALID_TTL
+    )
 
 
 async def get_login_info(cookies: dict | None = None) -> dict | None:
