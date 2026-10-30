@@ -31,3 +31,6 @@ cachetools
 # ASR 语音识别（可选，用于 video_understand_method=local_asr）
 # funasr
 # torchaudio
+
+# Authenticated encryption of local account credentials
+cryptography>=42.0

@@ -381,10 +381,13 @@ async def handle_edit(plugin, event):
 
 async def handle_pending(plugin, event):
     ops = plugin.creator_ops.pending_list()
-    if not ops:
-        yield event.plain_result("没有待确认的操作")
-        return
-    yield event.plain_result("\n".join(f"[{o['code']}] {o['platform']}·{o['account']} {o['summary']}（剩 {o['expires_in']} 秒）" for o in ops))
+    uncertain = plugin.creator_ops.unresolved_executions()
+    lines = [f"[{o['code']}] {o['platform']}·{o['account']} {o['summary']}（剩 {o['expires_in']} 秒）" for o in ops]
+    lines.extend(
+        f"⚠️ [{x['code']}] {x['platform']}·{x['account']} {x['summary']}（执行结果待核验；禁止自动重试）"
+        for x in uncertain
+    )
+    yield event.plain_result("\n".join(lines) if lines else "没有待确认或待核验的操作")
 
 
 async def handle_audit(plugin, event):

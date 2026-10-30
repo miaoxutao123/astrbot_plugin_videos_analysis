@@ -131,6 +131,7 @@ def register_web_apis(plugin) -> None:
             "last_check_at": am._health.get("checked_at"),
             "pool": am.pool_list(),
             "pending": ops.pending_list(),
+            "unresolved": ops.unresolved_executions(),
             "problems": problems,
             "settings": {
                 "interval_min": am.check_interval_min,
@@ -158,7 +159,7 @@ def register_web_apis(plugin) -> None:
     # ── 审批 ─────────────────────────────────────────────
 
     async def pending(**kwargs):
-        return _ok({"items": ops.pending_list()})
+        return _ok({"items": ops.pending_list(), "unresolved": ops.unresolved_executions()})
 
     async def pending_approve(**kwargs):
         b = await body()

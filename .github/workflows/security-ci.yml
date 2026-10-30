@@ -1,0 +1,32 @@
+name: Video plugin security checks
+on:
+  push:
+    branches:
+      - "security/**"
+  pull_request:
+    paths:
+      - "services/**"
+      - "utils/**"
+      - "douyin_login.py"
+      - "tests/**"
+      - "requirements.txt"
+      - ".github/workflows/security-ci.yml"
+
+jobs:
+  security-regression:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest pytest-asyncio
+      - name: Syntax check
+        run: python -m compileall -q utils services handlers douyin_login.py main.py
+      - name: Security regression
+        run: python -m pytest -q tests/test_security_hardening.py tests/test_creator_ops.py tests/test_redact.py tests/test_bilibili_hardening.py tests/test_analysis_cache.py tests/test_creator_prompt_safety.py

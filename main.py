@@ -304,6 +304,8 @@ class hybird_videos_analysis(Star):
         if self._browser_signer:
             await self._browser_signer.stop()
             self._browser_signer = None
+        from .services.bili_http import close_session
+        await close_session()
 
     # ==================== 被动解析 ====================
 

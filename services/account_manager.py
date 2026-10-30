@@ -21,6 +21,7 @@ from astrbot.api import logger
 from astrbot.core.message.message_event_result import MessageChain
 
 from ..douyin_scraper.cookie_extractor import extract_douyin_cookies
+from ..utils.secure_storage import read_secure_json, write_secure_json
 from ..utils.paths import (
     BILI_COOKIE_FILE,
     DOUYIN_BROWSER_PROFILE,
@@ -65,6 +66,9 @@ def _load_json(path: str, default):
 
 
 def _save_json(path: str, data) -> None:
+    if path == POOL_FILE:
+        write_secure_json(path, data)
+        return
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -94,13 +98,14 @@ class AccountManager:
         self.check_interval_min = int(cfg.get("health_check_interval_minutes", 360) or 0)
         self.rotate_threshold = max(1, int(cfg.get("rotate_fail_threshold", 2)))
         self.rotate_cooldown = int(cfg.get("rotate_cooldown_minutes", 30)) * 60
-        self._pool = _load_json(POOL_FILE, {"accounts": {}, "active": {}})
+        self._pool = read_secure_json(POOL_FILE, {"accounts": {}, "active": {}})
         self._health = _load_json(HEALTH_FILE, {"notify": [], "last": {}})
         self._fails: dict[str, int] = {}
         self._last_fail: dict[str, float] = {}
         self._rotate_lock = asyncio.Lock()
         self._task: asyncio.Task | None = None
         bilibili_service.FAILURE_HOOK = lambda reason: self.report_failure("bilibili", reason)
+        bilibili_service.RISK_NOTIFY_HOOK = self.notify
 
     # ── 状态查询 ─────────────────────────────────────────
 

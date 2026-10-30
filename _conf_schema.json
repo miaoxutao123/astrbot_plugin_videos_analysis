@@ -284,6 +284,12 @@
         "type": "int",
         "default": 6
     },
+    "analysis_cache_ttl_days": {
+        "description": "视频理解结果缓存有效期（天）",
+        "type": "float",
+        "default": 7,
+        "hint": "按平台与作品 ID 缓存 AI 理解结果；过期后重新分析。旧 video_context.json 会在首次读取时迁移。"
+    },
     "browse_report_history": {
         "description": "浏览后写入B站观看历史",
         "type": "bool",

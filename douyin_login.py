@@ -26,6 +26,7 @@ from .douyin_scraper.cookie_extractor import extract_and_format_cookies, extract
 
 # 路径常量
 from .utils import client_identity
+from .utils.secure_storage import read_secure_json, write_secure_json, CredentialStoreError
 from .utils.paths import DOUYIN_COOKIE_FILE
 from .utils.paths import IMAGE_DIR as DOUYIN_QR_IMAGE_DIR
 
@@ -675,53 +676,37 @@ async def save_manual_douyin_cookie(cookie_string: str) -> str | None:
 # ==================== Cookie 持久化 ====================
 
 async def save_douyin_cookies(cookies: dict) -> bool:
-    """保存cookie到JSON文件"""
+    """Save authenticated encrypted Cookie JSON, preserving old data on failure."""
     try:
-        os.makedirs(os.path.dirname(DOUYIN_COOKIE_FILE), exist_ok=True)
-        async with aiofiles.open(DOUYIN_COOKIE_FILE, "w", encoding="utf-8") as f:
-            await f.write(json.dumps(cookies, ensure_ascii=False, indent=2))
-        logger.info(f"抖音cookie已保存到: {DOUYIN_COOKIE_FILE}")
+        await asyncio.to_thread(write_secure_json, DOUYIN_COOKIE_FILE, cookies)
+        logger.info("抖音 Cookie 已加密保存")
         return True
-    except Exception as e:
-        logger.error(f"保存抖音cookie失败: {e}")
+    except CredentialStoreError:
+        logger.error("抖音 Cookie 加密保存失败，原文件未覆盖")
         return False
 
 
 async def load_douyin_cookies() -> str | None:
-    """
-    从文件加载cookie。
-
-    Returns:
-        格式化的 cookie 字符串，如果文件不存在或无效返回 None
-    """
+    """Read stored Cookie values with automatic one-time legacy JSON migration."""
     if not os.path.exists(DOUYIN_COOKIE_FILE):
         return None
-
     try:
-        async with aiofiles.open(DOUYIN_COOKIE_FILE, encoding="utf-8") as f:
-            content = await f.read()
-            if not content.strip():
-                return None
-            cookies = json.loads(content)
-            if not isinstance(cookies, dict) or not cookies:
-                return None
-
-            cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
-            formatted = extract_and_format_cookies(cookie_str)
-
-            _, is_valid, _ = extract_douyin_cookies(cookie_str)
-
-            if not is_valid:
-                logger.warning("抖音cookie文件中缺少关键字段，可能已失效")
-
-            return formatted
-
-    except json.JSONDecodeError:
-        logger.error("抖音cookie文件格式错误")
+        cookies = await asyncio.to_thread(read_secure_json, DOUYIN_COOKIE_FILE)
+        if not isinstance(cookies, dict) or not cookies:
+            return None
+        cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
+        formatted = extract_and_format_cookies(cookie_str)
+        _, is_valid, _ = extract_douyin_cookies(cookie_str)
+        if not is_valid:
+            logger.warning("抖音 Cookie 文件中缺少关键字段，可能已失效")
+        return formatted
+    except CredentialStoreError:
+        logger.error("抖音 Cookie 解密失败，检查 VA_CREDENTIAL_KEY / .credentials.key；不覆盖旧凭据")
         return None
-    except Exception as e:
-        logger.error(f"加载抖音cookie失败: {e}")
+    except Exception as exc:
+        logger.error("抖音 Cookie 加载失败: %s", type(exc).__name__)
         return None
+
 
 
 def save_qrcode_image(image_base64: str) -> str:
@@ -798,7 +783,7 @@ async def check_douyin_cookie_valid() -> bool:
                 return True
 
     except Exception as e:
-        logger.debug(f"抖音cookie验证异常: {type(e).__name__}: {e}")
+        logger.debug("抖音cookie验证异常: %s", type(e).__name__)
 
     logger.info("抖音cookie验证失败，可能已过期")
     DOUYIN_COOKIE_VALID = False
