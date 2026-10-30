@@ -54,3 +54,17 @@ The supplied tests cover plaintext migration, restricted permissions, loss of
 decryption key, corrupted legacy data, cancellation during an external
 operation and refusal to begin if durable logging fails. Platform integration,
 browser storage, and real account recovery are not part of the offline tests.
+
+
+## Bilibili download and creator workflow hardening
+
+- QR images are one-time login credentials. The QR payload/base64 and rendered QR matrix are not logged; temporary local QR images use restrictive file permissions and are deleted after the login attempt.
+- Cookie validity uses `/x/web-interface/nav`, keyed by a SHA-256 digest of the cookie header (the raw cookie is never used as a cache key). Positive results live for six hours; explicit invalid results for one minute. Network failures are not cached as credential expiry and do not trigger account rotation.
+- Bilibili API calls share a bounded `aiohttp` session that is closed by the plugin lifecycle. A download pipeline is serialized, and the parsed view/playurl result is passed through to the downloader rather than requesting playurl twice.
+- Explicit anti-abuse responses `-352`, `-412`, HTTP 412 and HTTP 429 open a persistent circuit until the next China-local day. The plugin falls back to the anonymous path and notifies configured administrators once. A generic `-403` is not treated as rate limiting because it may be content/permission-specific. If the circuit file cannot be written, the current process still fails closed.
+- This does **not** impersonate a different browser TLS fingerprint, bypass CAPTCHA, rotate accounts to evade a platform block, or retry a blocked endpoint. The existing refresh-token, buvid, bili_ticket and WBI support are retained; they are not new bypass guarantees.
+- Subtitle-first transcription already existed and is retained. Video understanding summaries are now stored in a TTL-backed SQLite cache (default seven days, configurable through `analysis_cache_ttl_days`); the previous `video_context.json` is imported once.
+
+## LLM-generated public text
+
+External comments, usernames, titles and descriptions are passed as JSON data and explicitly treated as untrusted content, not instructions. Generated public replies/comments must satisfy a strict JSON schema and text validation before an approval request is created. The existing administrator confirmation and write quota remain mandatory; model output never authorizes publication by itself.
